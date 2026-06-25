@@ -2,7 +2,10 @@
 
 Rewrite of [vid2sim](https://github.com/Vector-Space-Moggers/vid2sim) — a pipeline that turns a short depth-camera video of a room into an interactive, browser-based physics simulation.
 
-> **Status:** Empty scaffold. Working functionality from the original is being migrated and rewritten here incrementally. Until then, the original repo remains the source of truth for behavior.
+> **Status:** Migration in progress. Working functionality from the original is being brought over incrementally.
+>
+> **Migrated so far:**
+> - ✅ `scene.json` contract — schema, example, validator, and tests (see [`docs/scene-spec.md`](docs/scene-spec.md)).
 
 ## Goal
 

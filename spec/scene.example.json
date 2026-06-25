@@ -1,0 +1,101 @@
+{
+  "version": "1.0",
+  "world": {
+    "gravity": [0, -9.81, 0],
+    "up_axis": "y",
+    "unit": "meters"
+  },
+  "ground": {
+    "type": "plane",
+    "normal": [0, 1, 0],
+    "material": { "friction": 0.8, "restitution": 0.1 }
+  },
+  "objects": [
+    {
+      "id": "chair_01",
+      "class": "chair",
+      "mesh": "meshes/chair_01.glb",
+      "transform": {
+        "translation": [0.42, 0.0, 1.13],
+        "rotation_quat": [0, 0, 0, 1],
+        "scale": 1.0
+      },
+      "collider": {
+        "shape": "mesh",
+        "convex_decomposition": true,
+        "hull_paths": ["hulls/chair_01_hull_00.glb", "hulls/chair_01_hull_01.glb"]
+      },
+      "physics": {
+        "mass_kg": 5.2,
+        "friction": 0.45,
+        "restitution": 0.2,
+        "is_rigid": true
+      },
+      "material_class": "wood",
+      "source": {
+        "mesh_origin": "hunyuan3d_2.1",
+        "physics_origin": "vlm",
+        "vlm_reasoning": "Visible wood grain on armrest and seat; typical dining-chair proportions suggest ~5 kg."
+      }
+    },
+    {
+      "id": "ball_01",
+      "class": "ball",
+      "mesh": "meshes/ball_01.glb",
+      "transform": {
+        "translation": [0.10, 1.50, 0.80],
+        "rotation_quat": [0, 0, 0, 1],
+        "scale": 1.0
+      },
+      "collider": {
+        "shape": "sphere",
+        "convex_decomposition": false,
+        "radius": 0.12
+      },
+      "physics": {
+        "mass_kg": 0.45,
+        "friction": 0.6,
+        "restitution": 0.75,
+        "is_rigid": true
+      },
+      "material_class": "rubber",
+      "source": {
+        "mesh_origin": "identity",
+        "physics_origin": "lookup",
+        "vlm_reasoning": ""
+      }
+    },
+    {
+      "id": "table_01",
+      "class": "table",
+      "mesh": "meshes/table_01.glb",
+      "transform": {
+        "translation": [-0.60, 0.0, 0.90],
+        "rotation_quat": [0, 0, 0, 1],
+        "scale": 1.0
+      },
+      "collider": {
+        "shape": "mesh",
+        "convex_decomposition": true,
+        "hull_paths": ["hulls/table_01_hull_00.glb"]
+      },
+      "physics": {
+        "mass_kg": 14.8,
+        "friction": 0.5,
+        "restitution": 0.1,
+        "is_rigid": true
+      },
+      "material_class": "wood",
+      "source": {
+        "mesh_origin": "triposg_1.5b",
+        "physics_origin": "vlm",
+        "vlm_reasoning": "Matte wooden finish, four-leg geometry; ~15 kg consistent with indoor dining table."
+      }
+    }
+  ],
+  "camera_pose": {
+    "translation": [0, 1.2, 0],
+    "rotation_quat": [0, 0, 0, 1],
+    "scale": 1.0
+  }
+}
