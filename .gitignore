@@ -1,0 +1,48 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- Node / TypeScript ----
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+.eslintcache
+
+# ---- ML / pipeline artifacts ----
+data/captures/
+data/reconstructed/
+*.glb
+*.gltf
+*.ply
+*.obj
+*.pt
+*.ckpt
+*.onnx
+
+# ---- Env / secrets ----
+.env
+.env.*
+!.env.example
+*.local
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
