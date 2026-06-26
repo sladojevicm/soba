@@ -36,10 +36,14 @@ def compose_poses(relatives: list[np.ndarray], T0: np.ndarray | None = None) -> 
     """Chain frame-to-frame transforms into absolute world poses.
 
     T_world[0]   = T0 (identity by default — world is the first camera)
-    T_world[N+1] = T_world[N] @ T_relative[N->N+1]
+    T_world[N+1] = T_world[N] @ relatives[N]
 
-    `relatives[i]` is the relative transform mapping frame i into frame i+1's
-    camera, so there are len(relatives)+1 absolute poses.
+    For that formula to be correct, `relatives[N]` must EXPRESS camera N+1's
+    coordinates in camera N's frame: p_camN = relatives[N] @ p_cam(N+1), i.e. the
+    camera-to-camera transform T_{camN <- cam(N+1)}. This is exactly what
+    Open3D's compute_rgbd_odometry(source=cam(N+1), target=camN) returns (a
+    source->target transform), so its result is appended as-is — do NOT invert it.
+    There are len(relatives)+1 absolute poses.
     """
     T = np.eye(4) if T0 is None else np.asarray(T0, dtype=np.float64)
     poses = [T]
@@ -96,14 +100,17 @@ class RgbdOdometry:
         option = o3d.pipelines.odometry.OdometryOption()
         for fid in frame_ids[1:]:
             cur = rgbd(fid)
-            ok, T_cur_prev, _ = o3d.pipelines.odometry.compute_rgbd_odometry(
+            # source=cur, target=prev -> Open3D returns the source->target
+            # transform T_{prev<-cur}: p_prev = T_prev_cur @ p_cur. That is
+            # precisely relatives[N] = T_{camN <- cam(N+1)} that compose_poses
+            # expects, so it is appended directly (NOT inverted — inverting it
+            # integrates the trajectory backwards and mirrors every position).
+            ok, T_prev_cur, _ = o3d.pipelines.odometry.compute_rgbd_odometry(
                 cur, prev, pinhole, np.eye(4),
                 o3d.pipelines.odometry.RGBDOdometryJacobianFromHybridTerm(),
                 option,
             )
-            # compute_rgbd_odometry returns the transform from `cur` to `prev`;
-            # the relative prev->cur world step is its inverse.
-            relatives.append(np.linalg.inv(T_cur_prev) if ok else np.eye(4))
+            relatives.append(T_prev_cur if ok else np.eye(4))
             prev = cur
 
         return compose_poses(relatives)
