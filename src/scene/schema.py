@@ -1,6 +1,9 @@
 """Schema loading and validation for `scene.json`.
 
-Spec lives at `spec/scene.schema.json` (frozen v1.0 at G0).
+Spec lives at `spec/scene.schema.json` (frozen v2.0, Contract 3 of
+PLAN_FINAL_FINAL). This module is the VALIDATOR ONLY (Build Order Phase 1,
+fix Z-L): it loads the schema and validates a scene dict against it. Phase 9
+(the assembler) imports this same module — it is not re-created there.
 """
 
 from __future__ import annotations

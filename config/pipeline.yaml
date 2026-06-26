@@ -1,0 +1,139 @@
+# vid2sim-v2 pipeline configuration (PLAN_FINAL_FINAL v11).
+#
+# Single source of truth for tier parameters, the per-class physical gates,
+# solidity factors, material densities, the physics lookup table, and the
+# ground-floor material default. Class-keyed tables use the detector's EXACT
+# COCO class names (fix R2) — including spaces ("dining table", "sports ball").
+# Dataset labels are mapped to these keys first (see coco_class_map.yaml, T2).
+
+# --- RunPod generative endpoint -------------------------------------------
+runpod:
+  pod_url: ""            # e.g. https://<pod-id>-8000.proxy.runpod.net  (Step 21)
+  request_timeout_s: 120
+  circuit_breaker:
+    consecutive_failures: 2   # trip after 2 consecutive failures (Step 6)
+    cooldown_s: 30            # then 30 s on local SF3D before re-probing
+
+# --- Ground floor (fix W1) ------------------------------------------------
+# Fixed hard-floor material default, independent of any object's material.
+# Only ground.y is data-derived (Step 10 RANSAC / IMU min-Y).
+ground:
+  material:
+    friction: 0.85
+    restitution: 0.1
+  prov_offset_m: 0.02   # ground_y_prov = min observed Y - 0.02 m (Step 4 Part A)
+
+# --- Material densities (kg/m^3), fix Z-K ---------------------------------
+density:
+  wood: 700
+  metal: 7800
+  plastic: 1000
+  rubber: 1200
+  glass: 2500
+  ceramic: 2000
+  fabric: 300
+  paper: 900
+  stone: 2700
+  unknown: 1000
+
+# --- Solidity factor per class (fix P2 / E1) ------------------------------
+# Fraction of a watertight mesh's volume that is actually solid material.
+# mass_kg = mesh_volume_m3 * density[material] * solidity[class].
+solidity:
+  chair: 0.25
+  "dining table": 0.35
+  couch: 0.20
+  bottle: 0.15
+  cup: 0.20
+  book: 0.85
+  "sports ball": 0.08    # hollow/inflated — low solidity (fix E1)
+  person: 0.85
+  default: 0.50
+
+# --- Class-specific physical size gates (metres), fix R2 ------------------
+# Catch ICP convergence to a wrong size. Out-of-range -> retry, then class-prior.
+class_gates:
+  chair:          { height: [0.40, 1.10], width: [0.40, 0.80] }
+  "dining table": { height: [0.60, 1.00], width: [0.60, 2.50] }
+  couch:          { height: [0.70, 1.10], width: [1.40, 3.00] }
+  bottle:         { height: [0.10, 0.50], width: [0.05, 0.15] }
+  cup:            { height: [0.08, 0.18], width: [0.07, 0.15] }
+  book:           { height: [0.15, 0.35], width: [0.10, 0.25] }
+  person:         { height: [1.40, 2.10], width: [0.30, 0.70] }
+  "sports ball":  { diameter: [0.06, 0.25] }
+  default:        { height: [0.05, 2.50], width: [0.05, 2.50] }
+
+# --- Physics lookup fallback (fix R2) -------------------------------------
+# Used when the Claude call fails / refuses / truncates, and for ALL of Tier 1.
+# Mass is STILL computed from geometry using the looked-up material.
+physics_lookup:
+  chair:          { material: wood,    friction: 0.45, restitution: 0.2,  is_rigid: true }
+  "dining table": { material: wood,    friction: 0.50, restitution: 0.1,  is_rigid: true }
+  bottle:         { material: glass,   friction: 0.30, restitution: 0.4,  is_rigid: true }
+  cup:            { material: ceramic, friction: 0.40, restitution: 0.3,  is_rigid: true }
+  "sports ball":  { material: rubber,  friction: 0.80, restitution: 0.75, is_rigid: true }
+  couch:          { material: fabric,  friction: 0.60, restitution: 0.3,  is_rigid: true }
+  book:           { material: paper,   friction: 0.35, restitution: 0.1,  is_rigid: true }
+  person:         { material: unknown, friction: 0.50, restitution: 0.1,  is_rigid: true }
+  default:        { material: unknown, friction: 0.50, restitution: 0.2,  is_rigid: true }
+
+# --- Per-tier parameters --------------------------------------------------
+# objects_cap is the hard scene cap (Contract 3 / fix Z8); over-cap keeps the
+# best-observed N right after the Step 5 gate (fix Z-R).
+defaults:
+  objects_cap: 12
+  yolo_conf_threshold: 0.4
+  frame_sample_stride: 3        # MASt3R samples every 3rd frame (Step 3 Method B)
+
+tiers:
+  1:
+    name: fast
+    pose_method: odometry
+    tsdf: false
+    voxel_size_m: null
+    generative_model: triposg
+    physics: lookup
+    collider: box                 # AABB, no CoACD
+  2:
+    name: balanced
+    pose_method: mast3r
+    tsdf: true
+    voxel_size_m: 0.004
+    gate: { angular_deg: 150, completeness: 0.65 }
+    generative_model: triposg
+    physics: claude
+    collider: hulls
+    coacd: { threshold: 0.07, max_parts: 8 }
+  3:
+    name: quality
+    pose_method: mast3r
+    tsdf: true
+    voxel_size_m: 0.003
+    gate: { angular_deg: 140, completeness: 0.60 }
+    generative_model: hunyuan3d
+    physics: claude
+    collider: hulls
+    coacd: { threshold: 0.05, max_parts: 16 }
+  4:
+    name: maximum
+    pose_method: orbslam3
+    tsdf: true
+    voxel_size_m: 0.002
+    gate: { angular_deg: 130, completeness: 0.55 }
+    generative_model: hunyuan3d
+    physics: claude
+    collider: hulls
+    coacd: { threshold: 0.03, max_parts: 32 }
+
+# --- Depth validity (millimetres, fix G1) ---------------------------------
+depth:
+  scale: 1000.0          # integrate() expects raw millimetres (uint16)
+  min_mm: 400            # 0.40 m
+  max_mm: 8000           # 8.00 m
+  conf_threshold: 150    # reject conf < 150  (VERIFY SENSOR POLARITY first!)
+
+# --- Claude physics inference (Step 8) ------------------------------------
+vlm:
+  model: claude-opus-4-8           # current, most capable Opus (fix C3)
+  cost_option: claude-haiku-4-5    # ~5x cheaper benchmark option
+  max_tokens: 4096                 # room for ~12 objects (fix C4)

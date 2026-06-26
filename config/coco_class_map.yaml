@@ -1,0 +1,39 @@
+# Dataset label -> COCO key map (fix T2).
+#
+# ScanNet (NYU40) and Replica use their own label sets, NOT COCO. Before any
+# gate / solidity / lookup table is read, dataset_reader.py maps each dataset
+# label to the nearest COCO key here. Keys on the RIGHT are the exact COCO
+# strings the physical tables in pipeline.yaml are keyed on (spaces preserved).
+# Any label without a mapping falls through to "default" downstream.
+
+# --- ScanNet / NYU40 labels -> COCO ---------------------------------------
+scannet:
+  chair: chair
+  table: "dining table"
+  desk: "dining table"
+  sofa: couch
+  couch: couch
+  bookshelf: book          # closest physical proxy in the COCO gate set
+  books: book
+  book: book
+  bottle: bottle
+  cup: cup
+  person: person
+  ball: "sports ball"
+
+# --- Replica labels -> COCO -----------------------------------------------
+replica:
+  chair: chair
+  table: "dining table"
+  desk: "dining table"
+  sofa: couch
+  couch: couch
+  book: book
+  bottle: bottle
+  cup: cup
+  mug: cup
+  basket: default
+  person: person
+
+# TUM RGB-D has no semantic labels — YOLO runs on its RGB frames and already
+# emits COCO names, so no mapping is needed for TUM.

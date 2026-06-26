@@ -1,30 +1,31 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vid2sim.local/spec/scene.schema.json",
-  "title": "SceneSpec v1.0",
-  "description": "VID2SIM frozen scene contract (ADR-001). Source of truth for all downstream exporters. DO NOT modify after G0.",
+  "title": "SceneSpec v2.0",
+  "description": "VID2SIM v2 frozen scene contract (Contract 3, PLAN_FINAL_FINAL v11). Single typed boundary between the pipeline and the browser. DO NOT modify after freeze; a breaking change is a new major version.",
   "type": "object",
   "required": ["version", "world", "ground", "objects", "camera_pose"],
   "additionalProperties": false,
   "properties": {
-    "version": { "type": "string", "const": "1.0" },
+    "version": { "type": "string", "const": "2.0" },
     "world": {
       "type": "object",
       "required": ["gravity", "up_axis", "unit"],
       "additionalProperties": false,
       "properties": {
         "gravity": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
-        "up_axis": { "type": "string", "enum": ["y", "z"] },
+        "up_axis": { "type": "string", "enum": ["y"] },
         "unit":    { "type": "string", "enum": ["meters"] }
       }
     },
     "ground": {
       "type": "object",
-      "required": ["type", "normal", "material"],
+      "required": ["type", "normal", "y", "material"],
       "additionalProperties": false,
       "properties": {
         "type":   { "type": "string", "enum": ["plane"] },
         "normal": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+        "y":      { "type": "number" },
         "material": {
           "type": "object",
           "required": ["friction", "restitution"],
@@ -38,7 +39,7 @@
     },
     "objects": {
       "type": "array",
-      "maxItems": 8,
+      "maxItems": 12,
       "items": { "$ref": "#/$defs/SceneObject" }
     },
     "camera_pose": { "$ref": "#/$defs/Transform" }
@@ -59,45 +60,84 @@
       "required": ["id", "class", "mesh", "transform", "collider", "physics", "material_class", "source"],
       "additionalProperties": false,
       "properties": {
-        "id":    { "type": "string", "minLength": 1 },
+        "id":    { "type": "string", "pattern": "^[a-z_]+_[0-9]{2}$" },
         "class": { "type": "string", "minLength": 1 },
         "mesh":  { "type": "string" },
         "transform": { "$ref": "#/$defs/Transform" },
-        "collider": {
-          "type": "object",
-          "required": ["shape"],
-          "additionalProperties": false,
-          "properties": {
-            "shape":                { "type": "string", "enum": ["mesh", "sphere", "box", "capsule"] },
-            "convex_decomposition": { "type": "boolean", "default": false },
-            "hull_paths":           { "type": "array", "items": { "type": "string" } },
-            "radius":               { "type": "number", "exclusiveMinimum": 0 },
-            "half_extents":         { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
-          }
-        },
+        "collider": { "$ref": "#/$defs/Collider" },
         "physics": {
           "type": "object",
           "required": ["mass_kg", "friction", "restitution", "is_rigid"],
           "additionalProperties": false,
           "properties": {
             "mass_kg":     { "type": "number", "exclusiveMinimum": 0 },
-            "friction":    { "type": "number", "minimum": 0 },
+            "friction":    { "type": "number", "minimum": 0, "maximum": 2 },
             "restitution": { "type": "number", "minimum": 0, "maximum": 1 },
             "is_rigid":    { "type": "boolean" }
           }
         },
-        "material_class": { "type": "string" },
+        "material_class": { "type": "string", "minLength": 1 },
         "source": {
           "type": "object",
-          "required": ["mesh_origin", "physics_origin"],
+          "required": ["geometry_source", "alignment_method", "scale_method", "physics_origin"],
           "additionalProperties": false,
           "properties": {
-            "mesh_origin":    { "type": "string", "enum": ["hunyuan3d_2.1", "triposg_1.5b", "sf3d", "identity"] },
-            "physics_origin": { "type": "string", "enum": ["vlm", "lookup", "manual"] },
-            "vlm_reasoning":  { "type": "string", "default": "" }
+            "geometry_source":  { "type": "string", "enum": ["tsdf", "generative"] },
+            "alignment_method": { "type": "string", "enum": ["fpfh_icp", "coarse_aligned", "n/a"] },
+            "scale_method":     { "type": "string", "enum": ["per_axis_median", "class_prior", "n/a"] },
+            "physics_origin":   { "type": "string", "enum": ["vlm", "lookup"] },
+            "vlm_reasoning":    { "type": "string", "default": "" }
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "$comment": "A 'tsdf' object skips Step 7 ICP and MUST report n/a provenance (fix Y1).",
+          "if": { "properties": { "source": { "properties": { "geometry_source": { "const": "tsdf" } } } } },
+          "then": {
+            "properties": {
+              "source": {
+                "properties": {
+                  "alignment_method": { "const": "n/a" },
+                  "scale_method":     { "const": "n/a" }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Collider": {
+      "type": "object",
+      "required": ["shape"],
+      "additionalProperties": false,
+      "properties": {
+        "shape":                { "type": "string", "enum": ["hulls", "box"] },
+        "convex_decomposition": { "type": "boolean" },
+        "hull_paths":           { "type": "array", "items": { "type": "string" } },
+        "half_extents":         { "type": "array", "items": { "type": "number", "exclusiveMinimum": 0 }, "minItems": 3, "maxItems": 3 }
+      },
+      "allOf": [
+        {
+          "$comment": "Tiers 2-4: CoACD convex hulls (fix Z-O). Needs convex_decomposition:true + non-empty hull_paths.",
+          "if": { "properties": { "shape": { "const": "hulls" } }, "required": ["shape"] },
+          "then": {
+            "required": ["convex_decomposition", "hull_paths"],
+            "properties": {
+              "convex_decomposition": { "const": true },
+              "hull_paths": { "type": "array", "minItems": 1 }
+            }
+          }
+        },
+        {
+          "$comment": "Tier 1: AABB box (fix Z-F). Needs half_extents; no hull_paths.",
+          "if": { "properties": { "shape": { "const": "box" } }, "required": ["shape"] },
+          "then": {
+            "required": ["half_extents"],
+            "not": { "required": ["hull_paths"] }
+          }
+        }
+      ]
     }
   }
 }
