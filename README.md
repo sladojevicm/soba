@@ -2,10 +2,23 @@
 
 Rewrite of [vid2sim](https://github.com/Vector-Space-Moggers/vid2sim) — a pipeline that turns a short depth-camera video of a room into an interactive, browser-based physics simulation.
 
-> **Status:** Migration in progress. Working functionality from the original is being brought over incrementally.
+> **Status:** Build in progress against `PLAN_FINAL_FINAL` (v11). The plan's
+> Build Order is followed phase by phase.
 >
-> **Migrated so far:**
-> - ✅ `scene.json` contract — schema, example, validator, and tests (see [`docs/scene-spec.md`](docs/scene-spec.md)).
+> **Done so far (first three build steps):**
+> - ✅ **Step 1 — Foundation:** `scene.json` **v2.0** contract (Contract 3) — schema,
+>   example, validator, tests (see [`docs/scene-spec.md`](docs/scene-spec.md)); plus
+>   [`config/pipeline.yaml`](config/pipeline.yaml) (tier params, class gates, solidity,
+>   density, physics lookup, ground default) and
+>   [`config/coco_class_map.yaml`](config/coco_class_map.yaml) (dataset→COCO, fix T2).
+> - ✅ **Step 2 — Data input:** `perception/bundle.py` (Contract-1 PerceptionBundle I/O)
+>   and `perception/dataset_reader.py` (TUM RGB-D reader + COCO label mapping).
+> - ✅ **Step 3 — Pose estimation:** `reconstruction/slam.py` (RGB-D odometry; MASt3R /
+>   ORB-SLAM3 interfaces) and `reconstruction/observed_cloud.py` (Step 4 Part A
+>   back-projection — the tier-independent ICP/gate reference).
+>
+> Heavy host-side deps (Open3D, OpenCV, trimesh) live behind the `recon` extra; the
+> contract and data-input layers install and test without them.
 
 ## Goal
 

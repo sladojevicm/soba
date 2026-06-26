@@ -9,12 +9,22 @@ description = "VID2SIM rewrite — scene.json contract and pipeline"
 requires-python = ">=3.11"
 dependencies = [
     "jsonschema>=4.21",
+    "numpy>=1.26",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
+]
+# Heavy, host-side reconstruction deps (CUDA recommended for TSDF). Kept
+# optional so the contract + data-input layers install and test without them.
+recon = [
+    "open3d>=0.18",
+    "opencv-python>=4.9",
+    "trimesh>=4.0",
+    "pillow>=10.0",
 ]
 
 [tool.setuptools.packages.find]
