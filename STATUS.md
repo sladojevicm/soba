@@ -68,7 +68,7 @@ ReplicaReader('$HOME/projects/vid2sim/data/replica/extracted/room_0/imap/00').to
 | 3 Pose | `slam.py` (Tier-1 RGB-D odometry) | ✅ **validated on real TUM (ATE 3.66 cm)**. MASt3R/ORB-SLAM3 are stubs |
 | 4A Observed cloud | `observed_cloud.py` | ✅ **validated on real Replica** (couch 2.34×0.90×1.06 m). **Z-T motion filter wired** (`motion_filter=`, default off; no-op on static room_0, drops jumped frames on synthetic moving objects) |
 | 4B TSDF fusion | `tsdf.py` | ✅ **built + validated on real Replica room_0** (couch/chair/table meshes, dims match Step 4A). CPU:0. **Z-T keep-frame set shared from Part A** (single source of truth) |
-| 5 Confidence gate | `confidence.py` | ✅ **built + run on real Replica room_0.** Angular coverage + completeness (V1/V2/Z-U), thresholds from `pipeline.yaml`. room_0: all 16 objects → "generative" (≤86° orbit per object < 150° bar — correct for a center-of-room scan) |
+| 5 Confidence gate | `confidence.py` | ✅ **built + RECALIBRATED on all 8 scenes.** Angular + shape-fair **hull** completeness (Z-U); thresholds recalibrated from real distributions (T2 110°/0.45). Routes 1–5/75 best-observed objects → tsdf, rest → generative (old bbox metric made 0.65 unreachable → 0 tsdf) |
 | 6 Generative (RunPod) | `runpod_client.py` + infra | ❌ not built |
 | 7 ICP align | `icp_align.py` | ❌ not built |
 | 7b Mesh finalise | `decimate.py` | ❌ not built |
@@ -82,7 +82,32 @@ ReplicaReader('$HOME/projects/vid2sim/data/replica/extracted/room_0/imap/00').to
 object the real points seen + a fused mesh, and decide tsdf-vs-generative. Step 2
 (SAM2) is built but unproven. Everything from Step 6 (generative/RunPod) on is unbuilt.
 
-## What this session did (2026-06-27, all-8-scenes TSDF + gate test)
+## What this session did (2026-06-27, gate recalibration)
+Investigated "0/75 → tsdf" and found it was PARTLY a real data property and PARTLY
+a **miscalibrated, unreachable threshold**. Two findings, both fixed:
+- **The completeness metric was broken.** Old metric = observed_area / **bbox** area,
+  which (per the plan's own fix Z-U) tops out ~0.37 on real data — so the 0.55–0.65
+  thresholds were UNREACHABLE by any object, ever. Replaced with the shape-fair
+  **convex-hull** normaliser (`surface_completeness(denom="hull")`, the Z-U
+  improvement path): observed_area / convex-hull area. Measured max rose 0.37→0.75.
+- **Thresholds were never calibrated.** Recalibrated from the real 8-scene
+  distributions (75 objects; `scripts/analyze_gate.py` dumps
+  `out/gate_distribution.json`). New per-tier gates in `config/pipeline.yaml`:
+  T2 110°/0.45, T3 100°/0.42, T4 90°/0.38 (~p90→p72 of the distribution).
+- **Result (live gate verified == distribution):** T2 routes **1/75** to tsdf,
+  T3 **2/75**, T4 **5/75** — the genuinely best-observed objects (office_3 chair#25
+  at 121°/0.75 hull is #1; fuses to 0.88×0.67×0.86 m). The partial majority still
+  (correctly) goes generative. So the gate now DISCRIMINATES instead of rejecting
+  everything via a broken threshold.
+- **Honest caveats:** (1) selected objects are STILL partial-view (chair#25 misses
+  ~⅓ back) so their TSDF is non-watertight — they lean on Step 7b repair, not magic.
+  (2) Thresholds are PROVISIONAL: grounded in percentiles, NOT in ground-truth
+  "fully-vs-partially observed" labels (we have none). Proper calibration needs
+  walk-around captures. (3) This is a deliberate DEVIATION from the plan
+  (150/0.65 bbox → 110/0.45 hull); the plan's numbers were never data-checked.
+- 85 tests pass (added hull-metric + denom tests). `pipeline.yaml` documents the change.
+
+## What an earlier session did (2026-06-27, all-8-scenes TSDF + gate test)
 Built bundles for **all 8 Replica vMAP scenes** (streaming, see Replica data above)
 and ran TSDF fusion + the Step-5 gate across all of them (`scripts/report_scenes.py`).
 **Result: TSDF fuses correctly on every scene (real-world dims), and the gate routes

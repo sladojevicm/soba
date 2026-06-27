@@ -87,15 +87,40 @@ def angular_coverage_deg(centroid: np.ndarray, cam_positions: np.ndarray) -> flo
     return float(np.degrees(np.arccos(cos)).max())
 
 
-def surface_completeness(
-    cloud: np.ndarray, *, voxel_size: float
-) -> tuple[float, float, float]:
-    """(completeness_ratio, observed_area_m2, bbox_area_m2) for the raw cloud.
+def _observed_patch_area(pcd, voxel_size: float) -> float:
+    """Summed triangle area of a ball-pivoting patch over the cloud (alpha-shape
+    fallback for sparse clouds). The patch is a scoring artefact, discarded."""
+    import open3d as o3d
 
-    observed area = summed triangle area of a ball-pivoting patch mesh over the
-    raw cloud (alpha-shape fallback when ball-pivoting yields nothing); bbox area
-    = surface area of the oriented bounding box. Ratio clamped to [0,1] (fix V2).
-    The patch mesh is a scoring artefact only — discarded, never physics geometry.
+    radii = o3d.utility.DoubleVector([1.5 * voxel_size, 3.0 * voxel_size])
+    mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(pcd, radii)
+    area = float(mesh.get_surface_area()) if len(mesh.triangles) else 0.0
+    if area == 0.0:  # sparse cloud -> alpha-shape fallback
+        try:
+            alpha = o3d.geometry.TriangleMesh.create_from_point_cloud_alpha_shape(
+                pcd, alpha=3.0 * voxel_size
+            )
+            area = float(alpha.get_surface_area()) if len(alpha.triangles) else 0.0
+        except Exception:
+            area = 0.0
+    return area
+
+
+def surface_completeness(
+    cloud: np.ndarray, *, voxel_size: float, denom: str = "hull"
+) -> tuple[float, float, float]:
+    """(completeness_ratio, observed_area_m2, denom_area_m2) for the raw cloud.
+
+    observed area = ball-pivoting (alpha-shape fallback) patch area over the cloud.
+    The denominator normalises it to [0,1]:
+      denom="hull" (default, fix Z-U shape-fair path): surface area of the cloud's
+        CONVEX HULL — a far better proxy for the object's true surface than the
+        bounding box, so the ratio is comparable across shapes (a ball and a box
+        both approach 1.0 when fully observed). This is the RECALIBRATED metric.
+      denom="bbox" (legacy): surface area of the oriented bbox. Shape-DEPENDENT —
+        tops out ~0.5 for a fully-seen compact object (fix Z-U), which made the
+        old 0.55-0.65 thresholds effectively unreachable on real data.
+    Ratio clamped to [0,1] (fix V2).
     """
     import open3d as o3d
 
@@ -105,24 +130,23 @@ def surface_completeness(
 
     pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(cloud))
     pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamKNN(knn=20))
+    observed_area = _observed_patch_area(pcd, voxel_size)
 
-    radii = o3d.utility.DoubleVector([1.5 * voxel_size, 3.0 * voxel_size])
-    mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(pcd, radii)
-    observed_area = float(mesh.get_surface_area()) if len(mesh.triangles) else 0.0
-    if observed_area == 0.0:  # sparse cloud -> alpha-shape fallback
+    if denom == "hull":
         try:
-            alpha = o3d.geometry.TriangleMesh.create_from_point_cloud_alpha_shape(
-                pcd, alpha=3.0 * voxel_size
-            )
-            observed_area = float(alpha.get_surface_area()) if len(alpha.triangles) else 0.0
+            hull, _ = pcd.compute_convex_hull()
+            denom_area = float(hull.get_surface_area())
         except Exception:
-            observed_area = 0.0
+            denom_area = 0.0
+    elif denom == "bbox":
+        obb = pcd.get_oriented_bounding_box()
+        dx, dy, dz = (float(e) for e in obb.extent)
+        denom_area = 2.0 * (dx * dy + dy * dz + dx * dz)
+    else:
+        raise ValueError(f"unknown completeness denominator {denom!r}")
 
-    obb = pcd.get_oriented_bounding_box()
-    dx, dy, dz = (float(e) for e in obb.extent)
-    bbox_area = 2.0 * (dx * dy + dy * dz + dx * dz)
-    ratio = min(observed_area / bbox_area, 1.0) if bbox_area > 0 else 0.0
-    return ratio, observed_area, bbox_area
+    ratio = min(observed_area / denom_area, 1.0) if denom_area > 0 else 0.0
+    return ratio, observed_area, denom_area
 
 
 # --- the gate -----------------------------------------------------------
