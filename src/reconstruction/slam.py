@@ -36,10 +36,14 @@ def compose_poses(relatives: list[np.ndarray], T0: np.ndarray | None = None) -> 
     """Chain frame-to-frame transforms into absolute world poses.
 
     T_world[0]   = T0 (identity by default — world is the first camera)
-    T_world[N+1] = T_world[N] @ T_relative[N->N+1]
+    T_world[i+1] = T_world[i] @ relatives[i]
 
-    `relatives[i]` is the relative transform mapping frame i into frame i+1's
-    camera, so there are len(relatives)+1 absolute poses.
+    With the T_world_camera convention (P_world = T_world_camera @ P_camera),
+    `relatives[i]` must be the point transform that maps frame i+1's camera
+    coords into frame i's camera coords (P_i = relatives[i] @ P_{i+1}) — i.e. the
+    pose of camera i+1 expressed in camera i. This is exactly what Open3D's
+    compute_rgbd_odometry(source=i+1, target=i) returns, so RgbdOdometry feeds
+    that output in DIRECTLY (no inverse). There are len(relatives)+1 poses.
     """
     T = np.eye(4) if T0 is None else np.asarray(T0, dtype=np.float64)
     poses = [T]
@@ -96,14 +100,20 @@ class RgbdOdometry:
         option = o3d.pipelines.odometry.OdometryOption()
         for fid in frame_ids[1:]:
             cur = rgbd(fid)
-            ok, T_cur_prev, _ = o3d.pipelines.odometry.compute_rgbd_odometry(
+            ok, T_prev_cur, _ = o3d.pipelines.odometry.compute_rgbd_odometry(
                 cur, prev, pinhole, np.eye(4),
                 o3d.pipelines.odometry.RGBDOdometryJacobianFromHybridTerm(),
                 option,
             )
-            # compute_rgbd_odometry returns the transform from `cur` to `prev`;
-            # the relative prev->cur world step is its inverse.
-            relatives.append(np.linalg.inv(T_cur_prev) if ok else np.eye(4))
+            # Open3D returns the point transform source->target: it maps `cur`
+            # (source) camera coords into `prev` (target) coords, i.e.
+            #   P_prev = T_prev_cur @ P_cur
+            # (verified by the Open3D tutorial's source.transform(T) aligning the
+            # source cloud onto the target). The world chain is therefore
+            #   T_world[cur] = T_world[prev] @ T_prev_cur,
+            # so compose_poses consumes this DIRECTLY — inverting it here mirrors
+            # the whole trajectory through the origin (the bug this replaces).
+            relatives.append(T_prev_cur if ok else np.eye(4))
             prev = cur
 
         return compose_poses(relatives)

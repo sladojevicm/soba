@@ -13,7 +13,7 @@ scannet:
   desk: "dining table"
   sofa: couch
   couch: couch
-  bookshelf: book          # closest physical proxy in the COCO gate set
+  bookshelf: default       # furniture-sized: the book gate (0.15-0.35 m) would reject it
   books: book
   book: book
   bottle: bottle

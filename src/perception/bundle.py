@@ -196,6 +196,20 @@ class PerceptionBundle:
             out.append(np.array(rec["T_world_camera"], dtype=np.float64))
         return out
 
+    # -- frame timestamps (source clock, e.g. TUM stamps) -----------------
+    # frame_times[i] is the source timestamp for frame i (seconds). Needed to
+    # associate estimated poses with a ground-truth trajectory; written by the
+    # dataset reader / live capture so consumers don't have to re-derive it.
+    def times_path(self) -> Path:
+        return self.root / "frame_times.json"
+
+    def write_frame_times(self, times: Iterable[float]) -> None:
+        _write_json_path(self.times_path(), [float(t) for t in times])
+
+    def read_frame_times(self) -> list[float]:
+        p = self.times_path()
+        return [float(t) for t in _read_json(p)] if p.exists() else []
+
     # -- pixel I/O (lazy imaging backend) ---------------------------------
     def write_depth_mm(self, frame_id: int, depth_mm: np.ndarray) -> None:
         if depth_mm.dtype != DEPTH_DTYPE:

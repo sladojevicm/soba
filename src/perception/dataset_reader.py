@@ -166,6 +166,11 @@ class TUMReader:
                     )
                 records.append({k: v for k, v in det.items() if k != "mask"})
             bundle.write_objects(frame_id, records)
+
+        # Persist the RGB source timestamps so a later pose evaluation can
+        # associate estimated poses with the dataset's ground-truth trajectory
+        # without re-running association.
+        bundle.write_frame_times([r.timestamp for r, _ in pairs])
         return bundle
 
 

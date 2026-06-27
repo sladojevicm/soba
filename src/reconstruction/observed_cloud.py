@@ -63,7 +63,10 @@ def voxel_downsample(points: np.ndarray, voxel_size: float) -> np.ndarray:
         return points
     keys = np.floor(points / voxel_size).astype(np.int64)
     _, inverse = np.unique(keys, axis=0, return_inverse=True)
-    n = inverse.max() + 1
+    # numpy 2.0 returned a 2-D `inverse` for axis-wise unique; flatten so the
+    # add.at / bincount below behave identically across numpy versions.
+    inverse = np.asarray(inverse).reshape(-1)
+    n = int(inverse.max()) + 1
     sums = np.zeros((n, 3), dtype=np.float64)
     np.add.at(sums, inverse, points)
     counts = np.bincount(inverse, minlength=n).reshape(-1, 1)
