@@ -66,3 +66,73 @@ def test_provisional_ground_y():
     a = np.array([[0.0, 0.5, 0.0], [0.0, 1.0, 0.0]])
     b = np.array([[0.0, 0.2, 0.0]])
     assert abs(oc.provisional_ground_y([a, b], offset_m=0.02) - 0.18) < 1e-9
+
+
+# --- Z-T motion filter (keep-frame walk) ---------------------------------
+def test_motion_keep_indices_static_keeps_all():
+    # centroids wiggle a little (< thresh); obj_size_m=1.0 -> thresh=0.3 m
+    c = [np.array([0.0, 0, 0]), np.array([0.1, 0, 0]), np.array([0.0, 0.1, 0])]
+    assert oc.motion_keep_indices(c, 1.0) == [0, 1, 2]
+
+
+def test_motion_keep_indices_drops_after_jump():
+    # frames 0,1 static near origin; frame 2 jumps 1 m (> 0.3); frame 3 sits at
+    # the new spot. The chain measures 3 against the last KEPT (origin) -> 2 and
+    # 3 both dropped: only the first static run survives.
+    c = [
+        np.array([0.0, 0, 0]),
+        np.array([0.05, 0, 0]),
+        np.array([1.0, 0, 0]),  # jump
+        np.array([1.05, 0, 0]),  # near the new spot, far from origin
+    ]
+    assert oc.motion_keep_indices(c, 1.0) == [0, 1]
+
+
+def test_motion_keep_indices_skips_none_without_breaking_chain():
+    # a None (no masked depth that frame) is skipped, does not advance reference
+    c = [np.array([0.0, 0, 0]), None, np.array([0.1, 0, 0])]
+    assert oc.motion_keep_indices(c, 1.0) == [0, 2]
+
+
+def test_motion_keep_first_frame_always_seeds():
+    c = [np.array([5.0, 5.0, 5.0]), np.array([5.0, 5.0, 5.0])]
+    assert oc.motion_keep_indices(c, 1.0) == [0, 1]
+
+
+def test_bbox_diagonal():
+    pts = np.array([[0.0, 0, 0], [3.0, 4.0, 0.0]])
+    assert abs(oc.bbox_diagonal(pts) - 5.0) < 1e-9
+    assert oc.bbox_diagonal(np.empty((0, 3))) == 0.0
+
+
+def test_accumulate_motion_filter_excludes_moved_frames():
+    # one-pixel object at the principal point: depth 1.0 m for frames 0,1, then
+    # it "moves" to 3.0 m for frame 2. Identity poses -> world == camera coords.
+    K = _K()
+    near = np.zeros((5, 5), dtype=np.uint16)
+    near[2, 2] = 1000
+    far = np.zeros((5, 5), dtype=np.uint16)
+    far[2, 2] = 3000  # +2 m in Z, a big jump
+    mask = np.zeros((5, 5), dtype=np.uint8)
+    mask[2, 2] = 1
+    I = np.eye(4)
+    frames = [(near, mask, I), (near, mask, I), (far, mask, I)]
+
+    naive = oc.accumulate_object_cloud(frames, K, voxel_size=0.001)
+    filtered, keep = oc.accumulate_object_cloud(
+        frames, K, voxel_size=0.001, motion_filter=True, return_keep=True
+    )
+    assert naive[:, 2].max() > 2.5  # naive spans out to 3.0 m
+    assert keep == [0, 1]  # only the 1.0 m frames survive
+    np.testing.assert_allclose(filtered[:, 2].max(), 1.0, atol=1e-6)
+
+
+def test_accumulate_motion_filter_off_keeps_all_backward_compatible():
+    K = _K()
+    d = np.zeros((5, 5), dtype=np.uint16)
+    d[2, 2] = 1000
+    mask = np.zeros((5, 5), dtype=np.uint8)
+    mask[2, 2] = 1
+    frames = [(d, mask, np.eye(4))] * 3
+    cloud = oc.accumulate_object_cloud(frames, K)  # default: no motion filter
+    assert cloud.shape == (1, 3)  # unchanged return type/shape
