@@ -23,11 +23,17 @@ The user is **non-expert on the internals** — explain in plain language and be
 - **Plan:** `~/projects/vid2sim/PLAN_FINAL_FINAL.txt` (v12)
 - **TUM data:** `~/projects/vid2sim/data/tum/rgbd_dataset_freiburg1_xyz/` (fr1/xyz + `groundtruth.txt`)
 - **Replica data:** `~/projects/vid2sim/data/replica/`
-  - `demo_replica_room_0.zip` (6 GB, from HuggingFace `kxic/vMAP`) — the full set is
-    `vmap.zip` (41.7 GB, won't fit in current disk).
-  - extracted rendered sequence: `extracted/room_0/imap/00/` (2000 frames: rgb/, depth/,
-    semantic_class/, semantic_instance/, traj_w_c.txt, render_config.yaml)
-  - a built PerceptionBundle: `bundle_room0/` (100 frames, every 20th)
+  - **ALL 8 vMAP scenes built as bundles: `bundles/{room_0,room_1,room_2,office_0..4}/`**
+    (100 frames each, stride 20; 445 MB total). Built by **streaming only the strided
+    frames out of the remote 44.79 GB `vmap.zip`** via HTTP range requests +
+    parallel block prefetch (`scripts/remote_zip.py` + `scripts/build_replica_bundles.py`)
+    — NO full download (the 44.79 GB zip never fits the 39 GB free disk). ~5 min total.
+  - `demo_replica_room_0.zip` (6 GB) + `extracted/room_0/` + `bundle_room0/` — the
+    older single-room artefacts (superseded by `bundles/room_0`, which is identical:
+    couch 2.34×0.90×1.06). Can be deleted to reclaim ~9 GB.
+  - HF repo `kxic/vMAP` has only: `demo_replica_room_0.zip` (6.48 GB),
+    `vMAP_Replica_Results.zip` (10.59 GB), `vmap.zip` (44.79 GB, all 8 scenes,
+    layout `vmap/<scene>/imap/00/{depth,rgb,semantic_class,semantic_instance}/`).
 - **venv:** `~/projects/vid2sim/venv/` (python 3.12, numpy 2.5, **open3d 0.19 CPU build**, opencv, pytest)
 
 ## Environment reality (matters for what's runnable here)
@@ -76,7 +82,26 @@ ReplicaReader('$HOME/projects/vid2sim/data/replica/extracted/room_0/imap/00').to
 object the real points seen + a fused mesh, and decide tsdf-vs-generative. Step 2
 (SAM2) is built but unproven. Everything from Step 6 (generative/RunPod) on is unbuilt.
 
-## What this session did (2026-06-27, Phase 6 / confidence gate)
+## What this session did (2026-06-27, all-8-scenes TSDF + gate test)
+Built bundles for **all 8 Replica vMAP scenes** (streaming, see Replica data above)
+and ran TSDF fusion + the Step-5 gate across all of them (`scripts/report_scenes.py`).
+**Result: TSDF fuses correctly on every scene (real-world dims), and the gate routes
+ALL 75 objects to "generative" (0 tsdf) at Tier 2.** Per-scene best-object TSDF dims:
+room_0 couch 2.31×0.92×1.02, room_2 dining-table 2.12×0.64×1.35, office_2 table
+1.58×0.50×1.58, office_3 chair 0.88×0.67×0.86 — all sane, all watertight=False.
+- **Why 0 tsdf everywhere (honest, important finding):** max per-object angular
+  coverage across all 8 scenes is **123.3°** (office_4), below even the loosest
+  Tier-4 bar (130°); completeness is also low (~0.04–0.33). vMAP trajectories are
+  center-of-room exploration scans — the camera rotates a lot (forward-dir spans
+  ~179°) but never ORBITS a single object past ~123°, so nothing clears the
+  walk-around gate. This is the DESIGNED behavior (partial views → generative), and
+  it means **the tsdf-accept branch is unreachable on this dataset** — to exercise
+  it on real data we need genuine walk-around footage, OR the thresholds need
+  revisiting for room-scan captures (a real open question for the project).
+- **Net:** both modules are now validated on 8 diverse real scenes. The room-scan
+  conclusion is consistent, not a one-off room_0 artefact.
+
+## What an earlier session did (2026-06-27, Phase 6 / confidence gate)
 Built **`src/reconstruction/confidence.py`** (Step 5) + `scripts/run_gate.py`, ran
 on real room_0. Scores the RAW cloud (fix V1): **angular coverage** (largest
 pairwise centroid→camera view-angle, shape-independent primary signal) AND
