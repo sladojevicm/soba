@@ -1,0 +1,105 @@
+"""Phase 9 scene-assembly tests (Step 8-10).
+
+Config tables and mass math are pure; the assembler is exercised on a small
+watertight box object and the result is validated against the frozen schema.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from scene import assembler, ground, lookup, mass, schema, vlm
+
+
+# --- lookup tables ------------------------------------------------------
+def test_lookup_density_and_solidity_fall_back():
+    assert lookup.density("wood") == 700
+    assert lookup.density("nonsense") == lookup.density("unknown")  # fallback
+    assert lookup.solidity("couch") == 0.20
+    assert lookup.solidity("nonsense") == lookup.solidity("default")
+
+
+def test_physics_lookup_known_and_default():
+    p = lookup.physics_lookup("chair")
+    assert p["material"] == "wood" and p["is_rigid"] is True
+    d = lookup.physics_lookup("flux capacitor")  # unknown -> default
+    assert d["material"] == "unknown"
+
+
+# --- mass ---------------------------------------------------------------
+def test_mass_formula_uses_density_and_solidity():
+    # 1 m^3 of wood (700) at chair solidity (0.25) -> 175 kg
+    m = mass.mass_kg(1.0, "wood", "chair")
+    assert abs(m - 700 * 0.25) < 1e-6
+
+
+def test_volume_watertight_vs_hull_fallback():
+    import open3d as o3d
+
+    box = o3d.geometry.TriangleMesh.create_box(1.0, 1.0, 1.0)
+    box.compute_vertex_normals()
+    vol, watertight = mass.volume_m3(box)
+    assert watertight and abs(vol - 1.0) < 1e-6
+    # remove a face -> open shell -> hull fallback still returns a positive volume
+    tris = np.asarray(box.triangles)[:-2]
+    box.triangles = o3d.utility.Vector3iVector(tris)
+    vol2, wt2 = mass.volume_m3(box)
+    assert not wt2 and vol2 > 0
+
+
+# --- ground -------------------------------------------------------------
+def test_ground_y_from_clouds():
+    a = np.array([[0, 0.50, 0], [0, 1.0, 0]], dtype=float)
+    b = np.array([[0, 0.10, 0]] * 50, dtype=float)
+    gy = ground.ground_y([a, b], offset_m=0.02)
+    assert abs(gy - 0.08) < 1e-6  # ~min(0.10) - 0.02
+
+
+# --- slug + id ----------------------------------------------------------
+def test_slug_multiword_class():
+    assert assembler.slug("dining table") == "dining_table"
+    assert assembler.slug("sports ball") == "sports_ball"
+
+
+# --- full assemble validates against the schema -------------------------
+def _box_object(track_id, coco_class, at):
+    import open3d as o3d
+
+    box = o3d.geometry.TriangleMesh.create_box(0.5, 0.8, 0.5)
+    box.translate(at)
+    box.compute_vertex_normals()
+    cloud = np.asarray(box.vertices, dtype=float)
+    return assembler.ObjectInput(track_id, coco_class, box, cloud)
+
+
+def test_assemble_produces_schema_valid_scene(tmp_path):
+    objs = [
+        _box_object(7, "dining table", (1.0, 0.0, 2.0)),
+        _box_object(3, "chair", (-1.0, 0.0, 0.5)),
+    ]
+    scene = assembler.assemble(objs, [np.eye(4)], tmp_path / "scene")
+    schema.validate(scene)  # raises if invalid
+    assert {o["id"] for o in scene["objects"]} == {"chair_00", "dining_table_01"}
+    for o in scene["objects"]:
+        assert o["source"]["geometry_source"] == "tsdf"
+        assert o["source"]["alignment_method"] == "n/a"  # Y1: tsdf -> n/a
+        assert o["physics"]["mass_kg"] > 0
+        assert o["collider"]["shape"] == "hulls"
+        assert len(o["collider"]["hull_paths"]) >= 1
+    assert (tmp_path / "scene" / "scene.json").exists()
+    # ids assigned by sorted track_id: 3->chair_00, 7->dining_table_01
+    by_id = {o["id"]: o for o in scene["objects"]}
+    assert by_id["chair_00"]["class"] == "chair"
+
+
+def test_assemble_caps_at_12_objects(tmp_path):
+    objs = [_box_object(i, "chair", (i * 0.6, 0.0, 0.0)) for i in range(15)]
+    scene = assembler.assemble(objs, [np.eye(4)], tmp_path / "scene")
+    assert len(scene["objects"]) == 12  # Contract 3 cap (Z8)
+
+
+def test_vlm_falls_back_to_lookup_without_backend():
+    out = vlm.infer(["chair", "couch"])
+    assert [p.origin for p in out] == ["lookup", "lookup"]
+    assert out[0].material == "wood" and out[1].material == "fabric"

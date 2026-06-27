@@ -82,10 +82,10 @@ ReplicaReader('$HOME/projects/vid2sim/data/replica/extracted/room_0/imap/00').to
 | 5 Confidence gate | `confidence.py` | ✅ **built + RECALIBRATED on all 8 scenes.** Angular + shape-fair **hull** completeness (Z-U); thresholds recalibrated from real distributions (T2 110°/0.45). Routes 1–5/75 best-observed objects → tsdf, rest → generative (old bbox metric made 0.65 unreachable → 0 tsdf) |
 | 6 Generative (RunPod) | `runpod_client.py` + infra | ❌ not built |
 | 7 ICP align | `icp_align.py` | ❌ not built |
-| 7b Mesh finalise | `decimate.py` | ❌ not built |
-| 8 Physics (Claude) | `scene/vlm.py` | ❌ not built |
-| 9 Convex decomp (CoACD) | `scene/decomp.py` | ❌ not built |
-| 10 Scene assembly | `scene/assembler.py` (+ schema validator EXISTS) | ❌ not built |
+| 7b Mesh finalise | `scene/exporter_gltf.py` | ⚠️ **decimation + .glb export built**; watertight repair (Poisson) NOT — this is why masses are inflated (see below) |
+| 8 Physics (Claude) | `scene/vlm.py` | ⚠️ **interface + lookup fallback built** (`physics_origin:"lookup"`); live Claude `output_config.format` call deferred (needs claude-api skill + key) |
+| 9 Convex decomp (CoACD) | `scene/decomp.py` | ✅ **built** (CoACD 1.0.11 installed; single-hull fallback) |
+| 10 Scene assembly | `scene/assembler.py` (+ `lookup`/`mass`/`ground`) | ✅ **built + validated on office_3** → schema-valid `scene.json` |
 | 11 Browser (Three.js+Rapier) | `frontend/` | ❌ not built |
 
 **One-line summary:** the front of the pipeline works on real data — **Step 1 → Step 3
@@ -93,7 +93,30 @@ ReplicaReader('$HOME/projects/vid2sim/data/replica/extracted/room_0/imap/00').to
 object the real points seen + a fused mesh, and decide tsdf-vs-generative. Step 2
 (SAM2) is built but unproven. Everything from Step 6 (generative/RunPod) on is unbuilt.
 
-## What this session did (2026-06-27, gate recalibration)
+## What this session did (2026-06-27, Phase 9 / scene assembly)
+Built **Phase 9 (Step 8-10): `scene/{lookup,mass,ground,decomp,exporter_gltf,vlm,
+assembler}.py`** + `scripts/run_assemble.py`, validated end-to-end on **office_3**.
+Runs the proper Z-D order: gate → TSDF only for survivors → assemble. Output is a
+**schema-valid `scene.json`** + per-object `objects/{id}/mesh.glb` and CoACD
+`hulls/{id}_{i}.glb`. office_3 @ Tier 4 → 3 tsdf objects (couch/table/chair),
+slug ids (`couch_00`…), `source.geometry_source:"tsdf"` ⇒ `alignment/scale:"n/a"`,
+lookup physics, ground-snapped placement. **94 tests pass** (9 new).
+- **CoACD 1.0.11 installed** (real convex decomposition; single-hull fallback).
+- **VLM deferred:** physics from the lookup table (`physics_origin:"lookup"`); the
+  live Claude call (`output_config.format`) is an injectable backend, finalised
+  later with the claude-api skill + key. No key needed to run.
+- **⚠️ KNOWN ISSUE — masses inflated ~3-5×** (couch 219 kg, table 93 kg, chair
+  25 kg vs real ~40/20/6). Cause: TSDF meshes are open shells, so `mass.volume_m3`
+  falls back to **convex-hull volume**, which fills concavities (under-table,
+  between chair legs, couch seat); solidity factors weren't calibrated for that.
+  RELATIVE ordering is correct (couch>table>chair) so physics feel is OK, but
+  absolute mass needs **Step 7b watertight repair (Poisson)** — the real fix,
+  not yet built. Don't trust the kg values until then.
+- **Sparse-scene caveat holds:** only tsdf objects assembled (3 of 14 in office_3);
+  generative objects omitted (no GPU). Volume computed via signed-tetrahedron sum
+  (robust; Open3D `get_volume()` rejects convex hulls as non-watertight — gotcha).
+
+## What an earlier session did (2026-06-27, gate recalibration)
 Investigated "0/75 → tsdf" and found it was PARTLY a real data property and PARTLY
 a **miscalibrated, unreachable threshold**. Two findings, both fixed:
 - **The completeness metric was broken.** Old metric = observed_area / **bbox** area,
