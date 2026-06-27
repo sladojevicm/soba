@@ -62,7 +62,7 @@ ReplicaReader('$HOME/projects/vid2sim/data/replica/extracted/room_0/imap/00').to
 | 3 Pose | `slam.py` (Tier-1 RGB-D odometry) | ✅ **validated on real TUM (ATE 3.66 cm)**. MASt3R/ORB-SLAM3 are stubs |
 | 4A Observed cloud | `observed_cloud.py` | ✅ **validated on real Replica** (couch 2.34×0.90×1.06 m). **Z-T motion filter wired** (`motion_filter=`, default off; no-op on static room_0, drops jumped frames on synthetic moving objects) |
 | 4B TSDF fusion | `tsdf.py` | ✅ **built + validated on real Replica room_0** (couch/chair/table meshes, dims match Step 4A). CPU:0. **Z-T keep-frame set shared from Part A** (single source of truth) |
-| 5 Confidence gate | `confidence.py` | ❌ not built |
+| 5 Confidence gate | `confidence.py` | ✅ **built + run on real Replica room_0.** Angular coverage + completeness (V1/V2/Z-U), thresholds from `pipeline.yaml`. room_0: all 16 objects → "generative" (≤86° orbit per object < 150° bar — correct for a center-of-room scan) |
 | 6 Generative (RunPod) | `runpod_client.py` + infra | ❌ not built |
 | 7 ICP align | `icp_align.py` | ❌ not built |
 | 7b Mesh finalise | `decimate.py` | ❌ not built |
@@ -72,11 +72,33 @@ ReplicaReader('$HOME/projects/vid2sim/data/replica/extracted/room_0/imap/00').to
 | 11 Browser (Three.js+Rapier) | `frontend/` | ❌ not built |
 
 **One-line summary:** the front of the pipeline works on real data — **Step 1 → Step 3
-→ Step 4A → Step 4B (TSDF)** — i.e. we can take footage and produce, per object, the
-real 3D points the camera saw AND a fused (open, not-yet-watertight) triangle mesh.
-Step 2 (SAM2) is built but unproven. Everything from Step 5 (gate) on is unbuilt.
+→ Step 4A → Step 4B (TSDF) → Step 5 (gate)** — i.e. we can take footage, produce per
+object the real points seen + a fused mesh, and decide tsdf-vs-generative. Step 2
+(SAM2) is built but unproven. Everything from Step 6 (generative/RunPod) on is unbuilt.
 
-## What this session did (2026-06-27, Phase 5 / TSDF)
+## What this session did (2026-06-27, Phase 6 / confidence gate)
+Built **`src/reconstruction/confidence.py`** (Step 5) + `scripts/run_gate.py`, ran
+on real room_0. Scores the RAW cloud (fix V1): **angular coverage** (largest
+pairwise centroid→camera view-angle, shape-independent primary signal) AND
+**surface completeness** (ball-pivoting/alpha-shape patch area ÷ oriented-bbox
+area, clamped [0,1] — fix V2; empirical knob per fix Z-U). Both must clear the
+per-tier bar (read from `config/pipeline.yaml`: Tier2 150°/0.65). Tier 1 = all
+generative, no scoring. Output `confidence/{track_id}.json`.
+- **room_0 @ Tier 2: all 16 objects → "generative".** This is CORRECT, not a bug:
+  the camera's *forward* direction spans 178.8° (rotates to scan the whole room)
+  but each *object's* angular coverage maxes at ~86° (couch 78.8°) — a
+  center-of-room scan sees object fronts across a limited arc and never orbits
+  behind any single object. Partial front-only views → generative to complete the
+  unseen back is exactly the designed behavior. **Implication:** room_0's
+  Phase-5 TSDF shells would all be bypassed for generative (consistent — they
+  weren't watertight); the room_0 path is therefore entirely generative (needs
+  RunPod, Phase 7/8). To exercise the *tsdf-accept* branch on REAL data we need
+  walk-around footage; unit tests prove that branch fires.
+- 12 new tests (`test_confidence.py`). **83 total pass.**
+- **Run:** `PYTHONPATH=src ~/projects/vid2sim/venv/bin/python scripts/run_gate.py
+  --bundle ../data/replica/bundle_room0 --tier 2`.
+
+## What an earlier session did (2026-06-27, Phase 5 / TSDF)
 Built **`src/reconstruction/tsdf.py`** (Step 4 Part B) and validated it on **real
 Replica room_0** with GT masks + poses. Scene-level `VoxelBlockGrid` pass on
 `CPU:0`, per-object grid sized from the Step-4A observed-cloud bbox (fix M2), real
@@ -168,14 +190,11 @@ a `.glb`/`.ply` for Blender. Test on `bundle_room0` (couch/table/chair are good 
 Mind the depth validity gates in MILLIMETRES (fix G1: 400–8000 mm).
 
 ## Git state
-- Branch **`fix/phase3-pose-and-eval`**. Committed & pushed earlier: Phase 1–3 fixes +
-  `scripts/eval_pose.py` + `frame_times` (commit `2b56f92`).
-- **Uncommitted** on that branch: **Phase 4 (SAM2)** files, the **`ReplicaReader`**
-  in `dataset_reader.py`, **Phase 5 (`src/reconstruction/tsdf.py` +
-  `tests/reconstruction/test_tsdf.py` + `scripts/run_tsdf.py`)**, the **Z-T motion
-  filter** additions in `observed_cloud.py` (+ `test_observed_cloud.py`), and this
-  `STATUS.md`. `out/tsdf_room0/` holds the exported meshes (gitignore-worthy).
-  `master` is clean.
+- Branch **`fix/phase3-pose-and-eval`**. Pushed: Phase 1–3 fixes (`2b56f92`),
+  Phase 4 SAM2 + ReplicaReader (`e122c37`), Phase 5 TSDF + Z-T (`14083c7`).
+- **Uncommitted** on that branch: **Phase 6 (`src/reconstruction/confidence.py` +
+  `tests/reconstruction/test_confidence.py` + `scripts/run_gate.py`)**, the
+  `reconstruction/__init__.py` exports, and this `STATUS.md`. `master` is clean.
 
 ## Carried-forward gaps & gotchas
 1. **Detection gap (unchanged):** the pipeline assumes per-frame `objects.json`+masks. TUM
