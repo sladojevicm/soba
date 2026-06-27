@@ -2,7 +2,18 @@
 
 _Last updated: 2026-06-27. This is a working handoff so a fresh session can resume
 without re-deriving everything. The authoritative design is `PLAN_FINAL_FINAL.txt`
-(currently at `~/projects/vid2sim/PLAN_FINAL_FINAL.txt`, version 12)._
+(currently at `~/projects/vid2sim/PLAN_FINAL_FINAL.txt`, version 13)._
+
+## ⚠️ CURRENT OPERATING CONSTRAINT — generative path deferred (no GPU)
+Decided 2026-06-27: the generative path (Step 6 / Phases 7–8, RunPod) is **on hold**
+— no GPU yet (FRI/SLING/Vega or RunPod credits TBD; RunPod costs ~$20–30, faculty
+GPU likely free). **CONSEQUENCE:** every object the Step-5 gate routes to
+**"generative"** has NO mesh and is **DROPPED — not rendered, not simulated.** Only
+**"tsdf"-routed (well-observed) objects** yield usable geometry locally. On the
+recalibrated thresholds that is ~1–5 objects/scene on Replica; the rest are
+**invisible until a GPU is connected.** Downstream Phases 9–11 (assembly/browser)
+must treat generative objects as **pending/omitted, not an error**, and the scene
+will be sparse (only the best-observed objects) until the generative stage exists.
 
 ## How to resume (read these in order)
 1. This file (current state + next steps).
