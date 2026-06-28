@@ -82,7 +82,7 @@ ReplicaReader('$HOME/projects/vid2sim/data/replica/extracted/room_0/imap/00').to
 | 5 Confidence gate | `confidence.py` | ✅ **built + RECALIBRATED on all 8 scenes.** Angular + shape-fair **hull** completeness (Z-U); thresholds recalibrated from real distributions (T2 110°/0.45). Routes 1–5/75 best-observed objects → tsdf, rest → generative (old bbox metric made 0.65 unreachable → 0 tsdf) |
 | 6 Generative (RunPod) | `runpod_client.py` + infra | ❌ not built |
 | 7 ICP align | `icp_align.py` | ❌ not built |
-| 7b Mesh finalise | `scene/exporter_gltf.py` | ⚠️ **decimation + .glb export built**; watertight repair (Poisson) NOT — this is why masses are inflated (see below) |
+| 7b Mesh finalise | `scene/exporter_gltf.py` + `mass.watertight_repair` | ✅ **decimation + .glb export + Poisson watertight repair built** (repair feeds mass volume; masses now realistic, see below) |
 | 8 Physics (Claude) | `scene/vlm.py` | ⚠️ **interface + lookup fallback built** (`physics_origin:"lookup"`); live Claude `output_config.format` call deferred (needs claude-api skill + key) |
 | 9 Convex decomp (CoACD) | `scene/decomp.py` | ✅ **built** (CoACD 1.0.11 installed; single-hull fallback) |
 | 10 Scene assembly | `scene/assembler.py` (+ `lookup`/`mass`/`ground`) | ✅ **built + validated on office_3** → schema-valid `scene.json` |
@@ -105,13 +105,15 @@ lookup physics, ground-snapped placement. **94 tests pass** (9 new).
 - **VLM deferred:** physics from the lookup table (`physics_origin:"lookup"`); the
   live Claude call (`output_config.format`) is an injectable backend, finalised
   later with the claude-api skill + key. No key needed to run.
-- **⚠️ KNOWN ISSUE — masses inflated ~3-5×** (couch 219 kg, table 93 kg, chair
-  25 kg vs real ~40/20/6). Cause: TSDF meshes are open shells, so `mass.volume_m3`
-  falls back to **convex-hull volume**, which fills concavities (under-table,
-  between chair legs, couch seat); solidity factors weren't calibrated for that.
-  RELATIVE ordering is correct (couch>table>chair) so physics feel is OK, but
-  absolute mass needs **Step 7b watertight repair (Poisson)** — the real fix,
-  not yet built. Don't trust the kg values until then.
+- **Masses FIXED via Step 7b Poisson watertight repair** (`mass.watertight_repair`):
+  open TSDF shells are closed by Poisson reconstruction (density-trimmed, cropped
+  to the AABB), volume bounded by the convex hull, hull fallback on failure. Masses
+  dropped from absurd (couch 219 kg) to believable: **couch 32.6 kg, table 45 kg,
+  chair 3.6 kg** (vs real ~40/20–40/6). ⚠️ Still APPROXIMATE: the repaired mesh
+  isn't perfectly watertight (the crop leaves small holes) and Poisson is mildly
+  non-deterministic, so kg values can vary run-to-run by some margin. Good enough
+  for plausible physics; a fully robust volume (trimesh hole-fill / deterministic
+  Poisson, or solidity recalibration against known masses) is future hardening.
 - **Sparse-scene caveat holds:** only tsdf objects assembled (3 of 14 in office_3);
   generative objects omitted (no GPU). Volume computed via signed-tetrahedron sum
   (robust; Open3D `get_volume()` rejects convex hulls as non-watertight — gotcha).
