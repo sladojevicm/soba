@@ -1,6 +1,6 @@
 # vid2sim-v2 — Build Status & Handoff
 
-_Last updated: 2026-06-27. This is a working handoff so a fresh session can resume
+_Last updated: 2026-06-28. This is a working handoff so a fresh session can resume
 without re-deriving everything. The authoritative design is `PLAN_FINAL_FINAL.txt`
 (currently at `~/projects/vid2sim/PLAN_FINAL_FINAL.txt`, version 13)._
 
@@ -17,7 +17,7 @@ will be sparse (only the best-observed objects) until the generative stage exist
 
 ## How to resume (read these in order)
 1. This file (current state + next steps).
-2. `~/projects/vid2sim/PLAN_FINAL_FINAL.txt` — the full design (2265 lines, v12). The
+2. `~/projects/vid2sim/PLAN_FINAL_FINAL.txt` — the full design (v13). The
    15-phase Build Order is §24; the pipeline Steps overview is §5.
 3. The user's auto-memory `vid2sim-v2-project.md` (locations + working style).
 The user is **non-expert on the internals** — explain in plain language and be
@@ -251,29 +251,28 @@ path on real ground-truth data** (the thing TUM can't test, because TUM has no l
 - **Never run / doesn't exist:** real **SAM2** model; **YOLO** detection; MASt3R / ORB-SLAM3
   (stubs); everything Step 4B+ (TSDF, gate, generative, ICP, physics, assembler, browser).
 
-## Agreed next steps (what the user wants next)
-The plan: **test SAM2 on Replica → implement Phase 5 (TSDF) → load meshes into Blender to
-eyeball them.** Notes:
-- **SAM2 test and Phase 5 are INDEPENDENT** — TSDF uses Replica's GT masks, it does NOT
-  need SAM2. So order is flexible.
-- **Recommended: build Phase 5 (TSDF) first** — it needs nothing installed (open3d CPU
-  works), and it's the fastest path to actual meshes you can open in Blender. Then circle
-  back to the SAM2 IoU test (which needs a ~1–2 GB torch+sam2+checkpoint install, slow on CPU).
-- **Phase 5 first pass can SKIP Z-T** — room_0 is a static scene, so straight TSDF
-  integration is correct and will produce valid meshes. Add Z-T (the keep-frame motion
-  filter, plan fix Z-T) as a follow-up for moving objects / full plan fidelity.
-- **Blender is a DEV inspection tool, not the product.** The plan's real target is the
-  **browser** (Three.js + Rapier, Step 11). Blender just lets us eyeball the TSDF `.ply`/`.glb`
-  (does the couch look like a couch, no holes/ghosting). Not in conflict — Blender now,
-  browser much later.
-
-### Concrete Phase 5 task
-Build `src/reconstruction/tsdf.py` per plan §9 Part B (lines ~984–1117): one scene-level
-`VoxelBlockGrid` pass on `Device("CPU:0")`, per-object grid sized from the observed-cloud
-bbox (fix M2), masked depth integration with `compute_unique_block_coordinates(...)` then
-`integrate(...)` (the real tensor API, fix X1), `extract_triangle_mesh()` per object, export
-a `.glb`/`.ply` for Blender. Test on `bundle_room0` (couch/table/chair are good targets).
-Mind the depth validity gates in MILLIMETRES (fix G1: 400–8000 mm).
+## Agreed next steps (for the next instance)
+Phases 1–6 + 9 (incl. Step 7b mass repair) are built. The back end now produces a
+schema-valid `scene.json` + `.glb` meshes + CoACD hull colliders for the tsdf
+objects. **Recommended next: Phase 10 (local server) → Phase 11 (browser).**
+- **Phase 10 — `src/server.py`** (plan §15 LOCAL SERVER): FastAPI serving
+  `GET /scene.json`, `GET /meshes/{id}.glb` (remap to `objects/{id}/mesh.glb`),
+  `GET /hulls/{id}_{i}.glb` (remap to `objects/{id}/hulls/...`), `GET /events` SSE.
+  Fully local, no GPU. Point it at `out/scene_office_3/`.
+- **Phase 11 — `frontend/`** (plan §16): Three.js render + Rapier physics. MUST
+  set mass ON THE RIGID-BODY DESC before createRigidBody (fixes P1/D5), load the
+  CoACD hulls as colliders, read `ground.y`/`world.gravity` from scene.json
+  (K4/Z-J), re-GET scene.json per `object_added` SSE (Z-C). This is where you
+  finally SEE office_3's couch/table/chair as an interactive scene.
+- **Remember the sparse-scene constraint** (top of this file): only tsdf objects
+  exist; generative ones are omitted until a GPU is connected. office_3 @ Tier 4
+  shows 3 of 14 objects — that's expected, not a bug.
+- **A ready test scene exists:** `out/scene_office_3/` (run
+  `scripts/run_assemble.py --bundle .../bundles/office_3 --tier 4 --out ...` to
+  regenerate, or assemble another scene). Open3D CANNOT read its own .glb back
+  (writes fine for three.js); don't QA glbs in open3d.
+- Optional hardening: deterministic/robust mass volume (Step 7b is approximate);
+  real SAM2 run; the live Claude physics call (vlm.py backend + key).
 
 ## Git state
 - Branch **`fix/phase3-pose-and-eval`**. Pushed: Phase 1–3 fixes (`2b56f92`),
