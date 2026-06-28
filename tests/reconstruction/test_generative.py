@@ -15,6 +15,8 @@ from reconstruction import generative
 def test_make_engine_defaults_to_local(monkeypatch):
     monkeypatch.delenv("RUNPOD_API_KEY", raising=False)
     monkeypatch.delenv("RUNPOD_ENDPOINT_ID", raising=False)
+    # force the no-GPU path so this is deterministic on CUDA + non-CUDA boxes
+    monkeypatch.setattr(generative.LocalGpuEngine, "is_available", staticmethod(lambda: False))
     assert isinstance(generative.make_engine(), generative.LocalEngine)
 
 

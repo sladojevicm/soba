@@ -277,16 +277,36 @@ class LocalGpuEngine(Engine):
 
     # --- model adapters (FILL with the model APIs once installed) -------
     def _run_completion(self, *, mesh, cloud, coco_class):
-        """Run the shape-completion model on the PARTIAL GEOMETRY -> open3d mesh.
+        """PoinTr shape-completion on the PARTIAL GEOMETRY -> open3d mesh.
 
-        Load `self.completion_model` (PoinTr-family) onto CUDA, feed the observed
-        `cloud` (N,3 partial point cloud) — `mesh` is the partial TSDF mesh for
-        context — and mesh the completed points (Poisson/ball-pivoting) into a
-        single coherent surface that keeps the observed geometry. Geometry-only:
-        no image needed. Install the model package + weights, then fill this in.
+        Feed the recentred TSDF mesh's vertices (object-local frame) to PoinTr,
+        get a dense completed cloud back in the same frame, and Poisson-mesh it
+        into a single coherent surface. Geometry-only (no image). Returns an
+        open3d mesh; raising here -> the engine falls back to the local Poisson.
         """
-        raise NotImplementedError(
-            f"local completion model '{self.completion_model}' not installed")
+        if self.completion_model != "pointr":
+            raise NotImplementedError(
+                f"local completion model '{self.completion_model}' not wired")
+        import numpy as np
+        import open3d as o3d
+
+        from . import pointr_completion
+
+        pts = np.asarray(mesh.vertices)
+        if len(pts) < 32:
+            raise RuntimeError("too few points to complete")
+        dense = pointr_completion.complete_points(pts)
+
+        pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(dense))
+        pcd.estimate_normals(o3d.geometry.KDTreeSearchParamKNN(knn=20))
+        pcd.orient_normals_consistent_tangent_plane(20)
+        m, dens = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=7)
+        m.remove_vertices_by_mask(np.asarray(dens) < np.quantile(dens, 0.05))
+        m = m.crop(pcd.get_axis_aligned_bounding_box())
+        m.compute_vertex_normals()
+        if len(m.triangles) == 0:
+            raise RuntimeError("completion meshing produced no triangles")
+        return m
 
     def _run_gen(self, *, crop_path, coco_class):
         """Run the image-to-3D model on the crop -> open3d unit-cube mesh.
