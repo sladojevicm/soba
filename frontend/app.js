@@ -1,0 +1,399 @@
+// Step 11 — Browser physics + rendering (Phase 11).
+//
+// Three.js renders the assembled scene; Rapier (WASM) simulates it. The design
+// is plan §16. The load-bearing correctness points it calls out:
+//   * mass is set ON THE RIGID-BODY DESC, before createRigidBody (fix P1/D5) —
+//     setAdditionalMass after creation acts on a stale desc and is ignored,
+//     which would silently drop the computed mass.
+//   * hull colliders use the CoACD parts with DENSITY 0, so Rapier never
+//     re-derives mass from hull geometry (a hollow object would come out wrong).
+//   * gravity + ground.y come FROM scene.json (fix Z-J / K4), not hardcoded.
+//   * each object_added SSE event triggers a re-GET of /scene.json and a lookup
+//     by id (fix Z-C); the event carries only the id.
+//   * the camera starts from scene.json camera_pose when present (fix W5).
+
+import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import RAPIER from "@dimforge/rapier3d-compat";
+
+const hud = document.getElementById("hud");
+const log = (msg) => { hud.innerHTML = msg; };
+
+// ---------------------------------------------------------------------------
+// Three.js setup
+// ---------------------------------------------------------------------------
+const canvas = document.getElementById("c");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x15171c);
+
+const camera = new THREE.PerspectiveCamera(
+  55, window.innerWidth / window.innerHeight, 0.05, 200
+);
+camera.position.set(3, 2.4, 3); // default; overridden by camera_pose below
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+
+// Lights: soft hemisphere fill + a shadow-casting key light.
+scene.add(new THREE.HemisphereLight(0xbfd0e6, 0x2b2620, 0.9));
+const key = new THREE.DirectionalLight(0xffffff, 2.2);
+key.position.set(4, 8, 5);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+key.shadow.camera.near = 0.5;
+key.shadow.camera.far = 40;
+key.shadow.camera.left = -10; key.shadow.camera.right = 10;
+key.shadow.camera.top = 10; key.shadow.camera.bottom = -10;
+key.shadow.bias = -0.0004;
+scene.add(key);
+
+window.addEventListener("resize", () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+const gltfLoader = new GLTFLoader();
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+let world = null;                 // RAPIER.World
+const syncMap = new Map();        // rigidBody -> THREE.Object3D
+const bodyMeshes = [];            // selectable THREE meshes (for raycasting)
+const meshToEntry = new Map();    // THREE.Object3D -> scene.json object entry
+const loadedIds = new Set();      // ids already added
+const tempBalls = [];             // {body, mesh, dieAt}
+let sceneCentroid = new THREE.Vector3();
+let centroidN = 0;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+async function getScene() {
+  const r = await fetch("/scene.json", { cache: "no-store" });
+  return r.json();
+}
+
+// Pull a flat Float32Array of world-space vertices out of a loaded GLB (bakes
+// any node transform in, so Rapier's convex hull matches what is rendered).
+function glbVertices(gltf) {
+  const pts = [];
+  gltf.scene.updateMatrixWorld(true);
+  gltf.scene.traverse((o) => {
+    if (o.isMesh && o.geometry) {
+      const pos = o.geometry.attributes.position;
+      const v = new THREE.Vector3();
+      for (let i = 0; i < pos.count; i++) {
+        v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+        pts.push(v.x, v.y, v.z);
+      }
+    }
+  });
+  return new Float32Array(pts);
+}
+
+function enableShadows(obj) {
+  obj.traverse((o) => {
+    if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Object loading (one object_added event)
+// ---------------------------------------------------------------------------
+async function addObject(id, sceneJson) {
+  if (loadedIds.has(id)) return;
+  const entry = (sceneJson.objects || []).find((o) => o.id === id);
+  if (!entry) { console.warn("no scene.json entry for", id); return; }
+  loadedIds.add(id);
+
+  const t = entry.transform;
+  const [tx, ty, tz] = t.translation;
+  const q = t.rotation_quat; // [x,y,z,w]
+
+  // 1. Render mesh (do NOT collapse to one mesh — that strips PBR materials).
+  const gltf = await gltfLoader.loadAsync(`/meshes/${id}.glb`);
+  const obj3d = gltf.scene;
+  enableShadows(obj3d);
+  obj3d.position.set(tx, ty, tz);
+  obj3d.quaternion.set(q[0], q[1], q[2], q[3]);
+  scene.add(obj3d);
+  bodyMeshes.push(obj3d);
+  meshToEntry.set(obj3d, entry);
+
+  // running centroid so OrbitControls looks at the objects
+  sceneCentroid.add(new THREE.Vector3(tx, ty, tz));
+  centroidN += 1;
+  controls.target.copy(sceneCentroid.clone().multiplyScalar(1 / centroidN));
+
+  // 5. Rigid body — mass set ON THE DESC, BEFORE createRigidBody (fix P1/D5).
+  // is_rigid means "non-deforming", not "immovable": every object is dynamic.
+  const phys = entry.physics;
+  const desc = RAPIER.RigidBodyDesc.dynamic()
+    .setTranslation(tx, ty, tz)
+    .setRotation({ x: q[0], y: q[1], z: q[2], w: q[3] })
+    .setAdditionalMass(phys.mass_kg);
+  const body = world.createRigidBody(desc);
+
+  // 6. Colliders. Tiers 2-4: CoACD hulls (density 0). Tier 1: AABB box.
+  const col = entry.collider;
+  if (col.shape === "box") {
+    const [hx, hy, hz] = col.half_extents;
+    const cdesc = RAPIER.ColliderDesc.cuboid(hx, hy, hz)
+      .setDensity(0)
+      .setFriction(phys.friction)
+      .setRestitution(phys.restitution);
+    world.createCollider(cdesc, body);
+  } else {
+    // hull_paths are scene-relative ("hulls/{id}_{i}.glb"); the server remaps
+    // /hulls/{id}_{i}.glb -> objects/{id}/hulls/{id}_{i}.glb.
+    const hullGltfs = await Promise.all(
+      col.hull_paths.map((p) => gltfLoader.loadAsync("/" + p))
+    );
+    for (const hg of hullGltfs) {
+      const verts = glbVertices(hg);
+      const cdesc = RAPIER.ColliderDesc.convexHull(verts);
+      if (!cdesc) { console.warn("degenerate hull for", id); continue; }
+      cdesc.setDensity(0).setFriction(phys.friction).setRestitution(phys.restitution);
+      world.createCollider(cdesc, body);
+    }
+  }
+
+  syncMap.set(body, obj3d);
+  log(statusLine());
+}
+
+function statusLine() {
+  return `<b>vid2sim viewer</b>\n` +
+    `objects: ${loadedIds.size}\n` +
+    `<span class="key">click</span> select · ` +
+    `<span class="key">drag</span> push · ` +
+    `<span class="key">space</span> drop ball\n` +
+    `(sparse scene: only well-observed "tsdf" objects exist — generative ones\n` +
+    ` are deferred until a GPU is connected)`;
+}
+
+// ---------------------------------------------------------------------------
+// Boot
+// ---------------------------------------------------------------------------
+async function boot() {
+  log("initialising physics…");
+  await RAPIER.init();
+
+  const sceneJson = await getScene();
+
+  // Camera from capture pose when present (fix W5); OrbitControls then recenters
+  // on the objects so the start view always frames the scene.
+  const cp = sceneJson.camera_pose;
+  if (cp && cp.translation) {
+    camera.position.set(cp.translation[0], cp.translation[1], cp.translation[2]);
+  }
+
+  // Gravity FROM scene.json (fix Z-J), not hardcoded. Assert the up axis.
+  const g = (sceneJson.world && sceneJson.world.gravity) || [0, -9.81, 0];
+  if (sceneJson.world && sceneJson.world.up_axis && sceneJson.world.up_axis !== "y") {
+    console.warn("scene up_axis is not 'y'; renderer assumes Y-up");
+  }
+  world = new RAPIER.World({ x: g[0], y: g[1], z: g[2] });
+  world.timestep = 1 / 60; // fixed dt (plan §16 step 5)
+
+  // Ground from scene.json ground.y (fix K4). cuboid() takes HALF-extents (Z6),
+  // so cuboid(50,0.1,50) is 100 x 0.2 x 100 m; centre it so the TOP face sits at
+  // ground.y -> centre.y = ground.y - 0.1.
+  const ground = sceneJson.ground || { y: 0, material: {} };
+  const gy = ground.y || 0;
+  const gmat = ground.material || { friction: 0.85, restitution: 0.1 };
+  const groundBody = world.createRigidBody(
+    RAPIER.RigidBodyDesc.fixed().setTranslation(0, gy - 0.1, 0)
+  );
+  world.createCollider(
+    RAPIER.ColliderDesc.cuboid(50, 0.1, 50)
+      .setFriction(gmat.friction ?? 0.85)
+      .setRestitution(gmat.restitution ?? 0.1),
+    groundBody
+  );
+  const groundMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(100, 100),
+    new THREE.MeshStandardMaterial({ color: 0x3a3f47, roughness: 0.95, metalness: 0.0 })
+  );
+  groundMesh.rotation.x = -Math.PI / 2;
+  groundMesh.position.y = gy;
+  groundMesh.receiveShadow = true;
+  scene.add(groundMesh);
+  scene.add(new THREE.GridHelper(100, 100, 0x2a2e35, 0x23262c));
+  scene.getObjectByProperty("type", "GridHelper").position.y = gy + 0.001;
+
+  // Any objects already in scene.json at startup get added immediately; the SSE
+  // stream then (re-)announces them and any that arrive later.
+  for (const o of sceneJson.objects || []) await addObject(o.id, sceneJson);
+
+  // SSE: on each object_added, re-GET scene.json and look up by id (fix Z-C).
+  const es = new EventSource("/events");
+  es.addEventListener("object_added", async (ev) => {
+    const id = JSON.parse(ev.data).id;
+    const fresh = await getScene();
+    await addObject(id, fresh);
+  });
+  es.onerror = () => { /* server closed / reconnecting — harmless for a replay */ };
+
+  log(statusLine());
+  setupInteraction();
+  animate();
+}
+
+// ---------------------------------------------------------------------------
+// Interaction: click-select, drag-push, spacebar ball
+// ---------------------------------------------------------------------------
+const raycaster = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+let selected = null;        // { body, mesh, savedEmissive }
+let dragging = false;
+const dragPlane = new THREE.Plane();
+const dragPoint = new THREE.Vector3();
+
+function bodyFor(object3d) {
+  for (const [b, m] of syncMap) if (m === object3d) return b;
+  return null;
+}
+
+function rootOf(hitObject) {
+  let o = hitObject;
+  while (o && !meshToEntry.has(o)) o = o.parent;
+  return o;
+}
+
+function setNdc(e) {
+  ndc.x = (e.clientX / window.innerWidth) * 2 - 1;
+  ndc.y = -(e.clientY / window.innerHeight) * 2 + 1;
+}
+
+function highlight(object3d, on) {
+  object3d.traverse((o) => {
+    if (o.isMesh && o.material) {
+      if (on) {
+        o.material = o.material.clone();
+        o.material.emissive = new THREE.Color(0xff7a18);
+        o.material.emissiveIntensity = 0.6;
+      } else if (o.material.emissive) {
+        o.material.emissive = new THREE.Color(0x000000);
+      }
+    }
+  });
+}
+
+function setupInteraction() {
+  const dom = renderer.domElement;
+
+  dom.addEventListener("pointerdown", (e) => {
+    setNdc(e);
+    raycaster.setFromCamera(ndc, camera);
+    const hits = raycaster.intersectObjects(bodyMeshes, true);
+    if (selected) { highlight(selected.mesh, false); selected = null; }
+    if (hits.length) {
+      const root = rootOf(hits[0].object);
+      const body = root && bodyFor(root);
+      if (body) {
+        selected = { body, mesh: root };
+        highlight(root, true);
+        // set up a drag plane through the hit point, facing the camera
+        dragPlane.setFromNormalAndCoplanarPoint(
+          camera.getWorldDirection(new THREE.Vector3()).negate(),
+          hits[0].point
+        );
+        dragging = true;
+        controls.enabled = false;
+      }
+    }
+  });
+
+  dom.addEventListener("pointermove", (e) => {
+    if (!dragging || !selected) return;
+    setNdc(e);
+    raycaster.setFromCamera(ndc, camera);
+    if (raycaster.ray.intersectPlane(dragPlane, dragPoint)) {
+      // velocity toward the cursor (a soft impulse, not a teleport)
+      const p = selected.body.translation();
+      const v = {
+        x: (dragPoint.x - p.x) * 6,
+        y: (dragPoint.y - p.y) * 6,
+        z: (dragPoint.z - p.z) * 6,
+      };
+      selected.body.setLinvel(v, true);
+      selected.body.wakeUp();
+    }
+  });
+
+  const endDrag = () => { dragging = false; controls.enabled = true; };
+  dom.addEventListener("pointerup", endDrag);
+  dom.addEventListener("pointerleave", endDrag);
+
+  window.addEventListener("keydown", (e) => {
+    if (e.code === "Space") { e.preventDefault(); spawnBall(); }
+  });
+}
+
+function spawnBall() {
+  if (!world) return;
+  const dir = camera.getWorldDirection(new THREE.Vector3());
+  const pos = camera.position.clone().add(dir.multiplyScalar(2));
+  const r = 0.1;
+
+  const body = world.createRigidBody(
+    RAPIER.RigidBodyDesc.dynamic().setTranslation(pos.x, pos.y, pos.z)
+      .setAdditionalMass(0.2)
+  );
+  world.createCollider(
+    RAPIER.ColliderDesc.ball(r).setDensity(0).setRestitution(0.7).setFriction(0.5),
+    body
+  );
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(r, 24, 16),
+    new THREE.MeshStandardMaterial({ color: 0xff5a3c, roughness: 0.5 })
+  );
+  mesh.castShadow = true;
+  scene.add(mesh);
+  syncMap.set(body, mesh);
+  tempBalls.push({ body, mesh, dieAt: performance.now() + 10000 });
+}
+
+// ---------------------------------------------------------------------------
+// Render loop (60 FPS)
+// ---------------------------------------------------------------------------
+function animate() {
+  requestAnimationFrame(animate);
+  if (world) {
+    world.step();
+    for (const [body, mesh] of syncMap) {
+      const p = body.translation();
+      const r = body.rotation();
+      mesh.position.set(p.x, p.y, p.z);
+      mesh.quaternion.set(r.x, r.y, r.z, r.w);
+    }
+    // expire spawned balls (10 s TTL)
+    const now = performance.now();
+    for (let i = tempBalls.length - 1; i >= 0; i--) {
+      if (now >= tempBalls[i].dieAt) {
+        const { body, mesh } = tempBalls[i];
+        syncMap.delete(body);
+        scene.remove(mesh);
+        world.removeRigidBody(body);
+        tempBalls.splice(i, 1);
+      }
+    }
+  }
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+boot().catch((err) => { console.error(err); log("error: " + err.message); });

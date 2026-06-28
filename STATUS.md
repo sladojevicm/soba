@@ -57,7 +57,11 @@ The user is **non-expert on the internals** — explain in plain language and be
 ## How to run
 ```bash
 cd ~/projects/vid2sim/vid2sim-v2
-PYTHONPATH=src ~/projects/vid2sim/venv/bin/python -m pytest -q      # 56 tests, all pass
+PYTHONPATH=src ~/projects/vid2sim/venv/bin/python -m pytest -q      # 102 tests, all pass
+
+# SEE the scene (Phase 10+11): local server + browser viewer, no GPU:
+PYTHONPATH=src ~/projects/vid2sim/venv/bin/python -m server         # serves out/scene_office_3
+#   then open http://127.0.0.1:8000/  (--scene DIR for another scene, --port N)
 
 # Build a Replica bundle from the rendered room_0 sequence (GT masks, no YOLO/SAM2):
 PYTHONPATH=src ~/projects/vid2sim/venv/bin/python -c "
@@ -86,14 +90,69 @@ ReplicaReader('$HOME/projects/vid2sim/data/replica/extracted/room_0/imap/00').to
 | 8 Physics (Claude) | `scene/vlm.py` | ⚠️ **interface + lookup fallback built** (`physics_origin:"lookup"`); live Claude `output_config.format` call deferred (needs claude-api skill + key) |
 | 9 Convex decomp (CoACD) | `scene/decomp.py` | ✅ **built** (CoACD 1.0.11 installed; single-hull fallback) |
 | 10 Scene assembly | `scene/assembler.py` (+ `lookup`/`mass`/`ground`) | ✅ **built + validated on office_3** → schema-valid `scene.json` |
-| 11 Browser (Three.js+Rapier) | `frontend/` | ❌ not built |
+| 10 Local server | `src/server.py` | ✅ **built + tested** (Starlette; routes+SSE; 8 tests) |
+| 11 Browser (Three.js+Rapier) | `frontend/` | ✅ **built + rendered** — office_3 couch/table/chair visible, physics steps (headless-Chrome verified) |
 
 **One-line summary:** the front of the pipeline works on real data — **Step 1 → Step 3
 → Step 4A → Step 4B (TSDF) → Step 5 (gate)** — i.e. we can take footage, produce per
 object the real points seen + a fused mesh, and decide tsdf-vs-generative. Step 2
 (SAM2) is built but unproven. Everything from Step 6 (generative/RunPod) on is unbuilt.
 
-## What this session did (2026-06-27, Phase 9 / scene assembly)
+## What this session did (2026-06-28, Phase 10 + 11 / server + browser — SEE the scene)
+Built the **local server** and the **browser viewer**, then verified the whole
+chain in a headless Chrome — **office_3's couch, dining table and chair render
+in Three.js and step in Rapier physics**, no JS errors. This is the payoff: the
+assembled scene is now visible and interactive, fully local, no GPU.
+- **Phase 10 — `src/server.py`** (plan §15). Built on **Starlette**, not FastAPI:
+  FastAPI itself wasn't installed but Starlette + uvicorn + sse-starlette + httpx
+  + httpx-sse were — clearly the pre-staged toolchain (httpx-sse is an SSE *test*
+  client). Same routes, fewer deps. Routes: `GET /scene.json` (partial-safe —
+  empty-but-valid if no file), `GET /meshes/{id}.glb` → `objects/{id}/mesh.glb`,
+  `GET /hulls/{id}_{i}.glb` → `objects/{id}/hulls/{id}_{i}.glb` (hull index split
+  off the LAST `_N`), `GET /events` SSE, `/` + static `/app.js` + `/vendor/...`.
+  Path-traversal guarded (id regex; 400/404 on junk). `create_app(scene_dir)`
+  factory + `python -m server [--scene DIR] [--port N]`. Scene dir via
+  `VID2SIM_SCENE_DIR` env or `--scene` (default `out/scene_office_3`).
+  - **SSE is a REPLAY, not a live feed:** the scene is already fully assembled on
+    disk (Phase 9 ran offline), so `/events` emits one `object_added` per object
+    in the current scene.json (0.4 s apart), then heartbeats. It drives the
+    browser through the real progressive-load + re-GET path (Z-C); it is not a
+    live stream from a running assembler (there's nothing assembling live here).
+- **Phase 11 — `frontend/`** (plan §16): `index.html` (import map, no bundler) +
+  `app.js` + **vendored** `vendor/three` (0.160 ESM + GLTFLoader/OrbitControls/
+  BufferGeometryUtils) and `vendor/rapier/rapier.es.js` (rapier3d-**compat** 0.13,
+  WASM inlined as base64 → no separate fetch, no build step). All the §16
+  load-bearing fixes are implemented and present in the code:
+  - **mass on the rigid-body DESC before `createRigidBody`** (`setAdditionalMass`)
+    — the P1/D5 fix (original project's computed-but-never-applied-mass bug).
+  - **hull colliders = CoACD parts with density 0** so Rapier never re-derives
+    mass; Tier-1 path also handled (`collider.shape:"box"` → `cuboid(hx,hy,hz)`).
+  - **gravity + ground.y read FROM scene.json** (Z-J / K4); ground cuboid uses
+    HALF-extents with centre.y = ground.y − 0.1 (Z6); up_axis asserted.
+  - **re-GET /scene.json on each `object_added`**, look up by id (Z-C).
+  - camera from `camera_pose` when present (W5); OrbitControls recenters on the
+    object centroid so the start view always frames the scene.
+  - interactions: click-select (orange emissive), drag-push (velocity to cursor),
+    spacebar rubber ball (10 s TTL). Hull verts baked through `matrixWorld` so the
+    collider matches the render mesh; mesh+hulls share the assembler's recentred
+    object frame (verified: assembler recenters the mesh BEFORE decomposing).
+- **Verification (honest):** 8 new server tests (route remaps, byte-equality vs
+  on-disk, 404/400, traversal, partial-safe empty scene, **real-server SSE replay
+  via a threaded uvicorn** — TestClient/ASGI both deadlock on an infinite SSE
+  stream, so the test runs a real port). **102 tests pass** (was 94). Then drove
+  the live page with **headless Chrome (Puppeteer + swiftshader, software WebGL)**:
+  all 3 objects load, **zero page errors**, WebGL context active, physics stepping
+  — screenshot shows the recognizable couch/table/chair on a shadowed floor. The
+  software-WebGL "context lost→restored" warning is a swiftshader headless
+  artefact, not a code bug. The meshes are the partial-view, non-watertight TSDF
+  shells (open backs), exactly as upstream caveats say — they render fine.
+- **Sparse-scene constraint holds:** office_3 shows **3 of 14** objects; the
+  generative ones are omitted until a GPU exists. The HUD says so on screen.
+- **Run:** `PYTHONPATH=src ~/projects/vid2sim/venv/bin/python -m server` then open
+  `http://127.0.0.1:8000/`. Deps already in the venv; recorded as the `serve`
+  extra in `pyproject.toml`.
+
+## What an earlier session did (2026-06-27, Phase 9 / scene assembly)
 Built **Phase 9 (Step 8-10): `scene/{lookup,mass,ground,decomp,exporter_gltf,vlm,
 assembler}.py`** + `scripts/run_assemble.py`, validated end-to-end on **office_3**.
 Runs the proper Z-D order: gate → TSDF only for survivors → assemble. Output is a
@@ -248,38 +307,54 @@ path on real ground-truth data** (the thing TUM can't test, because TUM has no l
   **per-object observed cloud** (Step 4A) on real Replica frames with GT masks.
 - **Logic-tested with synthetic/fake inputs only:** schema, bundle I/O, TUM/Replica parsing
   detail, pose-composition math, and **all of SAM2's orchestration** (fake backend).
-- **Never run / doesn't exist:** real **SAM2** model; **YOLO** detection; MASt3R / ORB-SLAM3
-  (stubs); everything Step 4B+ (TSDF, gate, generative, ICP, physics, assembler, browser).
+- **Validated locally end-to-end (this session):** assembled office_3 served by
+  `src/server.py` and **rendered + simulated in a real browser engine** (headless
+  Chrome) — 3 objects load, physics steps, no JS errors. Software WebGL, not a GPU.
+- **Never run / doesn't exist:** real **SAM2** model; **YOLO** detection; MASt3R /
+  ORB-SLAM3 (stubs); the **generative path** (Steps 6–8, RunPod/GPU). The browser
+  exists and runs; its physics is functional but not tuned/stress-tested.
 
 ## Agreed next steps (for the next instance)
-Phases 1–6 + 9 (incl. Step 7b mass repair) are built. The back end now produces a
-schema-valid `scene.json` + `.glb` meshes + CoACD hull colliders for the tsdf
-objects. **Recommended next: Phase 10 (local server) → Phase 11 (browser).**
-- **Phase 10 — `src/server.py`** (plan §15 LOCAL SERVER): FastAPI serving
-  `GET /scene.json`, `GET /meshes/{id}.glb` (remap to `objects/{id}/mesh.glb`),
-  `GET /hulls/{id}_{i}.glb` (remap to `objects/{id}/hulls/...`), `GET /events` SSE.
-  Fully local, no GPU. Point it at `out/scene_office_3/`.
-- **Phase 11 — `frontend/`** (plan §16): Three.js render + Rapier physics. MUST
-  set mass ON THE RIGID-BODY DESC before createRigidBody (fixes P1/D5), load the
-  CoACD hulls as colliders, read `ground.y`/`world.gravity` from scene.json
-  (K4/Z-J), re-GET scene.json per `object_added` SSE (Z-C). This is where you
-  finally SEE office_3's couch/table/chair as an interactive scene.
+Phases 1–6 + 9 + **10 + 11** are built. The pipeline now runs end-to-end **locally
+with no GPU**: assemble → serve → render+simulate in the browser. office_3's
+couch/table/chair are visible and interactive.
+- **The viewer works now** — `python -m server`, open `http://127.0.0.1:8000/`.
+  See "What this session did (Phase 10+11)" above and `frontend/README.md`.
 - **Remember the sparse-scene constraint** (top of this file): only tsdf objects
   exist; generative ones are omitted until a GPU is connected. office_3 @ Tier 4
-  shows 3 of 14 objects — that's expected, not a bug.
-- **A ready test scene exists:** `out/scene_office_3/` (run
-  `scripts/run_assemble.py --bundle .../bundles/office_3 --tier 4 --out ...` to
-  regenerate, or assemble another scene). Open3D CANNOT read its own .glb back
-  (writes fine for three.js); don't QA glbs in open3d.
-- Optional hardening: deterministic/robust mass volume (Step 7b is approximate);
-  real SAM2 run; the live Claude physics call (vlm.py backend + key).
+  shows 3 of 14 objects — that's expected, not a bug (the HUD says so on screen).
+- **Honest residual caveats / future work:**
+  - SSE is a *replay* of a finished on-disk scene, not a live assembler feed. To
+    make it live, the assembler (Phase 9) would write objects incrementally and
+    the server would watch the dir / receive emits instead of replaying.
+  - Physics verified to *run* (objects load, step, no errors) but not tuned —
+    starting heights are the observed heights, so objects settle onto the floor
+    on first frames; the §16 INERTIA CAVEAT (density-0 + scalar mass can give a
+    degenerate inertia tensor → odd spin) was NOT hit in the static settle test
+    but isn't stress-tested. If spin looks wrong, switch to
+    `setAdditionalMassProperties` (a bbox-box inertia approx).
+  - Verified with **software WebGL** (swiftshader, headless). Real GPU browsers
+    will look better; the context-lost warning is swiftshader-only.
+  - Meshes are partial-view non-watertight TSDF shells (open backs) — render
+    fine, but colliders are only as good as those shells.
+- **Remaining build phases:** 12 (CLI + tier wiring), 13 (integration), 14
+  (ORB-SLAM3, optional), 15 (live OAK capture, needs hardware), plus the deferred
+  generative path (Steps 6–8, RunPod/GPU). Optional hardening: deterministic mass
+  volume (Step 7b approximate); real SAM2; live Claude physics call (vlm.py + key).
+- **A ready test scene exists:** `out/scene_office_3/` (regenerate with
+  `scripts/run_assemble.py --bundle .../bundles/office_3 --tier 4 --out ...`).
+  Open3D CANNOT read its own .glb back (writes fine for three.js); don't QA in o3d.
 
 ## Git state
-- Branch **`fix/phase3-pose-and-eval`**. Pushed: Phase 1–3 fixes (`2b56f92`),
-  Phase 4 SAM2 + ReplicaReader (`e122c37`), Phase 5 TSDF + Z-T (`14083c7`).
-- **Uncommitted** on that branch: **Phase 6 (`src/reconstruction/confidence.py` +
-  `tests/reconstruction/test_confidence.py` + `scripts/run_gate.py`)**, the
-  `reconstruction/__init__.py` exports, and this `STATUS.md`. `master` is clean.
+- Branch **`fix/phase3-pose-and-eval`**. Pushed: Phase 1–3 (`2b56f92`), Phase 4
+  (`e122c37`), Phase 5 (`14083c7`), Phase 6 (`956ec7a`), 8-scene tooling
+  (`eaf71ab`), gate recalibration (`c396850`), generative-deferral note
+  (`fe6d4d9`), Phase 9 assembly (`15408b7`), mass fix (`0f6d7be`), STATUS refresh
+  (`fb31168`).
+- **This session (Phase 10+11) — to be committed:** `src/server.py`,
+  `tests/test_server.py`, `frontend/` (index.html, app.js, README.md, vendored
+  `vendor/three` + `vendor/rapier`), `pyproject.toml` (serve/httpx extras), this
+  `STATUS.md`. `master` stays clean.
 
 ## Carried-forward gaps & gotchas
 1. **Detection gap (unchanged):** the pipeline assumes per-frame `objects.json`+masks. TUM
