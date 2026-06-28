@@ -2,7 +2,64 @@
 
 _Last updated: 2026-06-28. This is a working handoff so a fresh session can resume
 without re-deriving everything. The authoritative design is `PLAN_FINAL_FINAL.txt`
-(currently at `~/projects/vid2sim/PLAN_FINAL_FINAL.txt`, version 13)._
+(currently at `~/projects/vid2sim/PLAN_FINAL_FINAL.txt`, version 14)._
+
+## ⬆️ TOP PRIORITY FOR THE NEXT INSTANCE (user-directed 2026-06-28)
+The user wants the FRONT of the pipeline (input → observed cloud → TSDF → gate)
+audited and maximised BEFORE judging any completion model. Garbage-in is partly
+on us: office_3 currently uses only **100 of the scene's 2000 frames (stride 20)**
+— a disk/streaming-budget choice, NOT quality. Do this, in order:
+
+1. **Rebuild office_3 with ALL 2000 frames (stride 1).** Re-stream via
+   `scripts/build_replica_bundles.py --stride 1 --max_frames 2000` (only office_3),
+   then reassemble. Denser footage → denser clouds → far more complete TSDF (thin
+   legs survive the weight threshold). Est. **30–60 min** (~15–30 re-stream, 5–10
+   denser TSDF/gate, ~6 CoACD). This is the single biggest quality lever.
+2. **Per-object audit + data-loss check.** For EACH of the 14 objects: how many
+   frames see it, point count at each stage (raw backproject → masked → voxel-
+   downsampled → TSDF), and where points are lost. Suspects to check:
+   - `observed_cloud`: depth gate `[400, 8000] mm`, voxel downsample `0.005 m`
+     (the gate cloud) — is 5 mm too coarse? is 0.4 m near-clip dropping close points?
+   - `tsdf.extract_triangle_mesh()` uses the Open3D **default weight threshold
+     (~3 frames)** with NO explicit arg — drops voxels seen <3× (kills legs). Try
+     lowering it; with 2000 frames more will clear it anyway.
+3. **Audit the whole front-end so it WORKS end-to-end** on the dense rebuild:
+   confirm each object's cloud dims are physically right (couch was validated at
+   2.34×0.90×1.06 m on the 100-frame build — re-validate on 2000), no silent drops,
+   gate metrics recomputed. NOTE for Replica the inputs are GT (masks/poses/depth)
+   so there is NO segmentation/pose/sensor error — the only quality lever is
+   frames + the weight threshold + voxel sizes. The hard limit is COVERAGE
+   (≤123°/object, center-of-room scan) — no handling fixes the unseen back.
+4. THEN re-test completion on the DENSE clouds (see completion section below).
+
+## COMPLETION-MODEL STATE (where we are, what was wrong)
+The user wants **point/mesh completion** (keep real geometry, fill gaps); image-to-3D
+is the LAST resort. PoinTr/AdaPoinTr (PCN ckpt) gave **blobby** results — but the
+PoinTr paper shows clean completions, so it was a **usage error**, root cause found:
+- **BUG (fixed):** used the **PCN checkpoint** with **ShapeNet-55-style normalisation**
+  (centroid+unit-radius). Verified in the repo: `ShapeNet55Dataset.pc_norm` normalises
+  that way, `PCNDataset` does NOT. Added `pointr_sn55` (ShapeNet-55 model, matched
+  convention, 55 categories) + fixed sampling (was `randint` → duplicates; now
+  without-replacement). Checkpoints downloaded to `~/projects/vid2sim/PoinTr/pretrained/`.
+- **OPEN (under test when session ended):** a point-cloud diagnostic
+  (`scratchpad/diag.py`) renders the **raw completion point clouds** (input vs PCN vs
+  ShapeNet-55) for couch+table to isolate whether the blob is the COMPLETION or my
+  **Poisson MESHING** of the points (PoinTr outputs a CLEAN point cloud; meshing a
+  spread cloud blobs). Strong suspicion: meshing is a big culprit. NEXT: judge the
+  completion on the POINT CLOUD first (like the paper), then mesh carefully.
+- Infra is DONE + model-agnostic (`LocalGpuEngine`, `pointr_completion.py`): swapping
+  the model is one config line. PCA yaw-align (`VID2SIM_PCA_ALIGN`) + colour transfer
+  are in. Deep-research on SOTA completion was launched but FAILED at synthesis
+  (partial agent transcripts in the workflow dir if useful).
+
+## GPU / CLOUD (corrected facts)
+- **GPU NOW WORKS**: RTX 4060 8 GB, torch 2.6+cu124, `make_engine()` auto-selects
+  `LocalGpuEngine`. The driver was the blocker (user fixed it: dkms + reboot).
+- **Project is CLOUD-GPU-first by design** (RunPodEngine is make_engine's 1st choice;
+  config targets Hunyuan3D for top tiers). The 8 GB only limited LOCAL TESTING, never
+  the design. Compute is NOT a constraint — target the best models on cloud.
+- PoinTr's blob was MODEL/USAGE, not VRAM (it used 234 MB). Unlimited GPU unlocks the
+  strong models, doesn't fix point-completion misuse.
 
 ## ⚠️ CURRENT OPERATING CONSTRAINT — generative path deferred (no GPU)
 Decided 2026-06-27: the generative path (Step 6 / Phases 7–8, RunPod) is **on hold**
