@@ -60,8 +60,10 @@ cd ~/projects/vid2sim/vid2sim-v2
 PYTHONPATH=src ~/projects/vid2sim/venv/bin/python -m pytest -q      # 102 tests, all pass
 
 # SEE the scene (Phase 10+11): local server + browser viewer, no GPU:
-PYTHONPATH=src ~/projects/vid2sim/venv/bin/python -m server         # serves out/scene_office_3
+~/projects/vid2sim/venv/bin/python scripts/serve.py                # serves out/scene_office_3
 #   then open http://127.0.0.1:8000/  (--scene DIR for another scene, --port N)
+#   (serve.py adds src/ to the path itself — no PYTHONPATH needed. The
+#    `PYTHONPATH=src python -m server` form also works but only as ONE shell line.)
 
 # Build a Replica bundle from the rendered room_0 sequence (GT masks, no YOLO/SAM2):
 PYTHONPATH=src ~/projects/vid2sim/venv/bin/python -c "

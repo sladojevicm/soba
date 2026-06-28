@@ -8,10 +8,14 @@ build step / bundler: `index.html` uses an **import map** and the libraries are
 
 ```bash
 cd ~/projects/vid2sim/vid2sim-v2
-PYTHONPATH=src ~/projects/vid2sim/venv/bin/python -m server          # serves out/scene_office_3
+~/projects/vid2sim/venv/bin/python scripts/serve.py        # serves out/scene_office_3
 # then open http://127.0.0.1:8000/
-# point at another scene:  python -m server --scene out/scene_xxx
+# another scene / port:  python scripts/serve.py --scene out/scene_xxx --port 8001
 ```
+
+`scripts/serve.py` puts `src/` on the path itself, so no `PYTHONPATH` is needed.
+(The `PYTHONPATH=src python -m server` form also works, but only as a single
+shell line — if the assignment lands on its own line it's silently dropped.)
 
 ## Controls
 - **click** — select an object (orange highlight)
