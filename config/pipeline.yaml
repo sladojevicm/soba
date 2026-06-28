@@ -111,7 +111,8 @@ tiers:
     # nothing clears them and the survivors route to "completion" (correct: the
     # best object we have is ~0.75 completeness / 121deg, i.e. partial, not "keep").
     gate: { angular_deg: 110, completeness: 0.45, keep_angular_deg: 160, keep_completeness: 0.85 }
-    generative_model: triposg
+    generative_model: triposg      # BOTTOM band: image-to-3D (crop -> object)
+    completion_model: pointr        # MIDDLE band: learned geometry shape-completion (GPU)
     physics: claude
     collider: hulls
     coacd: { threshold: 0.07, max_parts: 8 }
@@ -121,7 +122,8 @@ tiers:
     tsdf: true
     voxel_size_m: 0.003
     gate: { angular_deg: 100, completeness: 0.42, keep_angular_deg: 155, keep_completeness: 0.82 }  # complete bar recalibrated (was 140/0.60); keep bar provisional
-    generative_model: hunyuan3d
+    generative_model: hunyuan3d    # BOTTOM band: image-to-3D (crop -> object)
+    completion_model: pointr        # MIDDLE band: learned geometry shape-completion (GPU)
     physics: claude
     collider: hulls
     coacd: { threshold: 0.05, max_parts: 16 }
@@ -131,7 +133,8 @@ tiers:
     tsdf: true
     voxel_size_m: 0.002
     gate: { angular_deg: 90, completeness: 0.38, keep_angular_deg: 150, keep_completeness: 0.80 }  # complete bar recalibrated (was 130/0.55); keep bar provisional
-    generative_model: hunyuan3d
+    generative_model: hunyuan3d    # BOTTOM band: image-to-3D (crop -> object)
+    completion_model: pointr        # MIDDLE band: learned geometry shape-completion (GPU)
     physics: claude
     collider: hulls
     coacd: { threshold: 0.03, max_parts: 32 }

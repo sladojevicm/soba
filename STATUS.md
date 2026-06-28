@@ -112,13 +112,26 @@ generative GPU work drops in cleanly later, and built the pluggable engine seam.
   `gate_object` carry the keep bars; `FUSABLE=(tsdf,completion)`.
 - **Pluggable engine (`reconstruction/generative.py`, NEW)** — one interface for
   the two bands that need invented geometry: `complete(mesh,cloud,crop,class)`
-  (mid) and `regenerate(cloud,crop,class)->RegenResult` (bottom). **LocalEngine**
-  (default, no GPU): complete = the Poisson repair we already trust; regenerate =
-  None (bottom band dropped — today's behaviour). **RunPodEngine**: transport
-  (POST /v2/{endpoint}/runsync, Bearer key) is wired; the two endpoint-contract
-  seams `_build_input` / `_decode_mesh` raise until the API is provided. `make_
-  engine()` returns RunPod when `RUNPOD_API_KEY`+`RUNPOD_ENDPOINT_ID` are set,
-  else Local — so the GPU path is pure config. **Awaiting: the RunPod API.**
+  (mid) and `regenerate(cloud,crop,class)->RegenResult` (bottom). **Decision
+  2026-06-28: the mid band uses a LEARNED, geometry-conditioned shape-completion
+  model (PoinTr-family, GPU)**, NOT image-gen — so there are now **two GPU models
+  / two RunPod endpoints**: completion (`pointr`, fed the partial scan) and
+  generation (`triposg`/`hunyuan3d`, fed the crop). **LocalEngine** (default, no
+  GPU): complete = Poisson repair (the no-GPU fallback for the mid band);
+  regenerate = None (bottom dropped). **RunPodEngine**: transport (POST
+  /v2/{endpoint}/runsync, Bearer key) wired; per-band endpoints; the contract
+  seams `_build_input`/`_decode_mesh` raise until the API is provided; an absent
+  endpoint → that band falls back (completion→Poisson, generative→drop). `make_
+  engine()` reads `RUNPOD_API_KEY` + `RUNPOD_GEN_ENDPOINT_ID` (alias
+  `RUNPOD_ENDPOINT_ID`) and/or `RUNPOD_COMPLETION_ENDPOINT_ID`. **Awaiting the
+  RunPod API.** `pipeline.yaml` tiers 2-4 carry `completion_model: pointr` +
+  `generative_model`.
+- **PLAN_FINAL_FINAL updated to v14 (Z-W/Z-X)** — the gate section rewritten from
+  binary to three-way (the old "WHY BINARY" objection is *resolved*: each band
+  emits ONE coherent mesh, no naive stitch), Step 6 split into completion-model +
+  generation-model, overview/TOC/run-order/folder/removed-features/limitations
+  all reconciled. Quadruple-checked: grep-swept for lingering "binary"/two-way
+  contradictions; remaining "binary" mentions are all historical/explanatory.
 - **Assembler is strategy-aware**: `ObjectInput.strategy` drives the mesh
   finalize (completion → `engine.complete`, Poisson fallback; tsdf/generative →
   light repair) and `source.*` (generative → real ICP provenance; tsdf/completion

@@ -7,8 +7,9 @@ the camera saw it (both metrics below):
                     light Step-7b repair). The top "keep" band.
   * "completion"  — seen partially: keep the real TSDF geometry but FILL the
                     missing parts (the back, an unseen side). The middle band —
-                    runs TSDF then a completion engine (Poisson locally; an
-                    image+geometry generative model when a GPU is configured).
+                    runs TSDF then a completion engine: a learned, GEOMETRY-
+                    conditioned shape-completion model (PoinTr-family) on GPU,
+                    with the local Poisson repair as the no-GPU fallback.
   * "generative"  — seen too little to anchor anything: REGENERATE the whole
                     object from its crop and scale it to the sparse cloud. The
                     bottom band; no TSDF.

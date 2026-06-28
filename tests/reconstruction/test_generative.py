@@ -19,11 +19,31 @@ def test_make_engine_defaults_to_local(monkeypatch):
 
 
 def test_make_engine_picks_runpod_when_configured(monkeypatch):
+    monkeypatch.delenv("RUNPOD_GEN_ENDPOINT_ID", raising=False)
+    monkeypatch.delenv("RUNPOD_COMPLETION_ENDPOINT_ID", raising=False)
     monkeypatch.setenv("RUNPOD_API_KEY", "k")
-    monkeypatch.setenv("RUNPOD_ENDPOINT_ID", "ep")
+    monkeypatch.setenv("RUNPOD_ENDPOINT_ID", "gen")  # back-compat alias for gen
     eng = generative.make_engine()
     assert isinstance(eng, generative.RunPodEngine)
-    assert eng.endpoint_id == "ep" and eng.api_key == "k"
+    assert eng.gen_endpoint == "gen" and eng.api_key == "k"
+
+
+def test_make_engine_reads_both_endpoints(monkeypatch):
+    monkeypatch.setenv("RUNPOD_API_KEY", "k")
+    monkeypatch.delenv("RUNPOD_ENDPOINT_ID", raising=False)
+    monkeypatch.setenv("RUNPOD_GEN_ENDPOINT_ID", "gen")
+    monkeypatch.setenv("RUNPOD_COMPLETION_ENDPOINT_ID", "comp")
+    eng = generative.make_engine()
+    assert eng.gen_endpoint == "gen" and eng.completion_endpoint == "comp"
+
+
+def test_runpod_returns_none_when_endpoint_unset():
+    # completion with no completion endpoint -> None (caller falls back to Poisson)
+    eng = generative.RunPodEngine("k", gen_endpoint="gen")
+    assert eng.complete(mesh=None, cloud=None, crop_path=None, coco_class="chair") is None
+    # regenerate with no gen endpoint -> None (object dropped)
+    eng2 = generative.RunPodEngine("k", completion_endpoint="comp")
+    assert eng2.regenerate(cloud=None, crop_path=None, coco_class="chair") is None
 
 
 def test_local_engine_regenerate_returns_none():
@@ -47,9 +67,10 @@ def test_local_engine_complete_closes_an_open_shell():
 
 
 def test_runpod_seams_raise_until_contract_provided():
-    eng = generative.RunPodEngine("k", "ep")
+    eng = generative.RunPodEngine("k", gen_endpoint="gen", completion_endpoint="comp")
     with pytest.raises(NotImplementedError):
-        eng._build_input(mode="complete", crop_path=None, coco_class="chair", cloud=None)
+        eng._build_input(mode="complete", model="pointr", crop_path=None,
+                         coco_class="chair", cloud=None, mesh=None)
     with pytest.raises(NotImplementedError):
         eng._decode_mesh({})
 

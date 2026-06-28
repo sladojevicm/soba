@@ -77,12 +77,19 @@ class LocalEngine(Engine):
 class RunPodEngine(Engine):
     """RunPod serverless backend (TripoSG / Hunyuan3D).
 
+    TWO models / TWO endpoints (the bands need different inputs):
+      * completion_endpoint — the MIDDLE band's learned shape-completion model
+        (PoinTr-family). GEOMETRY-conditioned: it is fed the PARTIAL scan (mesh /
+        point cloud) and extends it; it keeps the real shape and invents less.
+      * gen_endpoint — the BOTTOM band's image-to-3D model (TripoSG / Hunyuan3D).
+        IMAGE-conditioned: fed the crop, it builds the whole object from scratch.
+    Either may be absent: complete()/regenerate() return None when their endpoint
+    is unset, so the caller falls back (completion -> local Poisson; regen -> drop).
+
     The transport (POST /v2/{endpoint}/runsync with a Bearer key) is generic and
-    done here. The two endpoint-specific seams — how the object is encoded into
-    the handler's `input` and how the returned mesh is decoded — are isolated in
-    `_build_input` / `_decode_mesh`; fill them in once the endpoint contract is
-    known. Until then they raise, and make_engine() only returns this when the
-    env is configured, so the local path is unaffected.
+    done here. The endpoint-specific seams — how an object is encoded into the
+    handler's `input` and how the returned mesh is decoded — are isolated in
+    `_build_input` / `_decode_mesh`; fill them in once the contract is known.
     """
 
     BASE_URL = "https://api.runpod.ai/v2"
@@ -90,19 +97,23 @@ class RunPodEngine(Engine):
     def __init__(
         self,
         api_key: str,
-        endpoint_id: str,
         *,
-        model: str = "triposg",
+        gen_endpoint: str | None = None,
+        completion_endpoint: str | None = None,
+        gen_model: str = "triposg",
+        completion_model: str = "pointr",
         timeout_s: float = 600.0,
     ):
         self.api_key = api_key
-        self.endpoint_id = endpoint_id
-        self.model = model
+        self.gen_endpoint = gen_endpoint
+        self.completion_endpoint = completion_endpoint
+        self.gen_model = gen_model
+        self.completion_model = completion_model
         self.timeout_s = timeout_s
 
     # --- transport (generic RunPod serverless runsync) ------------------
-    def _runsync(self, payload: dict) -> dict:
-        """POST {"input": payload} to the endpoint, return the `output` dict.
+    def _runsync(self, endpoint: str, payload: dict) -> dict:
+        """POST {"input": payload} to `endpoint`, return the `output` dict.
 
         Synchronous RunPod call: blocks until the job finishes. Raises on a
         non-200 status or a RunPod-level error field.
@@ -110,7 +121,7 @@ class RunPodEngine(Engine):
         import json
         import urllib.request
 
-        url = f"{self.BASE_URL}/{self.endpoint_id}/runsync"
+        url = f"{self.BASE_URL}/{endpoint}/runsync"
         body = json.dumps({"input": payload}).encode()
         req = urllib.request.Request(
             url,
@@ -128,12 +139,16 @@ class RunPodEngine(Engine):
         return data.get("output", {})
 
     # --- endpoint-specific seams (FILL IN with the API contract) --------
-    def _build_input(self, *, mode: str, crop_path, coco_class, cloud) -> dict:
+    def _build_input(self, *, mode: str, model: str, crop_path, coco_class, cloud,
+                     mesh=None) -> dict:
         """Build the handler `input` dict for this object.
 
-        mode is "complete" or "regenerate". Will likely include the crop image
-        (base64), the class name, the chosen model, and — for completion — the
-        partial geometry. The exact field names are the endpoint's contract.
+        mode "complete"   -> the learned shape-completion model: send the PARTIAL
+                             GEOMETRY (the observed point `cloud`, and/or `mesh`),
+                             plus the class. The crop is optional context.
+        mode "regenerate" -> the image-to-3D model: send the crop image (base64)
+                             + class; no geometry.
+        Field names are the endpoint's contract — fill them in.
         """
         raise NotImplementedError(
             "RunPod input contract not set — provide the endpoint's `input` schema"
@@ -142,9 +157,8 @@ class RunPodEngine(Engine):
     def _decode_mesh(self, output: dict):
         """Decode the handler `output` into an open3d TriangleMesh.
 
-        The model returns a mesh (TripoSG/Hunyuan3D output); decide the transfer
-        format (glb/obj/ply, base64 or URL). NOTE: Open3D cannot read GLB back —
-        prefer OBJ/PLY for a server round-trip (see project gotchas).
+        Decide the transfer format (obj/ply/glb, base64 or URL). NOTE: Open3D
+        cannot read GLB back — prefer OBJ/PLY for a server round-trip (gotcha).
         """
         raise NotImplementedError(
             "RunPod output contract not set — provide the returned mesh format"
@@ -152,17 +166,27 @@ class RunPodEngine(Engine):
 
     # --- capabilities ---------------------------------------------------
     def complete(self, *, mesh, cloud, crop_path, coco_class):
+        # MIDDLE band: learned shape-completion (geometry-conditioned). No
+        # completion endpoint configured -> None so the caller falls back to the
+        # local Poisson repair.
+        if not self.completion_endpoint:
+            return None
         payload = self._build_input(
-            mode="complete", crop_path=crop_path, coco_class=coco_class, cloud=cloud)
-        return self._decode_mesh(self._runsync(payload))
+            mode="complete", model=self.completion_model, crop_path=crop_path,
+            coco_class=coco_class, cloud=cloud, mesh=mesh)
+        return self._decode_mesh(self._runsync(self.completion_endpoint, payload))
 
     def regenerate(self, *, cloud, crop_path, coco_class):
+        # BOTTOM band: image-to-3D (image-conditioned). No gen endpoint -> None
+        # so the object is dropped (as with no GPU at all).
+        if not self.gen_endpoint:
+            return None
         payload = self._build_input(
-            mode="regenerate", crop_path=crop_path, coco_class=coco_class, cloud=cloud)
-        gen_mesh = self._decode_mesh(self._runsync(payload))
-        # Scale/place the unit-cube mesh against the observed cloud. The real
-        # FPFH+ICP per-axis fit is Phase 8 (icp_align.py); until then a generative
-        # object needs that step to become world-correct.
+            mode="regenerate", model=self.gen_model, crop_path=crop_path,
+            coco_class=coco_class, cloud=cloud)
+        gen_mesh = self._decode_mesh(self._runsync(self.gen_endpoint, payload))
+        # The model returns a unit-cube mesh; scale/place it against the observed
+        # cloud. The real FPFH+ICP per-axis fit is Phase 8 (icp_align.py).
         aligned = self._align_to_cloud(gen_mesh, cloud)
         return RegenResult(mesh=aligned, alignment_method="coarse_aligned",
                            scale_method="class_prior")
@@ -173,10 +197,20 @@ class RunPodEngine(Engine):
 
 
 def make_engine() -> Engine:
-    """LocalEngine, or RunPodEngine when RUNPOD_API_KEY + RUNPOD_ENDPOINT_ID are
-    set. RUNPOD_MODEL overrides the model (default triposg)."""
+    """LocalEngine, or RunPodEngine when RUNPOD_API_KEY plus at least one endpoint
+    are set. Endpoints (either may be set independently):
+      RUNPOD_GEN_ENDPOINT_ID        — image-to-3D (bottom band). Back-compat:
+                                      RUNPOD_ENDPOINT_ID is read as a fallback.
+      RUNPOD_COMPLETION_ENDPOINT_ID — learned shape-completion (middle band).
+    Model overrides: RUNPOD_GEN_MODEL (default triposg),
+                     RUNPOD_COMPLETION_MODEL (default pointr)."""
     key = os.environ.get("RUNPOD_API_KEY")
-    endpoint = os.environ.get("RUNPOD_ENDPOINT_ID")
-    if key and endpoint:
-        return RunPodEngine(key, endpoint, model=os.environ.get("RUNPOD_MODEL", "triposg"))
+    gen = os.environ.get("RUNPOD_GEN_ENDPOINT_ID") or os.environ.get("RUNPOD_ENDPOINT_ID")
+    comp = os.environ.get("RUNPOD_COMPLETION_ENDPOINT_ID")
+    if key and (gen or comp):
+        return RunPodEngine(
+            key, gen_endpoint=gen, completion_endpoint=comp,
+            gen_model=os.environ.get("RUNPOD_GEN_MODEL", "triposg"),
+            completion_model=os.environ.get("RUNPOD_COMPLETION_MODEL", "pointr"),
+        )
     return LocalEngine()
