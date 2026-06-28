@@ -46,6 +46,30 @@ class RegenResult:
     scale_method: str = "per_axis_median"  # 'per_axis_median' | 'class_prior'
 
 
+def _transfer_colors(src_mesh, dst_mesh):
+    """Copy vertex colours from src_mesh onto dst_mesh by nearest neighbour.
+
+    A completion model emits geometry only (no colour), so a freshly-meshed
+    completion renders flat/dark. We paint each completed vertex with the colour
+    of the closest observed (src) vertex, so it keeps the scan's appearance. Both
+    meshes are in the same object-local frame. No-op if src has no colours.
+    """
+    import numpy as np
+    import open3d as o3d
+
+    if not src_mesh.has_vertex_colors() or len(dst_mesh.vertices) == 0:
+        return dst_mesh
+    src_cols = np.asarray(src_mesh.vertex_colors)
+    tree = o3d.geometry.KDTreeFlann(src_mesh)
+    dst_v = np.asarray(dst_mesh.vertices)
+    cols = np.empty((len(dst_v), 3))
+    for i, p in enumerate(dst_v):
+        _, idx, _ = tree.search_knn_vector_3d(p, 1)
+        cols[i] = src_cols[idx[0]]
+    dst_mesh.vertex_colors = o3d.utility.Vector3dVector(cols)
+    return dst_mesh
+
+
 def coarse_align_to_cloud(mesh, cloud):
     """Scale + place a unit-cube GENERATED mesh onto the observed cloud's AABB.
 
@@ -284,7 +308,7 @@ class LocalGpuEngine(Engine):
         into a single coherent surface. Geometry-only (no image). Returns an
         open3d mesh; raising here -> the engine falls back to the local Poisson.
         """
-        if self.completion_model != "pointr":
+        if self.completion_model not in ("pointr", "adapointr"):
             raise NotImplementedError(
                 f"local completion model '{self.completion_model}' not wired")
         import numpy as np
@@ -295,7 +319,7 @@ class LocalGpuEngine(Engine):
         pts = np.asarray(mesh.vertices)
         if len(pts) < 32:
             raise RuntimeError("too few points to complete")
-        dense = pointr_completion.complete_points(pts)
+        dense = pointr_completion.complete_points(pts, model=self.completion_model)
 
         pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(dense))
         pcd.estimate_normals(o3d.geometry.KDTreeSearchParamKNN(knn=20))
@@ -306,7 +330,7 @@ class LocalGpuEngine(Engine):
         m.compute_vertex_normals()
         if len(m.triangles) == 0:
             raise RuntimeError("completion meshing produced no triangles")
-        return m
+        return _transfer_colors(mesh, m)  # PoinTr emits no colour -> carry it over
 
     def _run_gen(self, *, crop_path, coco_class):
         """Run the image-to-3D model on the crop -> open3d unit-cube mesh.

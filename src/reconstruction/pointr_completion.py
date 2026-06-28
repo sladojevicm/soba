@@ -27,10 +27,14 @@ import numpy as np
 
 _POINTR_HOME = Path(os.environ.get(
     "POINTR_HOME", str(Path.home() / "projects" / "vid2sim" / "PoinTr")))
-_CKPT = _POINTR_HOME / "pretrained" / "PoinTr_PCN.pth"
-_CONFIG = "cfgs/PCN_models/PoinTr.yaml"  # relative to POINTR_HOME
 
-_model = None  # lazy singleton (loading is slow; do it once)
+# model name -> (config relative to POINTR_HOME, checkpoint relative to POINTR_HOME)
+_MODELS = {
+    "pointr":    ("cfgs/PCN_models/PoinTr.yaml",    "pretrained/PoinTr_PCN.pth"),
+    "adapointr": ("cfgs/PCN_models/AdaPoinTr.yaml", "pretrained/AdaPoinTr_PCN.pth"),
+}
+
+_loaded: dict = {}  # name -> model (lazy, cached; loading is slow)
 
 
 # --- pure-torch replacements for the two pointnet2 ops in the forward path ----
@@ -100,16 +104,19 @@ def _install_shims():
         sys.modules[f"extensions.{sub}"] = m
 
 
-def load_model():
-    """Build PoinTr + load the PCN checkpoint onto CUDA (cached). Raises a clear
-    error if the repo/checkpoint isn't present so the engine can fall back."""
-    global _model
-    if _model is not None:
-        return _model
-    import torch
-    if not _CKPT.is_file():
+def load_model(name: str = "pointr"):
+    """Build the named model (pointr|adapointr) + load its PCN checkpoint onto
+    CUDA (cached per name). Raises a clear error if repo/checkpoint is missing so
+    the engine can fall back."""
+    if name in _loaded:
+        return _loaded[name]
+    if name not in _MODELS:
+        raise ValueError(f"unknown completion model {name!r}")
+    cfg_rel, ckpt_rel = _MODELS[name]
+    ckpt = _POINTR_HOME / ckpt_rel
+    if not ckpt.is_file():
         raise FileNotFoundError(
-            f"PoinTr checkpoint missing: {_CKPT} (set POINTR_HOME / download it)")
+            f"{name} checkpoint missing: {ckpt} (set POINTR_HOME / download it)")
 
     _install_shims()
     if str(_POINTR_HOME) not in sys.path:
@@ -119,24 +126,48 @@ def load_model():
         os.chdir(_POINTR_HOME)  # config _base_ paths are repo-relative
         from tools import builder
         from utils.config import cfg_from_yaml_file
-        cfg = cfg_from_yaml_file(_CONFIG)
+        cfg = cfg_from_yaml_file(cfg_rel)
         model = builder.model_builder(cfg.model)
-        builder.load_model(model, str(_CKPT))
+        builder.load_model(model, str(ckpt))
     finally:
         os.chdir(cwd)
-    _model = model.cuda().eval()
-    return _model
+    _loaded[name] = model.cuda().eval()
+    return _loaded[name]
 
 
-def complete_points(partial: np.ndarray, *, n_in: int = 2048) -> np.ndarray:
+def _yaw_canonicalize(pts: np.ndarray) -> np.ndarray:
+    """Rotation about Y (gravity-up, preserved) that sends the object's dominant
+    HORIZONTAL axis to +X. The PCN-trained model is orientation-sensitive but our
+    objects face arbitrary directions, so we canonicalise the yaw before feeding
+    it (and undo the rotation on the output). Returns Ry(phi) as a 3x3 (apply to
+    row-vector points as pts @ R.T; invert with pts @ R)."""
+    xz = pts[:, [0, 2]]
+    cov = (xz.T @ xz) / max(len(xz), 1)
+    _, vecs = np.linalg.eigh(cov)            # ascending; last col = principal dir
+    major = vecs[:, -1]                       # [dx, dz]
+    phi = float(np.arctan2(major[1], major[0]))
+    c, s = np.cos(phi), np.sin(phi)
+    return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]], dtype=np.float32)
+
+
+def complete_points(partial: np.ndarray, *, model: str = "pointr",
+                    n_in: int = 2048, pca_align: bool | None = None) -> np.ndarray:
     """Complete a partial cloud -> dense cloud, in the SAME frame as the input
     (PoinTr normalises to a unit sphere internally; we denormalise back). The
-    input should be object-local (recentred); output is too."""
+    input should be object-local (recentred); output is too.
+
+    pca_align (default on; env VID2SIM_PCA_ALIGN=0 to disable): yaw-canonicalise
+    the object before completion to reduce the arbitrary-orientation variance the
+    model is sensitive to, then rotate the result back."""
     import torch
-    model = load_model()
+    if pca_align is None:
+        pca_align = os.environ.get("VID2SIM_PCA_ALIGN", "1") != "0"
+    net = load_model(model)
     pts = np.asarray(partial, dtype=np.float32)
     centroid = pts.mean(axis=0)
     pts = pts - centroid
+    R = _yaw_canonicalize(pts) if pca_align else np.eye(3, dtype=np.float32)
+    pts = pts @ R.T                           # to canonical yaw
     scale = float(np.max(np.sqrt((pts ** 2).sum(axis=1)))) or 1.0
     pts = pts / scale
     # resample to the model's input size (pad-by-repeat if sparse)
@@ -144,5 +175,6 @@ def complete_points(partial: np.ndarray, *, n_in: int = 2048) -> np.ndarray:
     idx = rng.integers(0, len(pts), n_in)
     inp = torch.from_numpy(pts[idx]).unsqueeze(0).cuda()
     with torch.no_grad():
-        dense = model(inp)[-1].squeeze(0).cpu().numpy()
-    return dense * scale + centroid  # back to the input frame
+        dense = net(inp)[-1].squeeze(0).cpu().numpy()
+    dense = dense * scale @ R                  # undo yaw, back to input frame
+    return dense + centroid
