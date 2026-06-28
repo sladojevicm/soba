@@ -41,12 +41,20 @@ PoinTr paper shows clean completions, so it was a **usage error**, root cause fo
   that way, `PCNDataset` does NOT. Added `pointr_sn55` (ShapeNet-55 model, matched
   convention, 55 categories) + fixed sampling (was `randint` → duplicates; now
   without-replacement). Checkpoints downloaded to `~/projects/vid2sim/PoinTr/pretrained/`.
-- **OPEN (under test when session ended):** a point-cloud diagnostic
-  (`scratchpad/diag.py`) renders the **raw completion point clouds** (input vs PCN vs
-  ShapeNet-55) for couch+table to isolate whether the blob is the COMPLETION or my
-  **Poisson MESHING** of the points (PoinTr outputs a CLEAN point cloud; meshing a
-  spread cloud blobs). Strong suspicion: meshing is a big culprit. NEXT: judge the
-  completion on the POINT CLOUD first (like the paper), then mesh carefully.
+- **DIAGNOSTIC RESULT (the key finding):** rendered the RAW completion point clouds
+  (input vs PCN vs ShapeNet-55) for couch+table. **The input partials are DENSE and
+  RECOGNISABLE (couch 2.36M pts, table 580k pts) — both completion models make them
+  WORSE**, outputting only 8–16k SCATTERED points (their fixed output size). Point-
+  completion nets are built to DENSIFY a sparse sliver, NOT to fill holes in an
+  already-dense scan — so on our well-observed objects they throw away ~99% of the
+  real resolution. The "blob" was that low-res scattered output + Poisson meshing it.
+  **CONCLUSION:** for well-observed objects KEEP the real geometry and repair holes
+  GEOMETRICALLY (Poisson / pymeshfix / alpha-wrap on the REAL mesh — pymeshfix was
+  pip-installed, test was interrupted). Learned completion/generation belongs ONLY
+  on the genuinely SPARSE objects (where 8–16k output is an upgrade). This VALIDATES
+  the user's "keep real geometry" instinct but shows point-completion is the wrong
+  mechanism for it. Diagnostic image: `scratchpad/diag.png` (regenerate via
+  `scratchpad/diag.py` — needs the `.ptp()`→`np.ptp()` numpy-2 fix already applied).
 - Infra is DONE + model-agnostic (`LocalGpuEngine`, `pointr_completion.py`): swapping
   the model is one config line. PCA yaw-align (`VID2SIM_PCA_ALIGN`) + colour transfer
   are in. Deep-research on SOTA completion was launched but FAILED at synthesis
