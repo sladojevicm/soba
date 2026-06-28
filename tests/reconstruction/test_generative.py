@@ -79,3 +79,39 @@ def test_regen_result_defaults_are_generative_provenance():
     r = generative.RegenResult(mesh=object())
     assert r.alignment_method in ("fpfh_icp", "coarse_aligned")
     assert r.scale_method in ("per_axis_median", "class_prior")
+
+
+# --- local-GPU backend (selected when a CUDA device is present) ---------
+def test_make_engine_prefers_local_gpu_when_cuda_available(monkeypatch):
+    monkeypatch.delenv("RUNPOD_API_KEY", raising=False)
+    monkeypatch.delenv("RUNPOD_ENDPOINT_ID", raising=False)
+    monkeypatch.delenv("RUNPOD_GEN_ENDPOINT_ID", raising=False)
+    monkeypatch.setattr(generative.LocalGpuEngine, "is_available", staticmethod(lambda: True))
+    assert isinstance(generative.make_engine(), generative.LocalGpuEngine)
+
+
+def test_make_engine_local_gpu_can_be_disabled(monkeypatch):
+    monkeypatch.delenv("RUNPOD_API_KEY", raising=False)
+    monkeypatch.setattr(generative.LocalGpuEngine, "is_available", staticmethod(lambda: True))
+    monkeypatch.setenv("VID2SIM_LOCAL_GPU", "0")
+    assert isinstance(generative.make_engine(), generative.LocalEngine)
+
+
+def test_local_gpu_falls_back_gracefully_when_models_missing():
+    # models not installed -> _run_* raise -> complete()/regenerate() return None
+    eng = generative.LocalGpuEngine()
+    assert eng.complete(mesh=None, cloud=None, crop_path=None, coco_class="chair") is None
+    assert eng.regenerate(cloud=None, crop_path=None, coco_class="chair") is None
+
+
+def test_coarse_align_scales_unit_box_to_cloud_bbox():
+    o3d = pytest.importorskip("open3d")
+    box = o3d.geometry.TriangleMesh.create_box(1, 1, 1)  # unit cube at origin..1
+    box.compute_vertex_normals()
+    # target cloud spanning a 2 x 0.5 x 4 box centred at (10, 1, -3)
+    lo = np.array([9.0, 0.75, -5.0]); hi = np.array([11.0, 1.25, -1.0])
+    cloud = np.array([lo, hi, (lo + hi) / 2])
+    out = generative.coarse_align_to_cloud(box, cloud)
+    ab = out.get_axis_aligned_bounding_box()
+    assert np.allclose(ab.min_bound, lo, atol=1e-6)
+    assert np.allclose(ab.max_bound, hi, atol=1e-6)

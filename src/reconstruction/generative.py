@@ -29,8 +29,11 @@ the environment, else LocalEngine — so turning the GPU path on is purely confi
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -41,6 +44,36 @@ class RegenResult:
     mesh: object                       # open3d.geometry.TriangleMesh, world-scaled
     alignment_method: str = "fpfh_icp"  # 'fpfh_icp' | 'coarse_aligned'
     scale_method: str = "per_axis_median"  # 'per_axis_median' | 'class_prior'
+
+
+def coarse_align_to_cloud(mesh, cloud):
+    """Scale + place a unit-cube GENERATED mesh onto the observed cloud's AABB.
+
+    A generative model returns its mesh in a unit cube with no real size; this
+    recovers a coarse world pose by matching the mesh's bounding box to the
+    observed cloud's bounding box (per-axis scale + centre). This is the
+    "coarse_aligned" / "class_prior" path — the precise FPFH-rotation + per-axis
+    ICP is Phase 8 (icp_align.py). CPU-only (Open3D), so it runs without a GPU.
+    """
+    import numpy as np
+    import open3d as o3d
+
+    cloud = np.asarray(cloud, dtype=np.float64)
+    if len(cloud) < 2 or len(mesh.vertices) == 0:
+        return mesh
+    c_lo, c_hi = cloud.min(axis=0), cloud.max(axis=0)
+    c_size, c_centre = c_hi - c_lo, (c_lo + c_hi) / 2.0
+
+    out = o3d.geometry.TriangleMesh(mesh)  # copy
+    ab = out.get_axis_aligned_bounding_box()
+    m_lo, m_hi = np.asarray(ab.min_bound), np.asarray(ab.max_bound)
+    m_size, m_centre = m_hi - m_lo, (m_lo + m_hi) / 2.0
+    scale = np.where(m_size > 1e-9, c_size / m_size, 1.0)
+
+    v = (np.asarray(out.vertices) - m_centre) * scale + c_centre
+    out.vertices = o3d.utility.Vector3dVector(v)
+    out.compute_vertex_normals()
+    return out
 
 
 class Engine:
@@ -186,24 +219,95 @@ class RunPodEngine(Engine):
             coco_class=coco_class, cloud=cloud)
         gen_mesh = self._decode_mesh(self._runsync(self.gen_endpoint, payload))
         # The model returns a unit-cube mesh; scale/place it against the observed
-        # cloud. The real FPFH+ICP per-axis fit is Phase 8 (icp_align.py).
-        aligned = self._align_to_cloud(gen_mesh, cloud)
+        # cloud (coarse AABB fit; precise FPFH+ICP is Phase 8).
+        aligned = coarse_align_to_cloud(gen_mesh, cloud)
         return RegenResult(mesh=aligned, alignment_method="coarse_aligned",
                            scale_method="class_prior")
 
-    def _align_to_cloud(self, mesh, cloud):
-        """Placeholder coarse alignment (AABB fit). Replaced by Phase-8 ICP."""
-        raise NotImplementedError("ICP alignment is Phase 8 (icp_align.py)")
+
+class LocalGpuEngine(Engine):
+    """Run the SAME two models on the LOCAL GPU instead of RunPod — no API, no
+    network, no cost. Same contract as RunPodEngine:
+      complete()   -> learned shape-completion model (PoinTr-family), GPU
+      regenerate() -> image-to-3D model (TripoSG / Hunyuan3D), GPU, then the
+                      coarse AABB align (CPU)
+
+    Selection (make_engine) requires torch + a visible CUDA device. The
+    model-specific load+inference is isolated in `_run_completion` / `_run_gen`,
+    which import the model packages on demand and raise until those packages +
+    weights are installed — at which point both bands go live with NO other
+    change. A raise here is caught and turned into the engine's None fallback
+    (completion -> local Poisson; generative -> drop), so a missing model never
+    crashes the pipeline; it just logs and degrades.
+
+    VRAM (this box = RTX 4060, 8 GB): PoinTr fits easily; TripoSG is tight (fp16 /
+    offload); Hunyuan3D 2.1 likely will NOT fit at 8 GB — prefer TripoSG locally
+    and keep Hunyuan3D for a larger GPU.
+    """
+
+    def __init__(self, *, completion_model: str = "pointr", gen_model: str = "triposg"):
+        self.completion_model = completion_model
+        self.gen_model = gen_model
+
+    @staticmethod
+    def is_available() -> bool:
+        """True iff torch sees a CUDA device. Never raises (torch may be absent)."""
+        try:
+            import torch
+            return bool(torch.cuda.is_available())
+        except Exception:
+            return False
+
+    def complete(self, *, mesh, cloud, crop_path, coco_class):
+        try:
+            return self._run_completion(mesh=mesh, cloud=cloud, coco_class=coco_class)
+        except Exception as e:  # missing model / OOM -> fall back to local Poisson
+            log.warning("local-GPU completion unavailable (%s) -> Poisson fallback", e)
+            return None
+
+    def regenerate(self, *, cloud, crop_path, coco_class):
+        try:
+            gen_mesh = self._run_gen(crop_path=crop_path, coco_class=coco_class)
+            aligned = coarse_align_to_cloud(gen_mesh, cloud)
+            return RegenResult(mesh=aligned, alignment_method="coarse_aligned",
+                               scale_method="class_prior")
+        except Exception as e:  # missing model / OOM -> drop (as with no GPU)
+            log.warning("local-GPU generation unavailable (%s) -> object dropped", e)
+            return None
+
+    # --- model adapters (FILL with the model APIs once installed) -------
+    def _run_completion(self, *, mesh, cloud, coco_class):
+        """Run the shape-completion model on the PARTIAL GEOMETRY -> open3d mesh.
+
+        Load `self.completion_model` (PoinTr-family) onto CUDA, feed the observed
+        `cloud` (N,3 partial point cloud) — `mesh` is the partial TSDF mesh for
+        context — and mesh the completed points (Poisson/ball-pivoting) into a
+        single coherent surface that keeps the observed geometry. Geometry-only:
+        no image needed. Install the model package + weights, then fill this in.
+        """
+        raise NotImplementedError(
+            f"local completion model '{self.completion_model}' not installed")
+
+    def _run_gen(self, *, crop_path, coco_class):
+        """Run the image-to-3D model on the crop -> open3d unit-cube mesh.
+
+        Load `self.gen_model` (TripoSG / Hunyuan3D) onto CUDA, feed the crop image
+        at `crop_path`, return the generated mesh (unit cube; caller scales it to
+        the cloud). Prefer fp16 / CPU-offload at 8 GB. Install + fill this in.
+        """
+        raise NotImplementedError(
+            f"local generative model '{self.gen_model}' not installed")
 
 
 def make_engine() -> Engine:
-    """LocalEngine, or RunPodEngine when RUNPOD_API_KEY plus at least one endpoint
-    are set. Endpoints (either may be set independently):
-      RUNPOD_GEN_ENDPOINT_ID        — image-to-3D (bottom band). Back-compat:
-                                      RUNPOD_ENDPOINT_ID is read as a fallback.
-      RUNPOD_COMPLETION_ENDPOINT_ID — learned shape-completion (middle band).
-    Model overrides: RUNPOD_GEN_MODEL (default triposg),
-                     RUNPOD_COMPLETION_MODEL (default pointr)."""
+    """Pick the geometry-invention backend, in priority order:
+      1. RunPodEngine  — if RUNPOD_API_KEY + an endpoint are set.
+           RUNPOD_GEN_ENDPOINT_ID (alias RUNPOD_ENDPOINT_ID) — image-to-3D.
+           RUNPOD_COMPLETION_ENDPOINT_ID                     — shape-completion.
+      2. LocalGpuEngine — if a CUDA GPU is visible (and VID2SIM_LOCAL_GPU != "0").
+      3. LocalEngine    — no GPU: completion = Poisson, generation = drop.
+    Model overrides: RUNPOD_GEN_MODEL/RUNPOD_COMPLETION_MODEL (RunPod) or
+    VID2SIM_GEN_MODEL/VID2SIM_COMPLETION_MODEL (local; default triposg/pointr)."""
     key = os.environ.get("RUNPOD_API_KEY")
     gen = os.environ.get("RUNPOD_GEN_ENDPOINT_ID") or os.environ.get("RUNPOD_ENDPOINT_ID")
     comp = os.environ.get("RUNPOD_COMPLETION_ENDPOINT_ID")
@@ -212,5 +316,10 @@ def make_engine() -> Engine:
             key, gen_endpoint=gen, completion_endpoint=comp,
             gen_model=os.environ.get("RUNPOD_GEN_MODEL", "triposg"),
             completion_model=os.environ.get("RUNPOD_COMPLETION_MODEL", "pointr"),
+        )
+    if os.environ.get("VID2SIM_LOCAL_GPU", "1") != "0" and LocalGpuEngine.is_available():
+        return LocalGpuEngine(
+            gen_model=os.environ.get("VID2SIM_GEN_MODEL", "triposg"),
+            completion_model=os.environ.get("VID2SIM_COMPLETION_MODEL", "pointr"),
         )
     return LocalEngine()

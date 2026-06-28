@@ -48,7 +48,17 @@ The user is **non-expert on the internals** — explain in plain language and be
 - **venv:** `~/projects/vid2sim/venv/` (python 3.12, numpy 2.5, **open3d 0.19 CPU build**, opencv, pytest)
 
 ## Environment reality (matters for what's runnable here)
-- **NO GPU.** CPU only. `nvidia-smi` fails; torch would be CPU.
+- **GPU PRESENT but NOT USABLE yet (corrected 2026-06-28):** the box has an
+  **NVIDIA RTX 4060 Laptop (8 GB)** (`lspci` confirms; the earlier "no GPU" note
+  was WRONG). BUT the kernel module isn't built for the running kernel
+  (6.17.0-35): `dkms` isn't installed, `modinfo nvidia` → not found, no
+  `/dev/nvidia*`, so `nvidia-smi` fails and `torch.cuda` is unavailable. **Fix is
+  user-side (sudo + reboot):** install dkms + rebuild the `nvidia-driver-580-open`
+  module, e.g. `sudo apt install dkms nvidia-dkms-580-open && sudo reboot` (or
+  reinstall the driver), then `nvidia-smi` should show the 4060. Until then all
+  GPU models fall back (completion → Poisson, generative → dropped).
+- VRAM ceiling once live: 8 GB → PoinTr/SAM2/MASt3R fit; TripoSG tight (fp16);
+  Hunyuan3D 2.1 likely won't fit (use TripoSG locally).
 - **Not installed:** torch, sam2, ultralytics (needed to actually run SAM2 / YOLO).
 - **open3d is the CPU wheel** but the tensor TSDF `VoxelBlockGrid` **works on `CPU:0`**
   (verified) — so Phase 5 TSDF is runnable here, just slow. room_0 is small enough.
@@ -126,6 +136,20 @@ generative GPU work drops in cleanly later, and built the pluggable engine seam.
   `RUNPOD_ENDPOINT_ID`) and/or `RUNPOD_COMPLETION_ENDPOINT_ID`. **Awaiting the
   RunPod API.** `pipeline.yaml` tiers 2-4 carry `completion_model: pointr` +
   `generative_model`.
+- **Local-GPU backend added (`LocalGpuEngine`)** so the models can run on THIS
+  box's GPU with RunPod left blank. `make_engine()` priority: RunPod (if endpoints
+  set) → **LocalGpuEngine (if a CUDA device is visible, toggle `VID2SIM_LOCAL_GPU`)**
+  → LocalEngine. `complete()` = the shape-completion model, `regenerate()` = the
+  image-to-3D model, then `coarse_align_to_cloud()` (REAL, CPU/Open3D — scales the
+  unit-cube mesh to the observed AABB; replaces the old NotImplemented stub). The
+  per-model load+inference (`_run_completion`/`_run_gen`) are honest seams that
+  raise until the model packages+weights are installed; a raise is caught →
+  graceful fallback (completion→Poisson, generative→drop), so a missing model
+  never crashes the pipeline. **BLOCKED on the driver** (see Environment reality):
+  CUDA is not visible, so right now `make_engine()` returns LocalEngine and
+  office_3 runs in fallback (3 completion via Poisson, 11 dropped) — same scene as
+  before. The GPU path goes live with NO code change once `nvidia-smi` works and
+  the models are installed.
 - **PLAN_FINAL_FINAL updated to v14 (Z-W/Z-X)** — the gate section rewritten from
   binary to three-way (the old "WHY BINARY" objection is *resolved*: each band
   emits ONE coherent mesh, no naive stitch), Step 6 split into completion-model +
