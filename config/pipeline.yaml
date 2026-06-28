@@ -99,11 +99,18 @@ tiers:
     pose_method: mast3r
     tsdf: true
     voxel_size_m: 0.004
-    # Recalibrated 2026-06-27 from real Replica distributions (was 150/0.65).
-    # completeness is now CONVEX-HULL-normalised (shape-fair, fix Z-U), not bbox.
-    # The old bbox metric topped out ~0.37 on real data so 0.65 was unreachable.
-    # ~p90 of the 8-scene distribution -> routes the clearly best-observed objects.
-    gate: { angular_deg: 110, completeness: 0.45 }
+    # THREE-WAY routing (confidence.route). Two bars on the same two metrics:
+    #   angular_deg / completeness            = the COMPLETE bar. Clear it and the
+    #       object gets a TSDF mesh; below it -> "generative" (regenerate from crop).
+    #   keep_angular_deg / keep_completeness  = the stricter KEEP bar. At/above it
+    #       -> "tsdf" (keep as-is); between the two bars -> "completion" (fill the
+    #       unseen parts). REMOVE the keep_* keys to collapse to the binary gate.
+    # The COMPLETE bar is recalibrated 2026-06-27 from real Replica distributions
+    # (was 150/0.65; hull-normalised completeness, fix Z-U). The KEEP bars are
+    # PROVISIONAL/uncalibrated — set near walk-around quality, so on room-scan data
+    # nothing clears them and the survivors route to "completion" (correct: the
+    # best object we have is ~0.75 completeness / 121deg, i.e. partial, not "keep").
+    gate: { angular_deg: 110, completeness: 0.45, keep_angular_deg: 160, keep_completeness: 0.85 }
     generative_model: triposg
     physics: claude
     collider: hulls
@@ -113,7 +120,7 @@ tiers:
     pose_method: mast3r
     tsdf: true
     voxel_size_m: 0.003
-    gate: { angular_deg: 100, completeness: 0.42 }   # recalibrated (was 140/0.60)
+    gate: { angular_deg: 100, completeness: 0.42, keep_angular_deg: 155, keep_completeness: 0.82 }  # complete bar recalibrated (was 140/0.60); keep bar provisional
     generative_model: hunyuan3d
     physics: claude
     collider: hulls
@@ -123,7 +130,7 @@ tiers:
     pose_method: orbslam3
     tsdf: true
     voxel_size_m: 0.002
-    gate: { angular_deg: 90, completeness: 0.38 }    # recalibrated (was 130/0.55)
+    gate: { angular_deg: 90, completeness: 0.38, keep_angular_deg: 150, keep_completeness: 0.80 }  # complete bar recalibrated (was 130/0.55); keep bar provisional
     generative_model: hunyuan3d
     physics: claude
     collider: hulls

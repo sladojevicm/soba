@@ -45,6 +45,11 @@ def watertight_repair(mesh, *, depth: int = 8, density_quantile: float = 0.1):
     import open3d as o3d
 
     pcd = o3d.geometry.PointCloud(mesh.vertices)
+    # Carry vertex colours into the point cloud so Poisson interpolates them onto
+    # the closed surface — otherwise the repaired mesh renders flat grey instead
+    # of keeping the TSDF appearance.
+    if mesh.has_vertex_colors():
+        pcd.colors = mesh.vertex_colors
     if mesh.has_vertex_normals():
         pcd.normals = mesh.vertex_normals
     else:
@@ -54,7 +59,37 @@ def watertight_repair(mesh, *, depth: int = 8, density_quantile: float = 0.1):
     import numpy as _np
 
     pm.remove_vertices_by_mask(_np.asarray(dens) < _np.quantile(dens, density_quantile))
-    return pm.crop(mesh.get_axis_aligned_bounding_box())
+    pm = pm.crop(mesh.get_axis_aligned_bounding_box())
+    pm.compute_vertex_normals()
+    return pm
+
+
+def finalize_mesh(mesh):
+    """Step 7b finalisation — repair ONCE and return the mesh to actually use.
+
+    Returns ``(finalized_mesh, volume_m3, watertight)``. The finalized mesh is
+    the SAME geometry that gets rendered, collided, and measured for mass, so the
+    physics matches what you see. An already-watertight mesh is returned as-is.
+    An open TSDF shell is closed by Poisson repair when that yields a
+    tighter-than-hull, non-empty mesh; otherwise we keep the RAW shell (and use
+    the convex-hull volume), i.e. the pre-repair behaviour — repair never makes
+    things worse, it only upgrades when it clearly worked.
+    """
+    if len(mesh.vertices) == 0:
+        return mesh, 0.0, False
+    if mesh.is_watertight():
+        return mesh, _signed_volume(mesh), True
+    hull, _ = mesh.compute_convex_hull()
+    hull_v = _signed_volume(hull)
+    try:
+        repaired = watertight_repair(mesh)
+        if len(repaired.triangles):
+            v = _signed_volume(repaired)
+            if 0.0 < v <= hull_v:  # repaired must be tighter than the hull
+                return repaired, v, bool(repaired.is_watertight())
+    except Exception:
+        pass
+    return mesh, hull_v, False
 
 
 def volume_m3(mesh) -> tuple[float, bool]:
@@ -69,22 +104,27 @@ def volume_m3(mesh) -> tuple[float, bool]:
     HONEST: even the repaired volume is APPROXIMATE — Poisson invents the unseen
     back and the crop can leave small holes, so masses derived from it are a
     best-effort estimate (typically still somewhat high), not ground truth.
+
+    Thin wrapper over finalize_mesh() (which also returns the closed mesh) — kept
+    for callers that only want the volume.
     """
+    _, vol, watertight = finalize_mesh(mesh)
+    return vol, watertight
+
+
+def closed_mesh_volume(mesh) -> float:
+    """Volume of an ALREADY-finalized mesh (e.g. a completion engine's output) —
+    no further repair. Signed-tetrahedron volume, bounded above by the convex
+    hull so a mesh with small residual seams can't report a runaway volume."""
     if len(mesh.vertices) == 0:
-        return 0.0, False
-    if mesh.is_watertight():
-        return _signed_volume(mesh), True
-    hull, _ = mesh.compute_convex_hull()
-    hull_v = _signed_volume(hull)
+        return 0.0
+    v = _signed_volume(mesh)
     try:
-        repaired = watertight_repair(mesh)
-        if len(repaired.triangles):
-            v = _signed_volume(repaired)
-            if 0.0 < v <= hull_v:  # repaired must be tighter than the hull
-                return v, bool(repaired.is_watertight())
+        hull, _ = mesh.compute_convex_hull()
+        hv = _signed_volume(hull)
     except Exception:
-        pass
-    return hull_v, False
+        hv = v
+    return min(v, hv) if v > 0 else hv
 
 
 def mass_kg(

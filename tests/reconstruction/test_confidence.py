@@ -113,6 +113,53 @@ def test_gate_empty_cloud_is_generative():
     assert out["strategy"] == cf.GENERATIVE
 
 
+# --- three-way routing (route() is pure; no Open3D) ---------------------
+_HIGH = dict(complete_angular=90, complete_completeness=0.4,
+             keep_angular=150, keep_completeness=0.8)
+
+
+def test_route_below_complete_bar_is_generative():
+    assert cf.route(80, 0.3, **_HIGH) == cf.GENERATIVE      # both below
+    assert cf.route(120, 0.3, **_HIGH) == cf.GENERATIVE     # completeness below
+    assert cf.route(80, 0.9, **_HIGH) == cf.GENERATIVE      # angular below
+
+
+def test_route_between_bars_is_completion():
+    # clears the complete bar, below the keep bar -> fill the gaps
+    assert cf.route(121, 0.75, **_HIGH) == cf.COMPLETION
+    assert cf.route(149, 0.79, **_HIGH) == cf.COMPLETION
+
+
+def test_route_at_or_above_keep_bar_is_tsdf():
+    assert cf.route(150, 0.8, **_HIGH) == cf.TSDF
+    assert cf.route(175, 0.95, **_HIGH) == cf.TSDF
+
+
+def test_route_collapses_to_binary_without_keep_bar():
+    # no keep_* -> legacy binary: clearing the single bar == tsdf
+    assert cf.route(121, 0.75, complete_angular=90, complete_completeness=0.4) == cf.TSDF
+    assert cf.route(80, 0.3, complete_angular=90, complete_completeness=0.4) == cf.GENERATIVE
+
+
+def test_route_collapses_to_binary_when_keep_equals_complete():
+    # keep bar == complete bar -> middle band has zero width (the toggle)
+    eq = dict(complete_angular=90, complete_completeness=0.4,
+              keep_angular=90, keep_completeness=0.4)
+    assert cf.route(121, 0.75, **eq) == cf.TSDF      # clearing the bar clears both
+    assert cf.route(80, 0.3, **eq) == cf.GENERATIVE
+
+
+def test_gate_object_three_way_reads_keep_bars(monkeypatch):
+    # tier 4 config carries keep_* -> a mid-quality object routes to completion
+    monkeypatch.setattr(cf, "surface_completeness",
+                        lambda c, *, voxel_size: (0.75, 1.0, 1.0))
+    cams = np.array([[1.0, 0, 0], [-1.0, 0, 0]])  # 180 deg (clears 150 keep-angular)
+    cloud = np.array([[0.0, 0, 0], [0.1, 0, 0]])
+    out = cf.gate_object(cloud, cams, tier=4)
+    # 180deg >= keep_angular 150 but completeness 0.75 < keep_completeness 0.80
+    assert out["strategy"] == cf.COMPLETION
+
+
 # --- tier config wiring -------------------------------------------------
 def test_tier_params_reads_pipeline_yaml():
     p = cf.tier_params(2)
@@ -121,6 +168,12 @@ def test_tier_params_reads_pipeline_yaml():
     assert p["angular_deg"] == 110
     assert p["completeness"] == 0.45
     assert p["voxel_size_m"] == 0.004
+
+
+def test_tier_params_exposes_keep_bars():
+    p = cf.tier_params(4)
+    assert p["angular_deg"] == 90 and p["completeness"] == 0.38
+    assert p["keep_angular_deg"] == 150 and p["keep_completeness"] == 0.80
 
 
 def test_tier1_is_all_generative_without_scoring():

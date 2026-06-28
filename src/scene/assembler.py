@@ -42,6 +42,14 @@ class ObjectInput:
     coco_class: str
     mesh: object          # Open3D legacy TriangleMesh (world-placed, from TSDF)
     cloud: np.ndarray     # (N,3) observed world points
+    # Three-way routing (confidence.route). "tsdf" keeps the mesh as-is (light
+    # repair); "completion" fills the gaps via the engine; "generative" objects
+    # arrive with the mesh ALREADY regenerated+aligned (mesh = RegenResult.mesh).
+    strategy: str = "tsdf"
+    crop_path: object = None   # objects/{id}/crop.jpg — the completion/regen image
+    # Provenance for scene.json source.* (only meaningful for "generative").
+    alignment_method: str = "n/a"
+    scale_method: str = "n/a"
 
 
 def slug(coco_class: str) -> str:
@@ -89,7 +97,7 @@ def _camera_pose(poses: list[np.ndarray]) -> dict:
 
 def _assemble_object(obj: ObjectInput, oid: int, ground_y: float, out_dir: Path,
                      phys: vlm.Physics, tier_coacd: dict, decimate_to: int,
-                     config_path: str) -> dict:
+                     config_path: str, engine=None) -> dict:
     import open3d as o3d
 
     oid_str = f"{slug(obj.coco_class)}_{oid:02d}"
@@ -111,20 +119,37 @@ def _assemble_object(obj: ObjectInput, oid: int, ground_y: float, out_dir: Path,
     # recentre mesh to its AABB centre so the body rotates about its centre
     mesh.translate((-center).tolist())
 
+    # Finalize the render/collide/measure mesh per ROUTING STRATEGY (one mesh for
+    # all three, so what you see matches the colliders and the mass). Placement
+    # (translation above) stays keyed to the RAW AABB so finalize can't shift it.
+    #   * completion: the engine FILLS the unseen parts (Poisson locally; an
+    #     image+geometry model on GPU). Falls back to the local repair if the
+    #     engine declines (returns None).
+    #   * tsdf / generative: light Step-7b repair — closes the open shell (tsdf)
+    #     or is a no-op on an already-watertight generated mesh (generative).
+    completed = None
+    if obj.strategy == "completion" and engine is not None:
+        completed = engine.complete(
+            mesh=mesh, cloud=obj.cloud, crop_path=obj.crop_path,
+            coco_class=obj.coco_class)
+    if completed is not None and len(completed.vertices):
+        final_mesh = completed
+        vol = mass.closed_mesh_volume(final_mesh)
+    else:
+        final_mesh, vol, _watertight = mass.finalize_mesh(mesh)
+
     obj_dir = out_dir / "objects" / oid_str
     (obj_dir / "hulls").mkdir(parents=True, exist_ok=True)
-    exporter_gltf.write_glb(mesh, obj_dir / "mesh.glb", decimate_to=decimate_to)
+    exporter_gltf.write_glb(final_mesh, obj_dir / "mesh.glb", decimate_to=decimate_to)
 
     parts = decomp.decompose(
-        mesh, threshold=float(tier_coacd.get("threshold", 0.05)),
+        final_mesh, threshold=float(tier_coacd.get("threshold", 0.05)),
         max_parts=int(tier_coacd.get("max_parts", 16)),
     )
     hull_route_paths = []
     for i, part in enumerate(parts):
         exporter_gltf.write_glb(part, obj_dir / "hulls" / f"{oid_str}_{i}.glb")
         hull_route_paths.append(f"hulls/{oid_str}_{i}.glb")
-
-    vol, watertight = mass.volume_m3(mesh)
     mass_kg = mass.mass_kg(vol, phys.material, obj.coco_class, config_path=config_path)
 
     return {
@@ -148,27 +173,50 @@ def _assemble_object(obj: ObjectInput, oid: int, ground_y: float, out_dir: Path,
             "is_rigid": phys.is_rigid,
         },
         "material_class": phys.material,
-        "source": {
+        "source": _source(obj, phys),
+    }
+
+
+def _source(obj: ObjectInput, phys: vlm.Physics) -> dict:
+    """scene.json source.* per strategy. "tsdf" and "completion" are both real
+    TSDF geometry (completion just fills gaps) -> geometry_source "tsdf" with n/a
+    provenance (fix Y1). "generative" reports the regen mesh's ICP provenance."""
+    if obj.strategy == "generative":
+        geom = {
+            "geometry_source": "generative",
+            "alignment_method": obj.alignment_method,
+            "scale_method": obj.scale_method,
+        }
+    else:
+        geom = {
             "geometry_source": "tsdf",
-            "alignment_method": "n/a",   # tsdf skips Step 7 ICP (fix Y1)
+            "alignment_method": "n/a",   # tsdf/completion skip Step 7 ICP (fix Y1)
             "scale_method": "n/a",
-            "physics_origin": phys.origin,
-            "vlm_reasoning": phys.reasoning,
-        },
+        }
+    return {
+        **geom,
+        "physics_origin": phys.origin,
+        "vlm_reasoning": phys.reasoning,
     }
 
 
 def assemble(objects: list[ObjectInput], poses: list[np.ndarray], out_dir: Path | str,
              *, tier_coacd: dict | None = None, decimate_to: int = 20000,
-             vlm_backend=None, config_path: str = str(lookup._DEFAULT_CONFIG)) -> dict:
-    """Build + validate + write scene.json for the given tsdf objects.
+             vlm_backend=None, engine=None,
+             config_path: str = str(lookup._DEFAULT_CONFIG)) -> dict:
+    """Build + validate + write scene.json for the given objects.
 
-    Returns the scene dict. Caps at the 12 best-observed objects (Contract 3 /
-    Z8) by observed point count if more are supplied.
+    `engine` is the completion/generative backend (generative.Engine). It is
+    consulted only for objects with strategy "completion" (to fill gaps);
+    defaults to the local Poisson repair when None. Returns the scene dict. Caps
+    at the 12 best-observed objects (Contract 3 / Z8) by observed point count.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     tier_coacd = tier_coacd or {"threshold": 0.05, "max_parts": 16}
+    if engine is None:
+        from reconstruction.generative import LocalEngine
+        engine = LocalEngine()
 
     objects = [o for o in objects if len(o.cloud) and len(o.mesh.vertices)]
     if len(objects) > 12:  # over-cap: keep best-observed (Z8)
@@ -180,7 +228,8 @@ def assemble(objects: list[ObjectInput], poses: list[np.ndarray], out_dir: Path 
                           backend=vlm_backend, config_path=config_path)
 
     entries = [
-        _assemble_object(o, oid, g_y, out_dir, ph, tier_coacd, decimate_to, config_path)
+        _assemble_object(o, oid, g_y, out_dir, ph, tier_coacd, decimate_to,
+                         config_path, engine=engine)
         for oid, (o, ph) in enumerate(zip(objects, phys_list))
     ]
 

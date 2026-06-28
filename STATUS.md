@@ -85,8 +85,8 @@ ReplicaReader('$HOME/projects/vid2sim/data/replica/extracted/room_0/imap/00').to
 | 3 Pose | `slam.py` (Tier-1 RGB-D odometry) | ✅ **validated on real TUM (ATE 3.66 cm)**. MASt3R/ORB-SLAM3 are stubs |
 | 4A Observed cloud | `observed_cloud.py` | ✅ **validated on real Replica** (couch 2.34×0.90×1.06 m). **Z-T motion filter wired** (`motion_filter=`, default off; no-op on static room_0, drops jumped frames on synthetic moving objects) |
 | 4B TSDF fusion | `tsdf.py` | ✅ **built + validated on real Replica room_0** (couch/chair/table meshes, dims match Step 4A). CPU:0. **Z-T keep-frame set shared from Part A** (single source of truth) |
-| 5 Confidence gate | `confidence.py` | ✅ **built + RECALIBRATED on all 8 scenes.** Angular + shape-fair **hull** completeness (Z-U); thresholds recalibrated from real distributions (T2 110°/0.45). Routes 1–5/75 best-observed objects → tsdf, rest → generative (old bbox metric made 0.65 unreachable → 0 tsdf) |
-| 6 Generative (RunPod) | `runpod_client.py` + infra | ❌ not built |
+| 5 Confidence gate | `confidence.py` | ✅ **built + RECALIBRATED + now THREE-WAY.** Angular + shape-fair **hull** completeness (Z-U). Two cutoffs on those metrics: `keep` bar → **tsdf** (keep as-is), `complete` bar → **completion** (fill the gaps), below → **generative**. Collapses to binary by setting keep==complete (or omitting keep_*). On room-scan data the keep bar is unreachable, so survivors route to **completion** |
+| 6 Generative/completion engine | `reconstruction/generative.py` | ✅ **interface + LocalEngine built** (completion = Poisson; regenerate = None/deferred). **RunPodEngine skeleton** (transport wired; `_build_input`/`_decode_mesh` seams await the API). `make_engine()` env-switched |
 | 7 ICP align | `icp_align.py` | ❌ not built |
 | 7b Mesh finalise | `scene/exporter_gltf.py` + `mass.watertight_repair` | ✅ **decimation + .glb export + Poisson watertight repair built** (repair feeds mass volume; masses now realistic, see below) |
 | 8 Physics (Claude) | `scene/vlm.py` | ⚠️ **interface + lookup fallback built** (`physics_origin:"lookup"`); live Claude `output_config.format` call deferred (needs claude-api skill + key) |
@@ -100,7 +100,50 @@ ReplicaReader('$HOME/projects/vid2sim/data/replica/extracted/room_0/imap/00').to
 object the real points seen + a fused mesh, and decide tsdf-vs-generative. Step 2
 (SAM2) is built but unproven. Everything from Step 6 (generative/RunPod) on is unbuilt.
 
-## What this session did (2026-06-28, Phase 10 + 11 / server + browser — SEE the scene)
+## What this session did (2026-06-28, THREE-WAY routing + pluggable engine)
+Reworked the gate from BINARY (tsdf | generative) to **THREE-WAY** so the
+generative GPU work drops in cleanly later, and built the pluggable engine seam.
+- **Gate (`confidence.py`) is now three-way** via `route(ang, comp, ...)`: two
+  cutoffs on the SAME two metrics. `keep` bar → **"tsdf"** (keep the TSDF mesh
+  as-is), `complete` bar → **"completion"** (keep real geometry, FILL the unseen
+  parts), below → **"generative"** (regenerate whole from the crop). **Collapses
+  to the old binary gate** by setting keep==complete or omitting `keep_*` (the
+  toggle the user asked for — config only, no code change). `tier_params`/`gate`/
+  `gate_object` carry the keep bars; `FUSABLE=(tsdf,completion)`.
+- **Pluggable engine (`reconstruction/generative.py`, NEW)** — one interface for
+  the two bands that need invented geometry: `complete(mesh,cloud,crop,class)`
+  (mid) and `regenerate(cloud,crop,class)->RegenResult` (bottom). **LocalEngine**
+  (default, no GPU): complete = the Poisson repair we already trust; regenerate =
+  None (bottom band dropped — today's behaviour). **RunPodEngine**: transport
+  (POST /v2/{endpoint}/runsync, Bearer key) is wired; the two endpoint-contract
+  seams `_build_input` / `_decode_mesh` raise until the API is provided. `make_
+  engine()` returns RunPod when `RUNPOD_API_KEY`+`RUNPOD_ENDPOINT_ID` are set,
+  else Local — so the GPU path is pure config. **Awaiting: the RunPod API.**
+- **Assembler is strategy-aware**: `ObjectInput.strategy` drives the mesh
+  finalize (completion → `engine.complete`, Poisson fallback; tsdf/generative →
+  light repair) and `source.*` (generative → real ICP provenance; tsdf/completion
+  → geometry_source "tsdf" + n/a, per the frozen schema's enum + Y1 rule).
+  `mass.closed_mesh_volume` measures an already-completed mesh without re-repair.
+- **`run_assemble.py` routes three-way**, regenerates the generative band via the
+  engine (dropped when Local), fuses tsdf+completion, prints the breakdown.
+- **Config (`pipeline.yaml`)**: tiers 2-4 gained `keep_angular_deg`/
+  `keep_completeness` (160/0.85, 155/0.82, 150/0.80) — PROVISIONAL, set near
+  walk-around quality so room-scan survivors route to completion (the `complete`
+  bar is unchanged: the recalibrated 110/0.45, 100/0.42, 90/0.38).
+- **Verified:** 115 tests pass (+13: routing bands, collapse-to-binary toggle,
+  engine defaults/seams). On **real office_3** the gate routes **3 → completion**
+  (couch 110/0.40, table 94/0.46, chair 121/0.74), **11 → generative (dropped)**,
+  **0 → tsdf** (nothing clears the keep bar — correct for room-scan). Synthetic
+  completion object assembles to a schema-valid entry (geometry_source "tsdf",
+  hulls + mass). The visible result is unchanged (completion via Poisson == the
+  repair), but the architecture is now three-way and GPU-ready.
+- **What the RunPod handover needs:** (1) endpoint id + API key (env vars);
+  (2) the handler `input` JSON shape (fill `_build_input`); (3) the returned mesh
+  format — prefer OBJ/PLY, Open3D can't read GLB back (fill `_decode_mesh`);
+  (4) Phase-8 ICP for `regenerate`'s `_align_to_cloud` (scale/place the unit-cube
+  mesh); (5) crop staging (`_crop_path` / Z-B-crop) so the engine gets images.
+
+## What an earlier session did (2026-06-28, Phase 10 + 11 / server + browser — SEE the scene)
 Built the **local server** and the **browser viewer**, then verified the whole
 chain in a headless Chrome — **office_3's couch, dining table and chair render
 in Three.js and step in Rapier physics**, no JS errors. This is the payoff: the

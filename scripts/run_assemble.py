@@ -20,8 +20,20 @@ import numpy as np
 
 from perception.bundle import PerceptionBundle
 from reconstruction import confidence as cf
-from reconstruction import observed_cloud, tsdf
+from reconstruction import generative, observed_cloud, tsdf
 from scene import assembler, lookup
+
+
+def _crop_path(bundle, track_id: int):
+    """Per-object crop image for the completion/generative engine, or None.
+
+    Crop staging (Z-B-crop: objects/{id}/crop.jpg) is a future seam — the
+    LocalEngine ignores the crop, and the RunPodEngine needs it, so this returns
+    the staged crop when it exists and None otherwise (engine then can't run /
+    drops the object). Wire real crop staging here when the GPU path lands.
+    """
+    p = Path(bundle.root) / "crops" / f"crop_{track_id}.jpg"
+    return p if p.is_file() else None
 
 
 def main() -> None:
@@ -42,8 +54,13 @@ def main() -> None:
         for d in b.read_objects(fid):
             classes.setdefault(int(d["track_id"]), d.get("class", "obj"))
 
-    # --- Step 5 gate (on the cheap observed cloud), then TSDF only for survivors
-    tsdf_objs = []
+    # The completion/generative backend: LocalEngine (Poisson fill, no
+    # regeneration) unless RUNPOD_API_KEY + RUNPOD_ENDPOINT_ID are set.
+    engine = generative.make_engine()
+    print(f"engine: {type(engine).__name__}")
+
+    # --- Step 5 gate (on the cheap observed cloud), THREE-WAY routing
+    routed = {}  # tid -> (strategy, cloud)
     for tid in tsdf._all_track_ids(b):
         fids, frames = tsdf._object_frames(b, tid, poses)
         cloud, keep = observed_cloud.accumulate_object_cloud(
@@ -52,31 +69,57 @@ def main() -> None:
             continue
         cams = np.array([poses[fids[i]][:3, 3] for i in keep])
         res = cf.gate_object(cloud, cams, args.tier)
-        flag = res["strategy"]
+        strat = res["strategy"]
         print(f"  {classes.get(tid,'obj'):13} #{tid:<3} angle={res['angular_coverage_deg']} "
-              f"compl={res['completeness_ratio']} -> {flag}")
-        if flag == "tsdf":
-            tsdf_objs.append((tid, cloud))
+              f"compl={res['completeness_ratio']} -> {strat}")
+        routed[tid] = (strat, cloud)
 
-    if not tsdf_objs:
-        print("no tsdf-routed objects at this tier — nothing to assemble "
-              "(everything needs the generative path).")
-        return
+    fusable = {tid: cl for tid, (s, cl) in routed.items() if s in cf.FUSABLE}
+    gen_tids = [tid for tid, (s, _) in routed.items() if s == cf.GENERATIVE]
+    n_tsdf = sum(1 for s, _ in routed.values() if s == cf.TSDF)
+    n_compl = sum(1 for s, _ in routed.values() if s == cf.COMPLETION)
+    print(f"\nrouting: {n_tsdf} keep(tsdf), {n_compl} completion, "
+          f"{len(gen_tids)} generative")
 
-    print(f"\nfusing {len(tsdf_objs)} tsdf object(s)...")
     inputs = []
-    tids = [t for t, _ in tsdf_objs]
-    meshes = tsdf.fuse(b, track_ids=tids, voxel_size=voxel)
-    for tid, cloud in tsdf_objs:
-        m = meshes[tid]
-        if len(m.vertices) == 0:
+
+    # Bottom band: regenerate from the crop. The LocalEngine declines (no GPU) so
+    # these are DROPPED for now; a RunPodEngine returns a regenerated+aligned mesh.
+    n_dropped = 0
+    for tid in gen_tids:
+        _strat, cloud = routed[tid]
+        r = engine.regenerate(cloud=cloud, crop_path=_crop_path(b, tid),
+                              coco_class=classes.get(tid, "obj"))
+        if r is None:
+            n_dropped += 1
             continue
         inputs.append(assembler.ObjectInput(
-            track_id=tid, coco_class=classes.get(tid, "obj"), mesh=m, cloud=cloud))
+            track_id=tid, coco_class=classes.get(tid, "obj"), mesh=r.mesh,
+            cloud=cloud, strategy="generative",
+            alignment_method=r.alignment_method, scale_method=r.scale_method))
+    if n_dropped:
+        print(f"  {n_dropped} generative object(s) dropped (no GPU engine — deferred)")
+
+    # tsdf + completion bands: fuse, then assemble (completion gets gap-filled).
+    if fusable:
+        print(f"fusing {len(fusable)} tsdf/completion object(s)...")
+        meshes = tsdf.fuse(b, track_ids=list(fusable), voxel_size=voxel)
+        for tid, cloud in fusable.items():
+            m = meshes[tid]
+            if len(m.vertices) == 0:
+                continue
+            inputs.append(assembler.ObjectInput(
+                track_id=tid, coco_class=classes.get(tid, "obj"), mesh=m,
+                cloud=cloud, strategy=routed[tid][0], crop_path=_crop_path(b, tid)))
+
+    if not inputs:
+        print("nothing to assemble (everything routed to the deferred generative "
+              "path, and no GPU engine is configured).")
+        return
 
     cfg = lookup.load_config()
     tier_coacd = cfg["tiers"][args.tier].get("coacd", {"threshold": 0.05, "max_parts": 16})
-    scene = assembler.assemble(inputs, poses, args.out, tier_coacd=tier_coacd)
+    scene = assembler.assemble(inputs, poses, args.out, tier_coacd=tier_coacd, engine=engine)
 
     print(f"\nscene.json written -> {args.out}/scene.json   ground.y={scene['ground']['y']:.3f}")
     for o in scene["objects"]:

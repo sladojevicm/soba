@@ -1,10 +1,24 @@
 """Geometry confidence gate — Step 5 (module confidence.py), Build Order Phase 6.
 
-Decides, per object, whether the camera saw ENOUGH of it to trust a TSDF mesh
-(strategy "tsdf", skip the cloud GPU) or whether it must be completed by the
-generative model (strategy "generative"). The gate is BINARY on purpose (a
-merged TSDF-front/generative-back mesh would need stitching that breaks volume
-and CoACD).
+Decides, per object, how its geometry is produced. THREE-WAY routing on how well
+the camera saw it (both metrics below):
+
+  * "tsdf"        — seen well enough to KEEP the fused TSDF mesh as-is (only the
+                    light Step-7b repair). The top "keep" band.
+  * "completion"  — seen partially: keep the real TSDF geometry but FILL the
+                    missing parts (the back, an unseen side). The middle band —
+                    runs TSDF then a completion engine (Poisson locally; an
+                    image+geometry generative model when a GPU is configured).
+  * "generative"  — seen too little to anchor anything: REGENERATE the whole
+                    object from its crop and scale it to the sparse cloud. The
+                    bottom band; no TSDF.
+
+TOGGLEABLE (the whole point of the three-way split, fix Z-V follow-up): the
+middle band lives between two cutoffs on the SAME two metrics. Set the "keep"
+cutoffs equal to the "complete" cutoffs and the middle band has zero width — the
+gate collapses to the original BINARY tsdf/generative behaviour. Omit the "keep"
+cutoffs entirely (legacy config) and it is binary too. So completion can be
+deactivated by config alone, no code change.
 
 WHAT IT SCORES (fix V1): the RAW back-projected observed cloud from Step 4 Part A
 — never the TSDF-merged cloud. Scoring TSDF completeness on a cloud that already
@@ -36,7 +50,36 @@ from pathlib import Path
 import numpy as np
 
 TSDF = "tsdf"
+COMPLETION = "completion"
 GENERATIVE = "generative"
+
+# Strategies that yield a TSDF mesh (so the pipeline fuses them before assembly).
+# "generative" is the only one with no observed geometry to fuse.
+FUSABLE = (TSDF, COMPLETION)
+
+
+def route(
+    ang: float,
+    comp: float,
+    *,
+    complete_angular: float,
+    complete_completeness: float,
+    keep_angular: float | None = None,
+    keep_completeness: float | None = None,
+) -> str:
+    """Map (angular coverage, completeness) to a strategy. Both metrics AND.
+
+    Below the COMPLETE bar -> "generative" (regenerate from the crop). At/above
+    the COMPLETE bar -> "completion" (fill the gaps), unless it also clears the
+    stricter KEEP bar, then "tsdf" (keep as-is). When the KEEP bar is omitted the
+    middle band does not exist and clearing the COMPLETE bar means "tsdf" — i.e.
+    the original binary gate (back-compat / the collapse-to-binary toggle).
+    """
+    if not (ang > complete_angular and comp > complete_completeness):
+        return GENERATIVE
+    if keep_angular is None or keep_completeness is None:
+        return TSDF  # legacy binary: clearing the single bar == tsdf
+    return TSDF if (ang >= keep_angular and comp >= keep_completeness) else COMPLETION
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_CONFIG = _REPO_ROOT / "config" / "pipeline.yaml"
@@ -52,8 +95,13 @@ def _load_config(path: str) -> dict:
 
 
 def tier_params(tier: int, config_path: Path | str = _DEFAULT_CONFIG) -> dict:
-    """Per-tier gate params: {angular_deg, completeness, voxel_size_m, tsdf}.
+    """Per-tier gate params.
 
+    {tsdf, voxel_size_m, angular_deg, completeness, keep_angular_deg,
+     keep_completeness}. The plain angular_deg/completeness are the COMPLETE
+     (lower) bar — pass them and the object gets a TSDF mesh. keep_* are the
+     optional stricter "keep as-is" bar that enables the middle "completion"
+     band; None when the tier config omits them (-> binary gate).
     Tier 1 has tsdf False and no gate block — every object is generative.
     """
     cfg = _load_config(str(config_path))
@@ -63,6 +111,8 @@ def tier_params(tier: int, config_path: Path | str = _DEFAULT_CONFIG) -> dict:
         "tsdf": bool(t.get("tsdf", False)),
         "angular_deg": gate.get("angular_deg"),
         "completeness": gate.get("completeness"),
+        "keep_angular_deg": gate.get("keep_angular_deg"),
+        "keep_completeness": gate.get("keep_completeness"),
         "voxel_size_m": t.get("voxel_size_m"),
     }
 
@@ -157,10 +207,13 @@ def gate(
     angular_deg: float,
     completeness: float,
     voxel_size: float,
+    keep_angular_deg: float | None = None,
+    keep_completeness: float | None = None,
 ) -> dict:
-    """Score one object's raw cloud and route it. Both metrics must clear the bar.
+    """Score one object's raw cloud and route it (three-way, see route()).
 
-    Returns the Step-5 confidence.json payload:
+    angular_deg/completeness are the COMPLETE bar; keep_* the optional stricter
+    "keep as-is" bar (omit -> binary). Returns the Step-5 confidence.json payload:
       {"angular_coverage_deg", "completeness_ratio", "strategy"}
     """
     cloud = np.asarray(cloud, dtype=np.float64)
@@ -172,7 +225,11 @@ def gate(
         }
     ang = angular_coverage_deg(cloud.mean(axis=0), cam_positions)
     comp, _, _ = surface_completeness(cloud, voxel_size=voxel_size)
-    strategy = TSDF if (ang > angular_deg and comp > completeness) else GENERATIVE
+    strategy = route(
+        ang, comp,
+        complete_angular=angular_deg, complete_completeness=completeness,
+        keep_angular=keep_angular_deg, keep_completeness=keep_completeness,
+    )
     return {
         "angular_coverage_deg": round(ang, 1),
         "completeness_ratio": round(comp, 3),
@@ -204,4 +261,6 @@ def gate_object(
         angular_deg=p["angular_deg"],
         completeness=p["completeness"],
         voxel_size=p["voxel_size_m"],
+        keep_angular_deg=p["keep_angular_deg"],
+        keep_completeness=p["keep_completeness"],
     )
