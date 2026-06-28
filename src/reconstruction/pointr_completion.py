@@ -29,9 +29,14 @@ _POINTR_HOME = Path(os.environ.get(
     "POINTR_HOME", str(Path.home() / "projects" / "vid2sim" / "PoinTr")))
 
 # model name -> (config relative to POINTR_HOME, checkpoint relative to POINTR_HOME)
+# NOTE the PCN models expect PCN's own pre-normalised convention (their inference
+# does NO re-normalisation); the ShapeNet-55 model expects centroid+unit-radius
+# normalisation (ShapeNet55Dataset.pc_norm) — which is what complete_points does,
+# so "pointr_sn55" is the convention-matched choice for arbitrary real input.
 _MODELS = {
-    "pointr":    ("cfgs/PCN_models/PoinTr.yaml",    "pretrained/PoinTr_PCN.pth"),
-    "adapointr": ("cfgs/PCN_models/AdaPoinTr.yaml", "pretrained/AdaPoinTr_PCN.pth"),
+    "pointr":      ("cfgs/PCN_models/PoinTr.yaml",        "pretrained/PoinTr_PCN.pth"),
+    "adapointr":   ("cfgs/PCN_models/AdaPoinTr.yaml",     "pretrained/AdaPoinTr_PCN.pth"),
+    "pointr_sn55": ("cfgs/ShapeNet55_models/PoinTr.yaml", "pretrained/PoinTr_ShapeNet55.pth"),
 }
 
 _loaded: dict = {}  # name -> model (lazy, cached; loading is slow)
@@ -170,9 +175,13 @@ def complete_points(partial: np.ndarray, *, model: str = "pointr",
     pts = pts @ R.T                           # to canonical yaw
     scale = float(np.max(np.sqrt((pts ** 2).sum(axis=1)))) or 1.0
     pts = pts / scale
-    # resample to the model's input size (pad-by-repeat if sparse)
+    # resample to the model's input size WITHOUT replacement when possible (the
+    # randint approach duplicated points, which hurts the completion)
     rng = np.random.default_rng(0)
-    idx = rng.integers(0, len(pts), n_in)
+    if len(pts) >= n_in:
+        idx = rng.choice(len(pts), n_in, replace=False)
+    else:
+        idx = rng.choice(len(pts), n_in, replace=True)
     inp = torch.from_numpy(pts[idx]).unsqueeze(0).cuda()
     with torch.no_grad():
         dense = net(inp)[-1].squeeze(0).cpu().numpy()
