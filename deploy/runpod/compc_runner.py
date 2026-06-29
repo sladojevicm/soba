@@ -96,7 +96,12 @@ def main() -> int:
         cmd = [sys.executable, "test.py", "--config", a.config,
                "--indir", os.path.join(td, "indir"), "--name", name,
                "--outdir", outdir, "--workdir", os.path.join(td, "work")]
-        if subprocess.run(cmd, cwd=compc).returncode != 0:
+        # ComPC's complete.py shells out via os.system('python process.py ...')
+        # with a BARE `python` -> must resolve to THIS env's interpreter (which has
+        # cv2/rembg), not the system python. Prepend our bin dir to PATH.
+        env = os.environ.copy()
+        env["PATH"] = os.path.dirname(os.path.abspath(sys.executable)) + os.pathsep + env.get("PATH", "")
+        if subprocess.run(cmd, cwd=compc, env=env).returncode != 0:
             return 2
 
         result_ply = os.path.join(outdir, name, fname)
