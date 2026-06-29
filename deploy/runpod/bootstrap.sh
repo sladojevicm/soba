@@ -23,6 +23,8 @@ WORKDIR="${WORKDIR:-/workspace}"
 REPO_DIR="${REPO_DIR:-$WORKDIR/vid2sim-v2}"
 POINTR_HOME="${POINTR_HOME:-$WORKDIR/PoinTr}"
 SETUP_POINTR="${SETUP_POINTR:-0}"   # 1 = also clone PoinTr (optional middle band)
+SETUP_COMPC="${SETUP_COMPC:-0}"     # 1 = also build ComPC (training-free, preserves
+                                    #     observed geometry; isolated env, >=16GB GPU)
 
 log(){ printf '\n\033[1;36m== %s ==\033[0m\n' "$*"; }
 
@@ -96,6 +98,17 @@ if [ "$SETUP_POINTR" = "1" ]; then
   echo "Then: export POINTR_HOME=$POINTR_HOME"
   echo "NOTE: STATUS.md found point-completion makes well-observed objects WORSE."
   echo "      The proven host path is input -> cloud -> TSDF -> gate -> assemble -> serve."
+fi
+
+if [ "$SETUP_COMPC" = "1" ]; then
+  log "Optional: ComPC middle-band completion (isolated env — brittle, may need iteration)"
+  # Run non-fatally: a ComPC build hiccup must NOT break the working host pipeline.
+  if COMPC_HOME="${COMPC_HOME:-$WORKDIR/ComPC}" REPO_DIR="$REPO_DIR" WORKDIR="$WORKDIR" \
+       bash "$REPO_DIR/deploy/runpod/setup_compc.sh"; then
+    echo "ComPC env built. Export VID2SIM_COMPC_CMD (printed above) to activate."
+  else
+    echo "WARNING: ComPC setup failed — host pipeline is unaffected. See output above." >&2
+  fi
 fi
 
 log "Done — next steps"

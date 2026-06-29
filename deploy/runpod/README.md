@@ -36,7 +36,21 @@ git clone --depth 1 --branch fix/phase3-pose-and-eval \
   https://github.com/sladojevicm/vid2sim-v2.git
 bash vid2sim-v2/deploy/runpod/bootstrap.sh
 # optional learned completion as well:  SETUP_POINTR=1 bash .../bootstrap.sh
+# OR ComPC (training-free, preserves observed geometry — needs >=16GB GPU,
+# isolated env; brittle, may need iteration):  SETUP_COMPC=1 bash .../bootstrap.sh
 ```
+
+### ComPC middle band (optional, `SETUP_COMPC=1`)
+
+ComPC runs in an **isolated micromamba env** (py3.10.13 / CUDA 11.6 / torch
+1.12.1) built by `deploy/runpod/setup_compc.sh`; the host pipeline (torch 2.x)
+calls it as a subprocess. Diffusion weights (SD-2.1 + Zero123) auto-download from
+HuggingFace on first run. After it builds, activate it from the host venv with the
+three exports the script prints (`COMPC_HOME`, `VID2SIM_COMPLETION_MODEL=compc`,
+`VID2SIM_COMPC_CMD=...`), then run the gate at a tier where survivors route to the
+`completion` band. It is **per-object SDS (minutes each)** and emits ~10–16k
+points that the pipeline Poisson-meshes. This is the brittle step — run it
+explicitly and iterate on any build error.
 
 `bootstrap.sh` is idempotent. It clones/updates the repo, installs the
 `recon,serve,dev` extras into the template's CUDA torch, and **verifies the Open3D
