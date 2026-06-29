@@ -57,7 +57,7 @@ cat <<EOF
 Scene written to: out/scene_${SCENE}/scene.json
 
 To VIEW it (this command blocks the terminal — run it in a new Jupyter terminal):
-    cd $REPO_ROOT && PYTHONPATH=src python3 scripts/serve.py --scene out/scene_${SCENE} --port 8000
+    cd $REPO_ROOT && PYTHONPATH=src python3 scripts/serve.py --scene out/scene_${SCENE} --host 0.0.0.0 --port 8000
 Then in RunPod: Connect tab -> Port 8000 -> HTTP Service (waits, then opens in browser).
 
 Optional inspection (NOT needed for the viewer):

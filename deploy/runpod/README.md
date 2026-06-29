@@ -84,7 +84,7 @@ python3 scripts/run_gate.py     --bundle bundles/office_3 --tier 2
 python3 scripts/run_assemble.py --bundle bundles/office_3 --tier 2 --out out/scene_office_3
 
 # serve scene.json + the Three.js/Rapier viewer; open the pod's proxied :8000 URL
-python3 scripts/serve.py --scene out/scene_office_3 --port 8000
+python3 scripts/serve.py --scene out/scene_office_3 --host 0.0.0.0 --port 8000
 ```
 
 ## 5. What to do next (from `STATUS.md`, the authoritative handoff)
