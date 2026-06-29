@@ -64,7 +64,7 @@ python3 -m pytest -q tests/scene/test_schema.py tests/reconstruction/test_slam.p
 
 # Replica: ground-truth masks/poses/depth -> no camera, no SAM2/pose error.
 # Best first target; coverage is the only quality lever.
-python3 scripts/build_replica_bundles.py --scenes office_3 --stride 1 --max_frames 2000 --out bundles
+python3 scripts/build_replica_bundles.py --scenes office_3 --stride 1 --max-frames 2000 --out bundles
 python3 scripts/run_tsdf.py     --bundle bundles/office_3 --out out/office_3.ply
 python3 scripts/run_gate.py     --bundle bundles/office_3 --tier 2
 python3 scripts/run_assemble.py --bundle bundles/office_3 --tier 2 --out out/scene_office_3
@@ -75,7 +75,7 @@ python3 scripts/serve.py --scene out/scene_office_3 --port 8000
 
 ## 5. What to do next (from `STATUS.md`, the authoritative handoff)
 
-1. **Rebuild a scene with all frames (`--stride 1 --max_frames 2000`).** The
+1. **Rebuild a scene with all frames (`--stride 1 --max-frames 2000`).** The
    current bundles use only ~100 of 2000 frames — denser footage is the single
    biggest quality lever (thin chair/table legs survive the TSDF weight
    threshold).

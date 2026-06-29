@@ -105,7 +105,7 @@ cat <<EOF
   # 1) sanity (no GPU): contract + pose unit tests
   python3 -m pytest -q tests/scene/test_schema.py tests/reconstruction/test_slam.py
   # 2) build a Replica bundle (GT masks/poses/depth — no camera, no SAM2/pose error)
-  python3 scripts/build_replica_bundles.py --scenes office_3 --stride 1 --max_frames 2000 --out bundles
+  python3 scripts/build_replica_bundles.py --scenes office_3 --stride 1 --max-frames 2000 --out bundles
   # 3) front-end stages
   python3 scripts/run_tsdf.py     --bundle bundles/office_3 --out out/office_3.ply
   python3 scripts/run_gate.py     --bundle bundles/office_3 --tier 2
