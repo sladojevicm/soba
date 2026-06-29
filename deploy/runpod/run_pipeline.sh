@@ -15,9 +15,13 @@
 #     STRIDE      frame stride            (default 20  ; set 1 for dense)
 #     MAX_FRAMES  max frames              (default 100 ; set 2000 for dense)
 #     TIER        gate tier 2|3|4         (default 2)
+#     REBUILD     1 = delete an existing bundle and re-stream it (default 0).
+#                 build_replica_bundles.py SKIPS a scene whose bundle already
+#                 exists, so changing STRIDE/MAX_FRAMES has NO effect unless you
+#                 rebuild — set REBUILD=1 when you change frame density.
 #
 #   Dense quality build (STATUS.md's biggest lever, ~30-60 min):
-#     STRIDE=1 MAX_FRAMES=2000 bash deploy/runpod/run_pipeline.sh
+#     REBUILD=1 STRIDE=1 MAX_FRAMES=2000 bash deploy/runpod/run_pipeline.sh
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -29,11 +33,17 @@ SCENE="${SCENE:-office_3}"
 STRIDE="${STRIDE:-20}"
 MAX_FRAMES="${MAX_FRAMES:-100}"
 TIER="${TIER:-2}"
+REBUILD="${REBUILD:-0}"
 
 log(){ printf '\n\033[1;36m== %s ==\033[0m\n' "$*"; }
 
 log "1/3 Sanity tests (no GPU)"
 python3 -m pytest -q tests/scene/test_schema.py tests/reconstruction/test_slam.py
+
+if [ "$REBUILD" = "1" ] && [ -d "bundles/$SCENE" ]; then
+  log "REBUILD=1 -> removing stale bundles/$SCENE so it re-streams at this density"
+  rm -rf "bundles/$SCENE"
+fi
 
 log "2/3 Build Replica bundle: $SCENE (stride=$STRIDE, max-frames=$MAX_FRAMES)"
 python3 scripts/build_replica_bundles.py \
