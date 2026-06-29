@@ -36,14 +36,14 @@ def compose_poses(relatives: list[np.ndarray], T0: np.ndarray | None = None) -> 
     """Chain frame-to-frame transforms into absolute world poses.
 
     T_world[0]   = T0 (identity by default — world is the first camera)
-    T_world[N+1] = T_world[N] @ relatives[N]
+    T_world[i+1] = T_world[i] @ relatives[i]
 
-    For that formula to be correct, `relatives[N]` must EXPRESS camera N+1's
-    coordinates in camera N's frame: p_camN = relatives[N] @ p_cam(N+1), i.e. the
-    camera-to-camera transform T_{camN <- cam(N+1)}. This is exactly what
-    Open3D's compute_rgbd_odometry(source=cam(N+1), target=camN) returns (a
-    source->target transform), so its result is appended as-is — do NOT invert it.
-    There are len(relatives)+1 absolute poses.
+    With the T_world_camera convention (P_world = T_world_camera @ P_camera),
+    `relatives[i]` must be the point transform that maps frame i+1's camera
+    coords into frame i's camera coords (P_i = relatives[i] @ P_{i+1}) — i.e. the
+    pose of camera i+1 expressed in camera i. This is exactly what Open3D's
+    compute_rgbd_odometry(source=i+1, target=i) returns, so RgbdOdometry feeds
+    that output in DIRECTLY (no inverse). There are len(relatives)+1 poses.
     """
     T = np.eye(4) if T0 is None else np.asarray(T0, dtype=np.float64)
     poses = [T]
@@ -100,16 +100,19 @@ class RgbdOdometry:
         option = o3d.pipelines.odometry.OdometryOption()
         for fid in frame_ids[1:]:
             cur = rgbd(fid)
-            # source=cur, target=prev -> Open3D returns the source->target
-            # transform T_{prev<-cur}: p_prev = T_prev_cur @ p_cur. That is
-            # precisely relatives[N] = T_{camN <- cam(N+1)} that compose_poses
-            # expects, so it is appended directly (NOT inverted — inverting it
-            # integrates the trajectory backwards and mirrors every position).
             ok, T_prev_cur, _ = o3d.pipelines.odometry.compute_rgbd_odometry(
                 cur, prev, pinhole, np.eye(4),
                 o3d.pipelines.odometry.RGBDOdometryJacobianFromHybridTerm(),
                 option,
             )
+            # Open3D returns the point transform source->target: it maps `cur`
+            # (source) camera coords into `prev` (target) coords, i.e.
+            #   P_prev = T_prev_cur @ P_cur
+            # (verified by the Open3D tutorial's source.transform(T) aligning the
+            # source cloud onto the target). The world chain is therefore
+            #   T_world[cur] = T_world[prev] @ T_prev_cur,
+            # so compose_poses consumes this DIRECTLY — inverting it here mirrors
+            # the whole trajectory through the origin (the bug this replaces).
             relatives.append(T_prev_cur if ok else np.eye(4))
             prev = cur
 

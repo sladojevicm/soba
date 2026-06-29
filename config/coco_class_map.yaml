@@ -13,9 +13,7 @@ scannet:
   desk: "dining table"
   sofa: couch
   couch: couch
-  bookshelf: default       # ~1.8 m furniture; 'book' (0.15-0.35 m gate) would
-                           # fail the size gate and shrink it. 'default' has wide
-                           # gates (0.05-2.50 m) and no class-prior shrinking.
+  bookshelf: default       # furniture-sized: the book gate (0.15-0.35 m) would reject it
   books: book
   book: book
   bottle: bottle

@@ -196,6 +196,20 @@ class PerceptionBundle:
             out.append(np.array(rec["T_world_camera"], dtype=np.float64))
         return out
 
+    # -- frame timestamps (source clock, e.g. TUM stamps) -----------------
+    # frame_times[i] is the source timestamp for frame i (seconds). Needed to
+    # associate estimated poses with a ground-truth trajectory; written by the
+    # dataset reader / live capture so consumers don't have to re-derive it.
+    def times_path(self) -> Path:
+        return self.root / "frame_times.json"
+
+    def write_frame_times(self, times: Iterable[float]) -> None:
+        _write_json_path(self.times_path(), [float(t) for t in times])
+
+    def read_frame_times(self) -> list[float]:
+        p = self.times_path()
+        return [float(t) for t in _read_json(p)] if p.exists() else []
+
     # -- pixel I/O (lazy imaging backend) ---------------------------------
     def write_depth_mm(self, frame_id: int, depth_mm: np.ndarray) -> None:
         if depth_mm.dtype != DEPTH_DTYPE:
@@ -220,6 +234,32 @@ class PerceptionBundle:
 
     def read_conf(self, frame_id: int) -> np.ndarray:
         return _imread(self.conf_path(frame_id), unchanged=True).astype(np.uint8)
+
+    # -- masks (refined by Step 2 / SAM2; keyed by RAW track_id, fix Z7) ---
+    def write_mask(self, frame_id: int, track_id: int, mask: np.ndarray) -> None:
+        """Write a binary object mask (any truthy array -> 0/255 uint8 PNG)."""
+        self.ensure_frame(frame_id)
+        binary = (np.asarray(mask) > 0).astype(np.uint8) * 255
+        _imwrite(self.mask_path(frame_id, track_id), binary)
+
+    def read_mask(self, frame_id: int, track_id: int) -> np.ndarray:
+        return _imread(self.mask_path(frame_id, track_id), unchanged=True)
+
+    # -- shared best-frame crops (fix Z-B-crop) ---------------------------
+    # Staged by track_id here; Step 10 maps them into objects/{id}/crop.jpg
+    # once the slug(class)_oid id exists.
+    def crops_dir(self) -> Path:
+        return self.root / "crops"
+
+    def crop_path(self, track_id: int) -> Path:
+        return self.crops_dir() / f"crop_{track_id}.jpg"
+
+    def write_crop(self, track_id: int, rgb: np.ndarray) -> None:
+        self.crops_dir().mkdir(parents=True, exist_ok=True)
+        _imwrite(self.crop_path(track_id), rgb, quality=90)
+
+    def read_crop(self, track_id: int) -> np.ndarray:
+        return _imread(self.crop_path(track_id))
 
     # -- internals ---------------------------------------------------------
     def _write_json(self, name: str, data) -> None:

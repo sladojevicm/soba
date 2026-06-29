@@ -17,6 +17,15 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
+    "httpx>=0.27",          # server tests (TestClient + real-server SSE)
+]
+# Step-10 local scene server (Phase 10). Built on Starlette (FastAPI's core)
+# rather than FastAPI itself — Starlette + uvicorn + sse-starlette are the
+# minimal set that gives the §15 routes + SSE.
+serve = [
+    "starlette>=0.37",
+    "uvicorn>=0.27",
+    "sse-starlette>=2.0",
 ]
 # Heavy, host-side reconstruction deps (CUDA recommended for TSDF). Kept
 # optional so the contract + data-input layers install and test without them.

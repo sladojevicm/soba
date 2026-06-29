@@ -7,4 +7,11 @@ first (Build Order Phase 1) because everything downstream depends on it.
 
 from . import schema
 
-__all__ = ["schema"]
+# Phase-9 assembly modules. Imported lazily-friendly: these pull numpy but defer
+# open3d to inside their functions, so importing the package stays light.
+from . import assembler, decomp, exporter_gltf, ground, lookup, mass, vlm
+
+__all__ = [
+    "schema", "assembler", "decomp", "exporter_gltf", "ground", "lookup",
+    "mass", "vlm",
+]
