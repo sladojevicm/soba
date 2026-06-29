@@ -308,18 +308,24 @@ class LocalGpuEngine(Engine):
         into a single coherent surface. Geometry-only (no image). Returns an
         open3d mesh; raising here -> the engine falls back to the local Poisson.
         """
-        if self.completion_model not in ("pointr", "adapointr"):
-            raise NotImplementedError(
-                f"local completion model '{self.completion_model}' not wired")
         import numpy as np
         import open3d as o3d
-
-        from . import pointr_completion
 
         pts = np.asarray(mesh.vertices)
         if len(pts) < 32:
             raise RuntimeError("too few points to complete")
-        dense = pointr_completion.complete_points(pts, model=self.completion_model)
+
+        if self.completion_model in ("pointr", "adapointr", "pointr_sn55"):
+            from . import pointr_completion
+            dense = pointr_completion.complete_points(pts, model=self.completion_model)
+        elif self.completion_model == "compc":
+            # ComPC runs in its own quarantined env (subprocess); it preserves the
+            # observed geometry and hallucinates only the unseen regions.
+            from . import compc_completion
+            dense = compc_completion.complete_points(pts, coco_class=coco_class)
+        else:
+            raise NotImplementedError(
+                f"local completion model '{self.completion_model}' not wired")
 
         pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(dense))
         pcd.estimate_normals(o3d.geometry.KDTreeSearchParamKNN(knn=20))
