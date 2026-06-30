@@ -21,7 +21,9 @@ def _noisy_sphere():
     m = o3d.geometry.TriangleMesh.create_sphere(radius=0.3, resolution=20)
     v = np.asarray(m.vertices)
     rng = np.random.default_rng(0)
-    m.vertices = o3d.utility.Vector3dVector(v + rng.normal(0, 0.004, v.shape))
+    # 0.002 keeps the noisy sphere genuinely watertight (0.004 self-intersects the
+    # thin pole triangles under Open3D 0.19, breaking the watertight precondition).
+    m.vertices = o3d.utility.Vector3dVector(v + rng.normal(0, 0.002, v.shape))
     m.compute_vertex_normals()
     return m
 
