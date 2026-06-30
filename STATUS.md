@@ -4,7 +4,25 @@ _Last updated: 2026-06-28. This is a working handoff so a fresh session can resu
 without re-deriving everything. The authoritative design is `PLAN_FINAL_FINAL.txt`
 (currently at `~/projects/vid2sim/PLAN_FINAL_FINAL.txt`, version 14)._
 
-## ⬆️ LATEST SESSION (2026-06-30 pm): Option D BUILT+WIRED, Option A (fusion) STARTED
+## ⬆️ LATEST SESSION (2026-06-30 eve): holey-couch FIXED; scene served
+- **office_3 couch rendered holey/broken; root-caused + FIXED.** Cause: the couch's
+  real TSDF is very noisy (6969 components vs chair's 254), it fills the fusion grid to
+  the edge so marching cubes left OPEN boundaries (holes) pymeshfix couldn't seal, and
+  PatchComplete's couch completion is garbage (1.83m tall, L-sectional is OOD). FIX in
+  `fusion.fuse_completion`: `pad=4` (empty border → marching cubes closes the surface) +
+  `keep_largest=True` (`largest_component`, drops noise blobs). Rebuilt office_3 →
+  `out/scene_office_3_full` (couch/table/chair), VISUALLY VERIFIED via offscreen render
+  (`scratchpad/render_check.py`, Open3D EGL): couch now a SOLID recognizable L-couch (no
+  holes), chair still crisp. Seat stays a bit rough = honest noisy-scan, not a bug;
+  global field-smoothing was tried but hung repeatedly (abandoned). Memory `fusion-option-a`.
+- **SERVED:** `scripts/serve.py --scene out/scene_office_3_full` on :8000.
+- **Render-verify trick:** GLB isn't o3d-readable → assembler dumps PLY with
+  `VID2SIM_DUMP_PLY=1`; render one PLY/process (~20s EGL init).
+- **⚠️ 1 PRE-EXISTING TEST RED (not mine):** `tests/perception/test_crop_stage.py` from a
+  collaborator's TripoSG crop-staging commit (5760c16) — background-whiten mismatch, their
+  WIP, generative path (inactive). My fusion+scene tests all green.
+
+## ⬆️ EARLIER (2026-06-30 pm): Option D BUILT+WIRED, Option A (fusion) STARTED
 - **Best-observed object across ALL 8 scenes = office_3 chair#25** (hull 0.754, ang 120.6°).
   Ranked from `out/gate_distribution.json`. **NOTHING exceeds 0.90** (room-scan ceiling;
   only 1 object >0.70; median 0.298).
