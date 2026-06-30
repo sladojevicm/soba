@@ -218,6 +218,10 @@ def _assemble_object(obj: ObjectInput, oid: int, ground_y: float, out_dir: Path,
     # are colliders — their geometry must stay exact).
     exporter_gltf.write_glb(final_mesh, obj_dir / "mesh.glb",
                             decimate_to=decimate_to, smooth_iters=smooth_iters)
+    import os as _os
+    if _os.environ.get("VID2SIM_DUMP_PLY"):  # debug: a readable copy for inspection
+        import open3d as _o3d
+        _o3d.io.write_triangle_mesh(str(obj_dir / "mesh.ply"), final_mesh)
 
     parts = decomp.decompose(
         final_mesh, threshold=float(tier_coacd.get("threshold", 0.05)),

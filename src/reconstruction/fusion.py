@@ -140,21 +140,51 @@ def grid_to_mesh(field, lo, voxel, *, level: float = 0.0):
     return m
 
 
+def largest_component(mesh):
+    """Keep only the biggest connected component (drops TSDF noise blobs that
+    otherwise survive as floating fragments). No-op on an empty/one-piece mesh."""
+    import open3d as o3d
+
+    if len(mesh.triangles) == 0:
+        return mesh
+    labels, counts, _ = mesh.cluster_connected_triangles()
+    counts = np.asarray(counts)
+    if len(counts) <= 1:
+        return mesh
+    out = o3d.geometry.TriangleMesh(mesh.vertices, mesh.triangles)
+    if mesh.has_vertex_colors():
+        out.vertex_colors = mesh.vertex_colors
+    out.remove_triangles_by_mask(np.asarray(labels) != int(counts.argmax()))
+    out.remove_unreferenced_vertices()
+    return out
+
+
 def fuse_completion(vbg, completion_mesh, voxel, *, blend_voxels: float = 3.0,
-                    trunc_voxels: float = 4.0, smooth_sigma: float = 0.0):
+                    trunc_voxels: float = 4.0, smooth_sigma: float = 0.0,
+                    pad: int = 4, keep_largest: bool = True):
     """End-to-end: real VBG + a completion mesh -> a fused mesh that keeps the
     observed geometry and grafts the completion only where unobserved.
 
     `voxel` is the grid edge in metres (the VBG it was built with). `smooth_sigma`
     (voxels) rounds the patched/unobserved surface only (observed stays exact).
-    Returns (fused_mesh, info) with observed/unobserved voxel counts.
+    `pad` adds an empty (+truncation) border so marching cubes CLOSES the surface
+    instead of leaving open boundaries where a big object fills the grid to the edge
+    (the holey-couch bug). `keep_largest` drops floating noise blobs. Returns
+    (fused_mesh, info).
     """
     T_real, W, lo, gv = grid_from_vbg(vbg, voxel)
     T_comp = mesh_to_grid_sdf(completion_mesh, lo, gv, T_real.shape,
                               trunc_voxels=trunc_voxels)
     fused = fuse_fields(T_real, W, T_comp, blend_voxels=blend_voxels,
                         smooth_sigma=smooth_sigma)
-    mesh = grid_to_mesh(fused, lo, gv)
+    grid_lo = lo
+    if pad > 0:
+        fused = np.pad(fused, pad, mode="constant", constant_values=1.0)
+        grid_lo = lo - pad * gv
+    mesh = grid_to_mesh(fused, grid_lo, gv)
+    if keep_largest:
+        mesh = largest_component(mesh)
+        mesh.compute_vertex_normals()
     info = {
         "dims": list(T_real.shape),
         "grid_voxel": gv,
