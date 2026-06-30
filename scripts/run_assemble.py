@@ -41,6 +41,9 @@ def main() -> None:
     ap.add_argument("--bundle", required=True, type=Path)
     ap.add_argument("--tier", type=int, default=4, choices=[2, 3, 4])
     ap.add_argument("--out", required=True, type=Path)
+    ap.add_argument("--smooth-iters", type=int, default=assembler.RENDER_SMOOTH_ITERS,
+                    help="Taubin iterations on the RENDER mesh only (0 = off, the "
+                         "A/B baseline; collider/mass geometry is never smoothed)")
     args = ap.parse_args()
 
     b = PerceptionBundle.open(args.bundle)
@@ -123,7 +126,8 @@ def main() -> None:
 
     cfg = lookup.load_config()
     tier_coacd = cfg["tiers"][args.tier].get("coacd", {"threshold": 0.05, "max_parts": 16})
-    scene = assembler.assemble(inputs, poses, args.out, tier_coacd=tier_coacd, engine=engine)
+    scene = assembler.assemble(inputs, poses, args.out, tier_coacd=tier_coacd,
+                               engine=engine, smooth_iters=args.smooth_iters)
 
     print(f"\nscene.json written -> {args.out}/scene.json   ground.y={scene['ground']['y']:.3f}")
     for o in scene["objects"]:

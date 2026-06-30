@@ -39,6 +39,12 @@ GROUND_SNAP_BAND_M = 0.15
 # during Option-A fusion; observed geometry is left exact. 3.0 rounds the coarse
 # completion back well while keeping the real surface crisp.
 FUSION_SMOOTH_SIGMA = 3.0
+# Taubin smoothing iterations for the RENDER mesh ONLY — a cosmetic de-facet of
+# the marching-cubes/voxel staircasing. Complements FUSION_SMOOTH_SIGMA (which
+# rounds only the unobserved back): this lightly polishes the WHOLE rendered
+# surface without touching the collider/mass mesh (those keep exact geometry).
+# 0 disables it (the A/B baseline).
+RENDER_SMOOTH_ITERS = 10
 
 
 @dataclass
@@ -155,7 +161,7 @@ def _tsdf_watertight_finalize(mesh):
 
 def _assemble_object(obj: ObjectInput, oid: int, ground_y: float, out_dir: Path,
                      phys: vlm.Physics, tier_coacd: dict, decimate_to: int,
-                     config_path: str, engine=None) -> dict:
+                     config_path: str, engine=None, smooth_iters: int = 0) -> dict:
     import open3d as o3d
 
     oid_str = f"{slug(obj.coco_class)}_{oid:02d}"
@@ -208,7 +214,10 @@ def _assemble_object(obj: ObjectInput, oid: int, ground_y: float, out_dir: Path,
 
     obj_dir = out_dir / "objects" / oid_str
     (obj_dir / "hulls").mkdir(parents=True, exist_ok=True)
-    exporter_gltf.write_glb(final_mesh, obj_dir / "mesh.glb", decimate_to=decimate_to)
+    # RENDER mesh gets the cosmetic Taubin polish; hulls below never do (they
+    # are colliders — their geometry must stay exact).
+    exporter_gltf.write_glb(final_mesh, obj_dir / "mesh.glb",
+                            decimate_to=decimate_to, smooth_iters=smooth_iters)
 
     parts = decomp.decompose(
         final_mesh, threshold=float(tier_coacd.get("threshold", 0.05)),
@@ -270,7 +279,7 @@ def _source(obj: ObjectInput, phys: vlm.Physics) -> dict:
 
 def assemble(objects: list[ObjectInput], poses: list[np.ndarray], out_dir: Path | str,
              *, tier_coacd: dict | None = None, decimate_to: int = 20000,
-             vlm_backend=None, engine=None,
+             vlm_backend=None, engine=None, smooth_iters: int = RENDER_SMOOTH_ITERS,
              config_path: str = str(lookup._DEFAULT_CONFIG)) -> dict:
     """Build + validate + write scene.json for the given objects.
 
@@ -278,6 +287,10 @@ def assemble(objects: list[ObjectInput], poses: list[np.ndarray], out_dir: Path 
     consulted only for objects with strategy "completion" (to fill gaps);
     defaults to the local Poisson repair when None. Returns the scene dict. Caps
     at the 12 best-observed objects (Contract 3 / Z8) by observed point count.
+
+    `smooth_iters` Taubin-smooths the RENDER mesh only (cosmetic); 0 disables it.
+    The collider/mass geometry is never smoothed, so fusion's exact observed
+    surface is preserved where it counts.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -297,7 +310,7 @@ def assemble(objects: list[ObjectInput], poses: list[np.ndarray], out_dir: Path 
 
     entries = [
         _assemble_object(o, oid, g_y, out_dir, ph, tier_coacd, decimate_to,
-                         config_path, engine=engine)
+                         config_path, engine=engine, smooth_iters=smooth_iters)
         for oid, (o, ph) in enumerate(zip(objects, phys_list))
     ]
 
