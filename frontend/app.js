@@ -109,6 +109,46 @@ function enableShadows(obj) {
   });
 }
 
+// Floating text label (canvas-texture sprite) that always faces the camera.
+function makeLabel(text, hex) {
+  const fs = 52, pad = 22;
+  const c = document.createElement("canvas");
+  const ctx = c.getContext("2d");
+  ctx.font = `bold ${fs}px sans-serif`;
+  c.width = Math.ceil(ctx.measureText(text).width) + pad * 2;
+  c.height = fs + pad;
+  ctx.font = `bold ${fs}px sans-serif`;
+  ctx.fillStyle = "rgba(18,20,26,0.88)";
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.fillStyle = "#" + ("000000" + (hex >>> 0).toString(16)).slice(-6);
+  ctx.fillRect(0, c.height - 8, c.width, 8); // color underline = model color
+  ctx.fillStyle = "#fff";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, pad, (c.height - 8) / 2 + 2);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: new THREE.CanvasTexture(c), depthTest: false, transparent: true,
+  }));
+  const s = 0.0045;
+  sprite.scale.set(c.width * s, c.height * s, 1);
+  return sprite;
+}
+
+// Color->model legend + row guide, top-right overlay.
+window.addEventListener("load", () => {
+  const models = [["input (real scan)", 0x4caf50], ["PoinTr", 0xff9800],
+    ["AdaPoinTr", 0xf44336], ["ComPC", 0x9c27b0], ["PatchComplete", 0x2196f3],
+    ["SDFusion", 0x00bcd4]];
+  const hexs = (c) => "#" + ("000000" + c.toString(16)).slice(-6);
+  const box = document.createElement("div");
+  box.style.cssText = "position:fixed;top:10px;right:10px;background:rgba(18,20,26,0.9);" +
+    "color:#fff;padding:10px 13px;font:13px sans-serif;border-radius:6px;z-index:1000;line-height:1.7";
+  box.innerHTML = "<b>Model (column / color)</b><br>" +
+    models.map(([n, c]) => `<span style="display:inline-block;width:12px;height:12px;` +
+      `background:${hexs(c)};margin-right:7px;vertical-align:middle;border-radius:2px"></span>${n}`).join("<br>") +
+    '<br><br><b>Rows (front→back)</b><br>chair · couch · table';
+  document.body.appendChild(box);
+});
+
 // ---------------------------------------------------------------------------
 // Object loading (one object_added event)
 // ---------------------------------------------------------------------------
@@ -125,12 +165,30 @@ async function addObject(id, sceneJson) {
   // 1. Render mesh (do NOT collapse to one mesh — that strips PBR materials).
   const gltf = await gltfLoader.loadAsync(`/meshes/${id}.glb`);
   const obj3d = gltf.scene;
+  // distinct per-object color (scene.json `color` hex) so comparisons are legible
+  if (entry.color !== undefined && entry.color !== null) {
+    obj3d.traverse((o) => {
+      if (o.isMesh) {
+        o.material = new THREE.MeshStandardMaterial({
+          color: entry.color, roughness: 0.55, metalness: 0.0,
+        });
+      }
+    });
+  }
   enableShadows(obj3d);
   obj3d.position.set(tx, ty, tz);
   obj3d.quaternion.set(q[0], q[1], q[2], q[3]);
   scene.add(obj3d);
   bodyMeshes.push(obj3d);
   meshToEntry.set(obj3d, entry);
+
+  // floating label above the object (model · object), color-underlined
+  if (entry.label) {
+    const hy = entry.collider?.half_extents?.[1] ?? 0.5;
+    const label = makeLabel(entry.label, entry.color ?? 0xffffff);
+    label.position.set(tx, ty + hy + 0.45, tz);
+    scene.add(label);
+  }
 
   // running centroid so OrbitControls looks at the objects
   sceneCentroid.add(new THREE.Vector3(tx, ty, tz));
