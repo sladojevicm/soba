@@ -25,6 +25,8 @@ POINTR_HOME="${POINTR_HOME:-$WORKDIR/PoinTr}"
 SETUP_POINTR="${SETUP_POINTR:-0}"   # 1 = also clone PoinTr (optional middle band)
 SETUP_COMPC="${SETUP_COMPC:-0}"     # 1 = also build ComPC (training-free, preserves
                                     #     observed geometry; isolated env, >=16GB GPU)
+SETUP_TRIPOSG="${SETUP_TRIPOSG:-0}" # 1 = also set up local TripoSG image-to-3D
+                                    #     (generative band; clones repo + weights)
 
 log(){ printf '\n\033[1;36m== %s ==\033[0m\n' "$*"; }
 
@@ -108,6 +110,17 @@ if [ "$SETUP_COMPC" = "1" ]; then
     echo "ComPC env built. Export VID2SIM_COMPC_CMD (printed above) to activate."
   else
     echo "WARNING: ComPC setup failed — host pipeline is unaffected. See output above." >&2
+  fi
+fi
+
+if [ "$SETUP_TRIPOSG" = "1" ]; then
+  log "Optional: local TripoSG image-to-3D (generative band)"
+  # Non-fatal: a TripoSG hiccup must NOT break the working host pipeline.
+  if TRIPOSG_HOME="${TRIPOSG_HOME:-$WORKDIR/TripoSG}" \
+       bash "$REPO_DIR/deploy/runpod/setup_triposg.sh"; then
+    echo "TripoSG ready. export VID2SIM_TRIPOSG_HOME=${TRIPOSG_HOME:-$WORKDIR/TripoSG}"
+  else
+    echo "WARNING: TripoSG setup failed — host pipeline is unaffected. See above." >&2
   fi
 fi
 

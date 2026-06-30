@@ -27,13 +27,13 @@ from scene import assembler, lookup
 def _crop_path(bundle, track_id: int):
     """Per-object crop image for the completion/generative engine, or None.
 
-    Crop staging (Z-B-crop: objects/{id}/crop.jpg) is a future seam — the
-    LocalEngine ignores the crop, and the RunPodEngine needs it, so this returns
-    the staged crop when it exists and None otherwise (engine then can't run /
-    drops the object). Wire real crop staging here when the GPU path lands.
+    Stages the best-frame crop on demand (Z-B-crop): the generative band feeds
+    this single image to TripoSG. Returns None when the object is never visible
+    enough to crop — the engine then drops it. The LocalEngine ignores the crop;
+    only the GPU/RunPod paths use it.
     """
-    p = Path(bundle.root) / "crops" / f"crop_{track_id}.jpg"
-    return p if p.is_file() else None
+    from perception import crop_stage
+    return crop_stage.ensure_crop(bundle, track_id)
 
 
 def main() -> None:

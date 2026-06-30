@@ -272,6 +272,7 @@ class LocalGpuEngine(Engine):
     def __init__(self, *, completion_model: str = "pointr", gen_model: str = "triposg"):
         self.completion_model = completion_model
         self.gen_model = gen_model
+        self._triposg = None  # cached (pipe, rmbg, prepare_image) — loaded once
 
     @staticmethod
     def is_available() -> bool:
@@ -347,15 +348,75 @@ class LocalGpuEngine(Engine):
             raise RuntimeError("completion meshing produced no triangles")
         return _transfer_colors(mesh, m)  # PoinTr emits no colour -> carry it over
 
-    def _run_gen(self, *, crop_path, coco_class):
-        """Run the image-to-3D model on the crop -> open3d unit-cube mesh.
+    def _load_triposg(self):
+        """Import + load the TripoSG pipeline and BriaRMBG once, caching them.
 
-        Load `self.gen_model` (TripoSG / Hunyuan3D) onto CUDA, feed the crop image
-        at `crop_path`, return the generated mesh (unit cube; caller scales it to
-        the cloud). Prefer fp16 / CPU-offload at 8 GB. Install + fill this in.
+        The repo (cloned by deploy/runpod/setup_triposg.sh) exposes the `triposg`
+        package at its root and `image_process` / `briarmbg` under `scripts/`, so
+        both go on sys.path. Weights live under <home>/pretrained_weights by
+        default (snapshot_download targets in the setup script). Overridable via
+        VID2SIM_TRIPOSG_HOME / _WEIGHTS / RMBG_WEIGHTS.
         """
-        raise NotImplementedError(
-            f"local generative model '{self.gen_model}' not installed")
+        if self._triposg is not None:
+            return self._triposg
+        import sys
+
+        import torch
+
+        home = os.environ.get("VID2SIM_TRIPOSG_HOME", "/workspace/TripoSG")
+        for p in (home, os.path.join(home, "scripts")):
+            if p not in sys.path:
+                sys.path.insert(0, p)
+        from triposg.pipelines.pipeline_triposg import TripoSGPipeline
+        from image_process import prepare_image
+        from briarmbg import BriaRMBG
+
+        weights = os.path.join(home, "pretrained_weights")
+        tri_dir = os.environ.get("VID2SIM_TRIPOSG_WEIGHTS", os.path.join(weights, "TripoSG"))
+        rmbg_dir = os.environ.get("VID2SIM_RMBG_WEIGHTS", os.path.join(weights, "RMBG-1.4"))
+        pipe = TripoSGPipeline.from_pretrained(tri_dir).to("cuda", torch.float16)
+        rmbg = BriaRMBG.from_pretrained(rmbg_dir).to("cuda")
+        rmbg.eval()
+        self._triposg = (pipe, rmbg, prepare_image)
+        return self._triposg
+
+    def _run_gen(self, *, crop_path, coco_class):
+        """Run TripoSG (image-to-3D) on the crop -> open3d unit-cube mesh.
+
+        Removes the crop's background (BriaRMBG), samples a mesh, and returns it
+        in TripoSG's unit cube; coarse_align_to_cloud (caller) recovers real-world
+        scale/pose from the observed cloud. Steps/CFG/seed via
+        VID2SIM_TRIPOSG_STEPS / _CFG / _SEED. A raise here -> object dropped.
+        """
+        if crop_path is None:
+            raise RuntimeError("no crop staged for this object")
+        import numpy as np
+        import open3d as o3d
+        import torch
+
+        pipe, rmbg, prepare_image = self._load_triposg()
+        img = prepare_image(str(crop_path), bg_color=np.array([1.0, 1.0, 1.0]),
+                            rmbg_net=rmbg)
+        steps = int(os.environ.get("VID2SIM_TRIPOSG_STEPS", "50"))
+        cfg = float(os.environ.get("VID2SIM_TRIPOSG_CFG", "7.0"))
+        seed = int(os.environ.get("VID2SIM_TRIPOSG_SEED", "42"))
+        with torch.no_grad():
+            out = pipe(
+                image=img,
+                generator=torch.Generator(device=pipe.device).manual_seed(seed),
+                num_inference_steps=steps, guidance_scale=cfg,
+            ).samples[0]
+        verts = np.asarray(out[0], dtype=np.float64)
+        faces = np.ascontiguousarray(np.asarray(out[1], dtype=np.int32))
+        if len(verts) == 0 or len(faces) == 0:
+            raise RuntimeError("TripoSG produced an empty mesh")
+        m = o3d.geometry.TriangleMesh(
+            o3d.utility.Vector3dVector(verts),
+            o3d.utility.Vector3iVector(faces))
+        m.remove_duplicated_vertices()
+        m.remove_degenerate_triangles()
+        m.compute_vertex_normals()
+        return m
 
 
 def make_engine() -> Engine:
