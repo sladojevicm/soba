@@ -121,7 +121,7 @@ tiers:
     pose_method: mast3r
     tsdf: true
     voxel_size_m: 0.003
-    gate: { angular_deg: 100, completeness: 0.42, keep_angular_deg: 155, keep_completeness: 0.82 }  # complete bar recalibrated (was 140/0.60); keep bar provisional
+    gate: { angular_deg: 100, completeness: 0.42, keep_angular_deg: 155, keep_completeness: 0.85 }  # complete bar recalibrated (was 140/0.60); keep_completeness 0.85 -> geometric repair (Option D)
     generative_model: hunyuan3d    # BOTTOM band: image-to-3D (crop -> object)
     completion_model: pointr        # MIDDLE band: learned geometry shape-completion (GPU)
     physics: claude
@@ -132,7 +132,7 @@ tiers:
     pose_method: orbslam3
     tsdf: true
     voxel_size_m: 0.002
-    gate: { angular_deg: 90, completeness: 0.38, keep_angular_deg: 150, keep_completeness: 0.80 }  # complete bar recalibrated (was 130/0.55); keep bar provisional
+    gate: { angular_deg: 90, completeness: 0.38, keep_angular_deg: 150, keep_completeness: 0.85 }  # complete bar recalibrated (was 130/0.55); keep_completeness 0.85 -> geometric repair (Option D)
     generative_model: hunyuan3d    # BOTTOM band: image-to-3D (crop -> object)
     completion_model: pointr        # MIDDLE band: learned geometry shape-completion (GPU)
     physics: claude

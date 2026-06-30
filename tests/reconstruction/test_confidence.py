@@ -173,7 +173,7 @@ def test_tier_params_reads_pipeline_yaml():
 def test_tier_params_exposes_keep_bars():
     p = cf.tier_params(4)
     assert p["angular_deg"] == 90 and p["completeness"] == 0.38
-    assert p["keep_angular_deg"] == 150 and p["keep_completeness"] == 0.80
+    assert p["keep_angular_deg"] == 150 and p["keep_completeness"] == 0.85
 
 
 def test_tier1_is_all_generative_without_scoring():

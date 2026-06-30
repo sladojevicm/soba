@@ -103,14 +103,18 @@ def main() -> None:
     # tsdf + completion bands: fuse, then assemble (completion gets gap-filled).
     if fusable:
         print(f"fusing {len(fusable)} tsdf/completion object(s)...")
-        meshes = tsdf.fuse(b, track_ids=list(fusable), voxel_size=voxel)
+        meshes, vbgs = tsdf.fuse(b, track_ids=list(fusable), voxel_size=voxel,
+                                 return_grids=True)
         for tid, cloud in fusable.items():
             m = meshes[tid]
             if len(m.vertices) == 0:
                 continue
+            # Hand the live VBG to "completion" objects so the assembler runs
+            # Option-A fusion (keep observed geometry, graft the unobserved part).
             inputs.append(assembler.ObjectInput(
                 track_id=tid, coco_class=classes.get(tid, "obj"), mesh=m,
-                cloud=cloud, strategy=routed[tid][0], crop_path=_crop_path(b, tid)))
+                cloud=cloud, strategy=routed[tid][0], crop_path=_crop_path(b, tid),
+                vbg=vbgs.get(tid), voxel_size=voxel))
 
     if not inputs:
         print("nothing to assemble (everything routed to the deferred generative "

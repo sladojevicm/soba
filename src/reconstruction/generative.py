@@ -315,6 +315,15 @@ class LocalGpuEngine(Engine):
         if len(pts) < 32:
             raise RuntimeError("too few points to complete")
 
+        if self.completion_model == "patchcomplete":
+            # PatchComplete returns a 32^3 completed TSDF -> a MESH directly
+            # (no point cloud, no Poisson). Same frame as the input vertices.
+            from . import patchcomplete_completion
+            m = patchcomplete_completion.complete_mesh(pts)
+            if len(m.triangles) == 0:
+                raise RuntimeError("PatchComplete produced no triangles")
+            return _transfer_colors(mesh, m)
+
         if self.completion_model in ("pointr", "adapointr", "pointr_sn55"):
             from . import pointr_completion
             dense = pointr_completion.complete_points(pts, model=self.completion_model)
@@ -370,6 +379,8 @@ def make_engine() -> Engine:
     if os.environ.get("VID2SIM_LOCAL_GPU", "1") != "0" and LocalGpuEngine.is_available():
         return LocalGpuEngine(
             gen_model=os.environ.get("VID2SIM_GEN_MODEL", "triposg"),
-            completion_model=os.environ.get("VID2SIM_COMPLETION_MODEL", "pointr"),
+            # PatchComplete is the verdict completion pick (real-scan robust, runs
+            # locally); override with VID2SIM_COMPLETION_MODEL=pointr/compc/etc.
+            completion_model=os.environ.get("VID2SIM_COMPLETION_MODEL", "patchcomplete"),
         )
     return LocalEngine()

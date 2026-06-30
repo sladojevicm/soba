@@ -30,10 +30,15 @@ from pathlib import Path
 
 import numpy as np
 
-from . import decomp, exporter_gltf, ground, lookup, mass, schema, vlm
+from . import decomp, exporter_gltf, geometric_repair, ground, lookup, mass, schema, vlm
+from reconstruction import fusion
 
 WORLD_GRAVITY = [0.0, -9.81, 0.0]
 GROUND_SNAP_BAND_M = 0.15
+# Gaussian smoothing (in voxels) applied to the PATCHED/unobserved surface only
+# during Option-A fusion; observed geometry is left exact. 3.0 rounds the coarse
+# completion back well while keeping the real surface crisp.
+FUSION_SMOOTH_SIGMA = 3.0
 
 
 @dataclass
@@ -47,6 +52,12 @@ class ObjectInput:
     # arrive with the mesh ALREADY regenerated+aligned (mesh = RegenResult.mesh).
     strategy: str = "tsdf"
     crop_path: object = None   # objects/{id}/crop.jpg — the completion/regen image
+    # Option-A fusion (completion band): the live VoxelBlockGrid + its voxel size
+    # carry the per-voxel observed/unobserved mask. When present, a "completion"
+    # object KEEPS its observed geometry and grafts the engine's completion only
+    # where unobserved (fuse -> seal), instead of replacing the whole mesh.
+    vbg: object = None
+    voxel_size: float | None = None
     # Provenance for scene.json source.* (only meaningful for "generative").
     alignment_method: str = "n/a"
     scale_method: str = "n/a"
@@ -95,6 +106,53 @@ def _camera_pose(poses: list[np.ndarray]) -> dict:
     }
 
 
+def _fuse_and_seal(obj, center, completed):
+    """Option-A finalize for a "completion" object that carries its VBG: KEEP the
+    real observed geometry and graft the engine's completion only where unobserved
+    (fusion), then seal into a watertight collider (Option D). All in WORLD coords
+    (the VBG's frame); the result is recentred to the AABB centre like every other
+    branch. `completed` is the engine's completion in the RECENTRED frame (or None).
+    Returns (recentred_mesh, volume); falls back to a plain finalize on any failure.
+    """
+    import open3d as o3d
+
+    if completed is not None and len(completed.vertices):
+        comp = o3d.geometry.TriangleMesh(completed)
+        comp.translate(center.tolist())          # recentred -> world
+    else:
+        comp = mass.watertight_repair(obj.mesh)  # local Poisson completion (world)
+    try:
+        # smooth_sigma rounds the patched (unobserved) surface only — the coarse
+        # completion back (e.g. PatchComplete's 32^3) — leaving observed exact.
+        fused, _ = fusion.fuse_completion(obj.vbg, comp, obj.voxel_size,
+                                          smooth_sigma=FUSION_SMOOTH_SIGMA)
+        if len(fused.triangles):
+            sealed, vol = _tsdf_watertight_finalize(fused)
+            sealed.translate((-center).tolist())
+            return sealed, vol
+    except Exception:
+        pass
+    fm, vol, _ = mass.finalize_mesh(o3d.geometry.TriangleMesh(obj.mesh))
+    fm.translate((-center).tolist())
+    return fm, vol
+
+
+def _tsdf_watertight_finalize(mesh):
+    """Finalize a well-observed ("tsdf"/keep band) mesh into a watertight collider
+    (Option D). pymeshfix preserves the real observed surface and seals only the
+    unseen back; on any failure (pymeshfix missing, degenerate input) fall back to
+    the Poisson Step-7b repair so the pipeline never crashes. Returns (mesh, volume).
+    """
+    try:
+        rep, info = geometric_repair.watertight_collider(mesh)
+        if len(rep.triangles):
+            return rep, mass.closed_mesh_volume(rep)
+    except Exception:
+        pass
+    final_mesh, vol, _watertight = mass.finalize_mesh(mesh)
+    return final_mesh, vol
+
+
 def _assemble_object(obj: ObjectInput, oid: int, ground_y: float, out_dir: Path,
                      phys: vlm.Physics, tier_coacd: dict, decimate_to: int,
                      config_path: str, engine=None) -> dict:
@@ -125,16 +183,26 @@ def _assemble_object(obj: ObjectInput, oid: int, ground_y: float, out_dir: Path,
     #   * completion: the engine FILLS the unseen parts (Poisson locally; an
     #     image+geometry model on GPU). Falls back to the local repair if the
     #     engine declines (returns None).
-    #   * tsdf / generative: light Step-7b repair — closes the open shell (tsdf)
-    #     or is a no-op on an already-watertight generated mesh (generative).
+    #   * tsdf: well-observed "keep" band (cleared the keep_completeness bar) ->
+    #     geometric watertight repair (Option D): pymeshfix preserves the real
+    #     observed surface and seals only the unseen back into a watertight
+    #     2-manifold collider. Falls back to the Poisson repair if pymeshfix is
+    #     unavailable or fails.
+    #   * generative: light Step-7b repair — a no-op on an already-watertight
+    #     generated mesh.
     completed = None
     if obj.strategy == "completion" and engine is not None:
         completed = engine.complete(
             mesh=mesh, cloud=obj.cloud, crop_path=obj.crop_path,
             coco_class=obj.coco_class)
-    if completed is not None and len(completed.vertices):
+    if obj.strategy == "completion" and obj.vbg is not None and obj.voxel_size:
+        # Option A: keep real geometry, graft only the unobserved part, then seal.
+        final_mesh, vol = _fuse_and_seal(obj, center, completed)
+    elif completed is not None and len(completed.vertices):
         final_mesh = completed
         vol = mass.closed_mesh_volume(final_mesh)
+    elif obj.strategy == "tsdf":
+        final_mesh, vol = _tsdf_watertight_finalize(mesh)
     else:
         final_mesh, vol, _watertight = mass.finalize_mesh(mesh)
 
