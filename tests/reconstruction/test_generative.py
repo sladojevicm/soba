@@ -106,14 +106,19 @@ def test_local_gpu_falls_back_gracefully_when_models_missing():
     assert eng.regenerate(cloud=None, crop_path=None, coco_class="chair") is None
 
 
-def test_coarse_align_scales_unit_box_to_cloud_bbox():
+def test_coarse_align_uniform_scales_and_centres_on_cloud():
     o3d = pytest.importorskip("open3d")
-    box = o3d.geometry.TriangleMesh.create_box(1, 1, 1)  # unit cube at origin..1
+    box = o3d.geometry.TriangleMesh.create_box(1, 1, 1)  # unit cube
     box.compute_vertex_normals()
-    # target cloud spanning a 2 x 0.5 x 4 box centred at (10, 1, -3)
+    # target cloud spanning 2 x 0.5 x 4 centred at (10, 1, -3): the 0.5 axis is a
+    # "thin partial" — per-axis scaling would squash the cube. Uniform must not:
+    # the median of the per-axis ratios [2, 0.5, 4] is 2, so the cube -> 2x2x2,
+    # proportions intact, centred on the cloud.
     lo = np.array([9.0, 0.75, -5.0]); hi = np.array([11.0, 1.25, -1.0])
     cloud = np.array([lo, hi, (lo + hi) / 2])
     out = generative.coarse_align_to_cloud(box, cloud)
     ab = out.get_axis_aligned_bounding_box()
-    assert np.allclose(ab.min_bound, lo, atol=1e-6)
-    assert np.allclose(ab.max_bound, hi, atol=1e-6)
+    size = np.asarray(ab.max_bound) - np.asarray(ab.min_bound)
+    centre = (np.asarray(ab.max_bound) + np.asarray(ab.min_bound)) / 2
+    assert np.allclose(size, 2.0, atol=1e-6)          # stays a cube (no pancake)
+    assert np.allclose(centre, [10.0, 1.0, -3.0], atol=1e-6)

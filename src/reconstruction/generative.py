@@ -92,9 +92,19 @@ def coarse_align_to_cloud(mesh, cloud):
     ab = out.get_axis_aligned_bounding_box()
     m_lo, m_hi = np.asarray(ab.min_bound), np.asarray(ab.max_bound)
     m_size, m_centre = m_hi - m_lo, (m_lo + m_hi) / 2.0
-    scale = np.where(m_size > 1e-9, c_size / m_size, 1.0)
 
-    v = (np.asarray(out.vertices) - m_centre) * scale + c_centre
+    # UNIFORM scale (not per-axis): these objects routed generative because they
+    # are poorly observed, so the cloud is a thin partial — per-axis scaling
+    # squashes/bloats the model to fit it (masses ranged 0.1-25 kg). A single
+    # scale keeps the model's real proportions; take the MEDIAN of the per-axis
+    # ratios so one collapsed (thin/unseen) axis can't dominate. Yaw stays
+    # unconstrained — precise rotation is Phase-8 ICP.
+    ratios = c_size[m_size > 1e-9] / m_size[m_size > 1e-9]
+    s = float(np.median(ratios)) if len(ratios) else 1.0
+    if not np.isfinite(s) or s <= 0:
+        s = 1.0
+
+    v = (np.asarray(out.vertices) - m_centre) * s + c_centre
     out.vertices = o3d.utility.Vector3dVector(v)
     out.compute_vertex_normals()
     return out
