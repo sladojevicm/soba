@@ -28,13 +28,21 @@ from __future__ import annotations
 import numpy as np
 
 
-def grid_from_vbg(vbg, voxel, *, default_tsdf: float = 1.0):
-    """Rasterise a sparse VoxelBlockGrid into dense (T_real, W, lo).
+def grid_from_vbg(vbg, voxel, *, max_voxels: int = 12_000_000, default_tsdf: float = 1.0):
+    """Rasterise a sparse VoxelBlockGrid into dense (T_real, W, lo, grid_voxel).
 
     T_real: normalised truncated SDF in [-1, 1] (Open3D convention, negative
     inside), default +1 (empty) where no voxel was active. W: per-voxel weight,
     0 where unobserved. lo: world coord of grid index (0,0,0). `voxel` (the grid
     edge in metres) is passed in — the VBG does not expose it in this build.
+
+    To bound memory, the dense grid is CAPPED at ``max_voxels``: for a large object
+    at a fine voxel (e.g. a couch at 2 mm = hundreds of millions of cells) the grid
+    is coarsened to ``grid_voxel = voxel * factor`` by binning. Per coarse cell the
+    HIGHEST-WEIGHT fine sample wins, so the observed/unobserved mask is preserved
+    (any observed fine voxel -> observed coarse cell). The completion is coarse
+    (~3 cm) anyway, so this costs no real fusion fidelity. Returns the effective
+    grid_voxel so the caller samples the completion + marching-cubes at that step.
     """
     coords, indices = vbg.voxel_coordinates_and_flattened_indices()
     coords = coords.numpy()
@@ -43,13 +51,25 @@ def grid_from_vbg(vbg, voxel, *, default_tsdf: float = 1.0):
     weight = vbg.attribute("weight").reshape((-1, 1)).numpy()[indices, 0]
     voxel = float(voxel)
     lo = coords.min(0)
-    dims = (np.ceil((coords.max(0) - lo) / voxel).astype(int) + 1)
-    ijk = np.round((coords - lo) / voxel).astype(int)
+    hi = coords.max(0)
+
+    base = np.ceil((hi - lo) / voxel).astype(np.int64) + 1
+    n = int(np.prod(base))
+    factor = 1 if n <= max_voxels else int(np.ceil((n / max_voxels) ** (1.0 / 3.0)))
+    grid_voxel = voxel * factor
+
+    dims = (np.ceil((hi - lo) / grid_voxel).astype(int) + 1)
+    ijk = np.round((coords - lo) / grid_voxel).astype(int)
+    np.clip(ijk, 0, dims - 1, out=ijk)
+    # highest-weight fine sample wins per (coarse) cell -> stable-sort ascending so
+    # the last write into each cell is the max-weight one.
+    order = np.argsort(weight, kind="stable")
+    ijk, tsdf, weight = ijk[order], tsdf[order], weight[order]
     T = np.full(tuple(dims), default_tsdf, np.float32)
     W = np.zeros(tuple(dims), np.float32)
     T[ijk[:, 0], ijk[:, 1], ijk[:, 2]] = tsdf
     W[ijk[:, 0], ijk[:, 1], ijk[:, 2]] = weight
-    return T, W, lo
+    return T, W, lo, grid_voxel
 
 
 def mesh_to_grid_sdf(mesh, lo, voxel, dims, *, trunc_voxels: float = 4.0):
@@ -129,14 +149,15 @@ def fuse_completion(vbg, completion_mesh, voxel, *, blend_voxels: float = 3.0,
     (voxels) rounds the patched/unobserved surface only (observed stays exact).
     Returns (fused_mesh, info) with observed/unobserved voxel counts.
     """
-    T_real, W, lo = grid_from_vbg(vbg, voxel)
-    T_comp = mesh_to_grid_sdf(completion_mesh, lo, voxel, T_real.shape,
+    T_real, W, lo, gv = grid_from_vbg(vbg, voxel)
+    T_comp = mesh_to_grid_sdf(completion_mesh, lo, gv, T_real.shape,
                               trunc_voxels=trunc_voxels)
     fused = fuse_fields(T_real, W, T_comp, blend_voxels=blend_voxels,
                         smooth_sigma=smooth_sigma)
-    mesh = grid_to_mesh(fused, lo, voxel)
+    mesh = grid_to_mesh(fused, lo, gv)
     info = {
         "dims": list(T_real.shape),
+        "grid_voxel": gv,
         "observed_voxels": int((W > 0).sum()),
         "unobserved_voxels": int((W == 0).sum()),
         "fused_tris": len(mesh.triangles),
