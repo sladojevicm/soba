@@ -32,7 +32,9 @@ log "Install TripoSG inference deps (NOT torch — keep the pod's CUDA build)"
 # stay as the template shipped them.
 python3 -m pip install -q \
   "diffusers>=0.30" transformers accelerate huggingface_hub safetensors \
-  einops omegaconf peft trimesh pymeshlab scikit-image opencv-python-headless
+  einops omegaconf peft trimesh pymeshlab scikit-image opencv-python-headless \
+  diso   # differentiable iso-surface extraction — TripoSG's final mesh step
+         # (builds a CUDA ext at install; needs the template's nvcc)
 
 log "Download weights (TripoSG + BriaRMBG) -> $TRIPOSG_HOME/pretrained_weights"
 python3 - "$TRIPOSG_HOME" <<'PY'
