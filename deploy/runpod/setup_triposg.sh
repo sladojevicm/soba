@@ -32,7 +32,8 @@ log "Install TripoSG inference deps (NOT torch — keep the pod's CUDA build)"
 # stay as the template shipped them.
 python3 -m pip install -q \
   "diffusers>=0.30" transformers accelerate huggingface_hub safetensors \
-  einops omegaconf peft trimesh pymeshlab scikit-image opencv-python-headless
+  einops omegaconf peft trimesh pymeshlab scikit-image opencv-python-headless \
+  jaxtyping typeguard   # TripoSG type-annotation deps (pure python)
 
 # diso = TripoSG's differentiable iso-surface extraction (its final mesh step).
 # Its setup.py imports torch at build time, so it MUST skip build isolation to
