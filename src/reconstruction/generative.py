@@ -415,6 +415,12 @@ class LocalGpuEngine(Engine):
             o3d.utility.Vector3iVector(faces))
         m.remove_duplicated_vertices()
         m.remove_degenerate_triangles()
+        # TripoSG extracts at 505^3 -> ~1-3M triangles, which chokes the
+        # downstream Poisson finalize + CoACD decomposition. Decimate to a sane
+        # budget here so assembly stays fast; 0 disables.
+        budget = int(os.environ.get("VID2SIM_TRIPOSG_FACES", "40000"))
+        if budget > 0 and len(m.triangles) > budget:
+            m = m.simplify_quadric_decimation(budget)
         m.compute_vertex_normals()
         return m
 
