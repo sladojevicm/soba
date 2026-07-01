@@ -377,6 +377,21 @@ class LocalGpuEngine(Engine):
         for p in (home, os.path.join(home, "scripts")):
             if p not in sys.path:
                 sys.path.insert(0, p)
+        # TripoSG's inference_utils imports `diso` (a CUDA ext needing nvcc) at
+        # module top-level, even though it's ONLY used by the flash decoder. With
+        # use_flash_decoder=False we use marching cubes, so register a stub so the
+        # import succeeds without nvcc. DiffDMC is never instantiated on this path.
+        if "diso" not in sys.modules:
+            try:
+                import diso  # noqa: F401  (real build present, e.g. on a pod)
+            except Exception:
+                import types
+                stub = types.ModuleType("diso")
+                class _NoDiso:  # noqa: N801
+                    def __init__(self, *a, **k):
+                        raise RuntimeError("diso not built; use VID2SIM_TRIPOSG_FLASH=0")
+                stub.DiffDMC = _NoDiso
+                sys.modules["diso"] = stub
         from triposg.pipelines.pipeline_triposg import TripoSGPipeline
         from image_process import prepare_image
         from briarmbg import BriaRMBG
@@ -410,11 +425,23 @@ class LocalGpuEngine(Engine):
         steps = int(os.environ.get("VID2SIM_TRIPOSG_STEPS", "50"))
         cfg = float(os.environ.get("VID2SIM_TRIPOSG_CFG", "7.0"))
         seed = int(os.environ.get("VID2SIM_TRIPOSG_SEED", "42"))
+        # The flash decoder needs `diso` (a CUDA ext requiring nvcc). Default OFF so
+        # TripoSG uses the marching-cubes extractor instead — no nvcc/diso needed.
+        # Set VID2SIM_TRIPOSG_FLASH=1 on a pod that has diso built.
+        use_flash = os.environ.get("VID2SIM_TRIPOSG_FLASH", "0") == "1"
+        # Mesh-extraction resolution. The default (dense 8 / hierarchical 9) decodes
+        # ~16M points through the VAE at once and OOMs an 8 GB GPU; 7/8 keeps it in
+        # memory and is plenty for a physics object (we decimate to 40k after).
+        # Raise on a big-VRAM host via VID2SIM_TRIPOSG_DENSE / _HIER.
+        dense = int(os.environ.get("VID2SIM_TRIPOSG_DENSE", "7"))
+        hier = int(os.environ.get("VID2SIM_TRIPOSG_HIER", "8"))
         with torch.no_grad():
             out = pipe(
                 image=img,
                 generator=torch.Generator(device=pipe.device).manual_seed(seed),
                 num_inference_steps=steps, guidance_scale=cfg,
+                use_flash_decoder=use_flash,
+                dense_octree_depth=dense, hierarchical_octree_depth=hier,
             ).samples[0]
         verts = np.asarray(out[0], dtype=np.float64)
         faces = np.ascontiguousarray(np.asarray(out[1], dtype=np.int32))
