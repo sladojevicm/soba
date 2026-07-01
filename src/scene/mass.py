@@ -112,6 +112,26 @@ def volume_m3(mesh) -> tuple[float, bool]:
     return vol, watertight
 
 
+def hull_volume(mesh) -> float:
+    """Convex-hull volume — a SOLID bounding proxy for objects whose true enclosed
+    volume is an unreliable measure of "how much stuff is there".
+
+    The generative (TripoSG) meshes are thin closed shells: a chair's real enclosed
+    volume is nearly zero (legs + a thin seat/back), and worse, whether decimation
+    keeps the mesh watertight flips it between the true-tiny volume and a
+    Poisson/hull volume — so identical chairs got 0.05 kg or 30 kg. The hull is a
+    stable per-object size, and mass_kg's solidity[class] factor is defined against
+    exactly this solid bounding volume (it discounts the air), so the two compose
+    correctly. Returns 0.0 on any failure."""
+    if len(mesh.vertices) == 0:
+        return 0.0
+    try:
+        hull, _ = mesh.compute_convex_hull()
+        return _signed_volume(hull)
+    except Exception:
+        return 0.0
+
+
 def closed_mesh_volume(mesh) -> float:
     """Volume of an ALREADY-finalized mesh (e.g. a completion engine's output) —
     no further repair. Signed-tetrahedron volume, bounded above by the convex
