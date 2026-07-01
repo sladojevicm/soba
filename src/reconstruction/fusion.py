@@ -140,9 +140,34 @@ def grid_to_mesh(field, lo, voxel, *, level: float = 0.0):
     return m
 
 
+def _interior_components(field):
+    """(labels, n) of the connected INSIDE region (field<0). Fast — operates on
+    the voxel grid, not the mesh (o3d's mesh cluster is pathologically slow on a
+    noisy couch: minutes). A noisy object has hundreds of interior blobs; a clean
+    one has a handful."""
+    from scipy import ndimage as ndi
+    return ndi.label(field < 0.0)
+
+
+def keep_largest_interior(field):
+    """Erase every interior blob but the biggest (set it to +truncation = empty),
+    so marching cubes emits ONE closed body instead of the main shell plus noise
+    fragments. Grid-based -> fast."""
+    labels, n = _interior_components(field)
+    if n <= 1:
+        return field
+    sizes = np.bincount(labels.ravel())
+    sizes[0] = 0
+    out = field.copy()
+    out[(labels != int(sizes.argmax())) & (field < 0.0)] = 1.0
+    return out
+
+
 def largest_component(mesh):
-    """Keep only the biggest connected component (drops TSDF noise blobs that
-    otherwise survive as floating fragments). No-op on an empty/one-piece mesh."""
+    """Keep only the biggest connected component of a MESH. Kept for callers that
+    already have a mesh; the fusion path uses the far faster grid-based
+    keep_largest_interior instead (o3d mesh clustering is very slow on big noisy
+    meshes)."""
     import open3d as o3d
 
     if len(mesh.triangles) == 0:
@@ -161,7 +186,8 @@ def largest_component(mesh):
 
 def fuse_completion(vbg, completion_mesh, voxel, *, blend_voxels: float = 3.0,
                     trunc_voxels: float = 4.0, smooth_sigma: float = 0.0,
-                    pad: int = 4, keep_largest: bool = True):
+                    pad: int = 4, keep_largest: bool = True,
+                    denoise_sigma: float = 1.5, denoise_threshold: int = 150):
     """End-to-end: real VBG + a completion mesh -> a fused mesh that keeps the
     observed geometry and grafts the completion only where unobserved.
 
@@ -169,25 +195,38 @@ def fuse_completion(vbg, completion_mesh, voxel, *, blend_voxels: float = 3.0,
     (voxels) rounds the patched/unobserved surface only (observed stays exact).
     `pad` adds an empty (+truncation) border so marching cubes CLOSES the surface
     instead of leaving open boundaries where a big object fills the grid to the edge
-    (the holey-couch bug). `keep_largest` drops floating noise blobs. Returns
-    (fused_mesh, info).
+    (the holey-couch bug). `keep_largest` erases interior noise blobs (grid-based,
+    fast). ADAPTIVE DENOISE: an object whose interior fragments into more than
+    `denoise_threshold` blobs is a NOISY scan (the couch: ~500 blobs; a clean chair:
+    a handful) — it gets a global gaussian of `denoise_sigma` so marching cubes
+    yields a solid CLOSED body instead of a holey shell. Clean objects are left
+    crisp (below the threshold -> no global smoothing). Returns (fused_mesh, info).
     """
+    from scipy import ndimage as ndi
+
     T_real, W, lo, gv = grid_from_vbg(vbg, voxel)
     T_comp = mesh_to_grid_sdf(completion_mesh, lo, gv, T_real.shape,
                               trunc_voxels=trunc_voxels)
     fused = fuse_fields(T_real, W, T_comp, blend_voxels=blend_voxels,
                         smooth_sigma=smooth_sigma)
+
+    _, n_blobs = _interior_components(fused)
+    denoised = denoise_sigma > 0 and n_blobs > denoise_threshold
+    if denoised:
+        fused = ndi.gaussian_filter(np.ascontiguousarray(fused), denoise_sigma)
+    if keep_largest:
+        fused = keep_largest_interior(fused)
+
     grid_lo = lo
     if pad > 0:
         fused = np.pad(fused, pad, mode="constant", constant_values=1.0)
         grid_lo = lo - pad * gv
     mesh = grid_to_mesh(fused, grid_lo, gv)
-    if keep_largest:
-        mesh = largest_component(mesh)
-        mesh.compute_vertex_normals()
     info = {
         "dims": list(T_real.shape),
         "grid_voxel": gv,
+        "interior_blobs": int(n_blobs),
+        "denoised": bool(denoised),
         "observed_voxels": int((W > 0).sum()),
         "unobserved_voxels": int((W == 0).sum()),
         "fused_tris": len(mesh.triangles),
