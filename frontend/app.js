@@ -165,16 +165,22 @@ async function addObject(id, sceneJson) {
   // 1. Render mesh (do NOT collapse to one mesh — that strips PBR materials).
   const gltf = await gltfLoader.loadAsync(`/meshes/${id}.glb`);
   const obj3d = gltf.scene;
-  // distinct per-object color (scene.json `color` hex) so comparisons are legible
-  if (entry.color !== undefined && entry.color !== null) {
-    obj3d.traverse((o) => {
-      if (o.isMesh) {
-        o.material = new THREE.MeshStandardMaterial({
-          color: entry.color, roughness: 0.55, metalness: 0.0,
-        });
-      }
-    });
-  }
+  // Render DOUBLE-SIDED: these are TSDF / marching-cubes / completion meshes whose
+  // triangle winding isn't perfectly consistent (e.g. Taubin smoothing can flip
+  // normals on thin features), so single-sided (default) culls the back-facing
+  // ones and they read as SEE-THROUGH HOLES. DoubleSide renders both faces -> the
+  // surface looks solid regardless of winding. Also apply the optional per-object
+  // comparison color.
+  const hasColor = entry.color !== undefined && entry.color !== null;
+  obj3d.traverse((o) => {
+    if (!o.isMesh) return;
+    if (hasColor) {
+      o.material = new THREE.MeshStandardMaterial({
+        color: entry.color, roughness: 0.55, metalness: 0.0,
+      });
+    }
+    if (o.material) o.material.side = THREE.DoubleSide;
+  });
   enableShadows(obj3d);
   obj3d.position.set(tx, ty, tz);
   obj3d.quaternion.set(q[0], q[1], q[2], q[3]);
