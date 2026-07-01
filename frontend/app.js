@@ -201,10 +201,15 @@ async function addObject(id, sceneJson) {
   centroidN += 1;
   controls.target.copy(sceneCentroid.clone().multiplyScalar(1 / centroidN));
 
-  // 5. Rigid body — mass set ON THE DESC, BEFORE createRigidBody (fix P1/D5).
-  // is_rigid means "non-deforming", not "immovable": every object is dynamic.
+  // 5. Rigid body. Objects start FIXED (static) so a reconstructed room LOADS
+  // STABLE — the meshes are placed at their observed positions and are often
+  // sized by a class prior, so several can overlap; if they were all dynamic on
+  // load, Rapier ejects the interpenetrations and the whole scene EXPLODES. Each
+  // body becomes dynamic on demand when you click it (see setupInteraction), so
+  // you can still push it / drop the ball on it. Mass is set on the desc (fix
+  // P1/D5) and applies once the body turns dynamic.
   const phys = entry.physics;
-  const desc = RAPIER.RigidBodyDesc.dynamic()
+  const desc = RAPIER.RigidBodyDesc.fixed()
     .setTranslation(tx, ty, tz)
     .setRotation({ x: q[0], y: q[1], z: q[2], w: q[3] })
     .setAdditionalMass(phys.mass_kg);
@@ -368,6 +373,11 @@ function setupInteraction() {
       const root = rootOf(hits[0].object);
       const body = root && bodyFor(root);
       if (body) {
+        // wake the object into physics on first touch: fixed -> dynamic so it can
+        // be pushed / fall. Only the clicked object moves, so no chain explosion.
+        if (body.bodyType() !== RAPIER.RigidBodyType.Dynamic) {
+          body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
+        }
         selected = { body, mesh: root };
         highlight(root, true);
         // set up a drag plane through the hit point, facing the camera
