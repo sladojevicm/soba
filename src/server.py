@@ -151,7 +151,19 @@ def create_app(
     if frontend_dir.is_dir():
         routes.append(Mount("/", app=StaticFiles(directory=str(frontend_dir))))
 
-    return Starlette(routes=routes)
+    # No-store everything: the viewer is a live dev tool and meshes/app.js get
+    # regenerated in place, so a browser MUST NOT serve a stale cached mesh (a
+    # rebuilt object otherwise renders as its old geometry until a hard refresh).
+    from starlette.middleware import Middleware
+    from starlette.middleware.base import BaseHTTPMiddleware
+
+    async def _no_store(request, call_next):
+        resp = await call_next(request)
+        resp.headers["Cache-Control"] = "no-store, must-revalidate"
+        return resp
+
+    return Starlette(routes=routes,
+                     middleware=[Middleware(BaseHTTPMiddleware, dispatch=_no_store)])
 
 
 # Module-level app for `uvicorn server:app` (uses env/defaults).
