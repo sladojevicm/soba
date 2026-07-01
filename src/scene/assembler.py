@@ -112,6 +112,22 @@ def _camera_pose(poses: list[np.ndarray]) -> dict:
     }
 
 
+# How far (metres) the completion may INVENT geometry away from observed surface,
+# per class. Flat objects with a large empty underside (a table's leg room) must
+# fill only a thin band under the observed top — otherwise the completion fills the
+# whole void as a solid blob. Bulky/solid objects (couch) fill generously so their
+# unseen back closes. See fusion.fuse_completion(max_fill_dist_m).
+FILL_DIST_BY_CLASS = {
+    "dining table": 0.06, "table": 0.06, "desk": 0.06, "bench": 0.08,
+    "tv": 0.06, "laptop": 0.06,
+}
+FILL_DIST_DEFAULT = 0.25
+
+
+def _fill_dist(coco_class: str) -> float:
+    return FILL_DIST_BY_CLASS.get((coco_class or "").lower(), FILL_DIST_DEFAULT)
+
+
 def _fuse_and_seal(obj, center, completed):
     """Option-A finalize for a "completion" object that carries its VBG: KEEP the
     real observed geometry and graft the engine's completion only where unobserved
@@ -131,7 +147,8 @@ def _fuse_and_seal(obj, center, completed):
         # smooth_sigma rounds the patched (unobserved) surface only — the coarse
         # completion back (e.g. PatchComplete's 32^3) — leaving observed exact.
         fused, _ = fusion.fuse_completion(obj.vbg, comp, obj.voxel_size,
-                                          smooth_sigma=FUSION_SMOOTH_SIGMA)
+                                          smooth_sigma=FUSION_SMOOTH_SIGMA,
+                                          max_fill_dist_m=_fill_dist(obj.coco_class))
         if len(fused.triangles):
             sealed, vol = _tsdf_watertight_finalize(fused)
             sealed.translate((-center).tolist())

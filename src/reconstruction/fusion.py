@@ -93,7 +93,7 @@ def mesh_to_grid_sdf(mesh, lo, voxel, dims, *, trunc_voxels: float = 4.0):
 
 
 def fuse_fields(T_real, W, T_comp, *, blend_voxels: float = 3.0, w_min: float = 0.0,
-                smooth_sigma: float = 0.0):
+                smooth_sigma: float = 0.0, max_fill_voxels: float | None = None):
     """fused = observed ? T_real : T_comp, with a linear blend over `blend_voxels`
     on the unobserved side of the boundary so the graft seam is smooth.
 
@@ -105,12 +105,18 @@ def fuse_fields(T_real, W, T_comp, *, blend_voxels: float = 3.0, w_min: float = 
     (alpha=1) while the coarse completion (e.g. PatchComplete's blocky 32^3 back)
     and the seam get rounded. The smoothing acts on the SDF, so marching cubes
     yields a smooth surface there without touching the real geometry.
+
+    max_fill_voxels limits how FAR from observed geometry the completion may
+    invent: beyond that distance the field is forced empty. This stops the
+    completion from filling LARGE open voids it shouldn't — e.g. the space UNDER a
+    table (a solid blob) — while still closing thin unseen shells / backs that sit
+    near observed surface. None = unlimited (fill everywhere unobserved).
     """
     from scipy import ndimage as ndi
 
     observed = W > w_min
+    dist_out = ndi.distance_transform_edt(~observed)       # 0 on observed, grows outward
     if blend_voxels > 0:
-        dist_out = ndi.distance_transform_edt(~observed)   # 0 on observed, grows outward
         alpha = np.clip(1.0 - dist_out / blend_voxels, 0.0, 1.0).astype(np.float32)
     else:
         alpha = observed.astype(np.float32)
@@ -118,6 +124,8 @@ def fuse_fields(T_real, W, T_comp, *, blend_voxels: float = 3.0, w_min: float = 
     if smooth_sigma > 0:
         smoothed = ndi.gaussian_filter(fused, smooth_sigma)
         fused = (alpha * fused + (1.0 - alpha) * smoothed).astype(np.float32)
+    if max_fill_voxels is not None:
+        fused[dist_out > max_fill_voxels] = 1.0            # too far from real -> empty
     return fused
 
 
@@ -187,7 +195,8 @@ def largest_component(mesh):
 def fuse_completion(vbg, completion_mesh, voxel, *, blend_voxels: float = 3.0,
                     trunc_voxels: float = 4.0, smooth_sigma: float = 0.0,
                     pad: int = 4, keep_largest: bool = True,
-                    denoise_sigma: float = 1.5, denoise_threshold: int = 150):
+                    denoise_sigma: float = 1.5, denoise_threshold: int = 150,
+                    max_fill_dist_m: float | None = 0.25):
     """End-to-end: real VBG + a completion mesh -> a fused mesh that keeps the
     observed geometry and grafts the completion only where unobserved.
 
@@ -207,8 +216,9 @@ def fuse_completion(vbg, completion_mesh, voxel, *, blend_voxels: float = 3.0,
     T_real, W, lo, gv = grid_from_vbg(vbg, voxel)
     T_comp = mesh_to_grid_sdf(completion_mesh, lo, gv, T_real.shape,
                               trunc_voxels=trunc_voxels)
+    max_fill_voxels = (max_fill_dist_m / gv) if max_fill_dist_m else None
     fused = fuse_fields(T_real, W, T_comp, blend_voxels=blend_voxels,
-                        smooth_sigma=smooth_sigma)
+                        smooth_sigma=smooth_sigma, max_fill_voxels=max_fill_voxels)
 
     _, n_blobs = _interior_components(fused)
     denoised = denoise_sigma > 0 and n_blobs > denoise_threshold
