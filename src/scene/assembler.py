@@ -13,9 +13,9 @@ Per object (fix Z1 DERIVED/RENAMED, Z-H placement, Z-F/Z-O collider):
   * id   = slug(class)_oid, oid a dense 2-digit index over surviving objects (T1/D1)
   * mesh = recentred to its own AABB centre so the rigid body rotates about its
            centre; transform.translation carries the world position, with the
-           bottom snapped to ground_y only when the object actually sits on the
-           floor (within 0.15 m, fix Z-H). rotation_quat is identity (a TSDF mesh
-           is already world-axis-aligned), scale 1.0 (baked in).
+           bottom dropped onto the ground plane (x,z keep the observed position).
+           rotation_quat is identity (a TSDF mesh is already world-axis-aligned),
+           scale 1.0 (baked in).
   * collider = CoACD convex hulls (fix Z-O)
   * physics  = mass from geometry (mass.py) + material/friction/restitution from
                the lookup table (vlm.py fallback; physics_origin "lookup")
@@ -34,7 +34,6 @@ from . import decomp, exporter_gltf, geometric_repair, ground, lookup, mass, sch
 from reconstruction import fusion
 
 WORLD_GRAVITY = [0.0, -9.81, 0.0]
-GROUND_SNAP_BAND_M = 0.15
 # Gaussian smoothing (in voxels) applied to the PATCHED/unobserved surface only
 # during Option-A fusion; observed geometry is left exact. 3.0 rounds the coarse
 # completion back well while keeping the real surface crisp.
@@ -188,13 +187,17 @@ def _assemble_object(obj: ObjectInput, oid: int, ground_y: float, out_dir: Path,
     lo, hi = np.asarray(aabb.min_bound), np.asarray(aabb.max_bound)
     center = (lo + hi) / 2.0
     half_h = float(hi[1] - lo[1]) / 2.0
-    world_bottom = float(lo[1])
 
-    # placement (fix Z-H): keep observed height; snap to floor only if on it
-    if abs(world_bottom - ground_y) <= GROUND_SNAP_BAND_M:
-        ty = ground_y + half_h
-    else:
-        ty = float(center[1])
+    # placement: DROP every object so its bottom rests on the ground plane. The
+    # observed scan height is unreliable — partial/holey meshes and a noisy ground
+    # estimate leave objects floating — and this scene is furniture standing on the
+    # floor, so ground-snapping is both more correct and removes the "floating"
+    # cue. (Earlier the snap only fired when the bottom was already near the floor,
+    # which is exactly why some objects floated.) Horizontal (x, z) keeps the real
+    # observed position. Objects that genuinely rest ON another object (a bottle on
+    # a table) would need stacking logic — not in this scene; revisit with the
+    # de-overlap pass.
+    ty = ground_y + half_h
     translation = [float(center[0]), ty, float(center[2])]
 
     # recentre mesh to its AABB centre so the body rotates about its centre
