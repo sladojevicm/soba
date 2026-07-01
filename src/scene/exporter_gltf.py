@@ -56,8 +56,18 @@ def write_glb(mesh, path: Path | str, *, decimate_to: int | None = None,
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    m = smooth_taubin(mesh, smooth_iters) if smooth_iters else mesh
-    m = decimate(m, decimate_to) if decimate_to else m
+    # Decimate FIRST (on the clean input), THEN smooth. Taubin can break
+    # manifold-ness (self-intersections -> dark shading/see-through artefacts in
+    # the browser); decimating a broken mesh then tears real boundaries. Order +
+    # a guard: if smoothing turns a WATERTIGHT mesh non-watertight, discard the
+    # smooth and keep the clean decimated mesh (fusion output is already smooth,
+    # so it loses nothing; a genuinely faceted non-watertight input still gets
+    # polished).
+    m = decimate(mesh, decimate_to) if decimate_to else mesh
+    if smooth_iters:
+        s = smooth_taubin(m, smooth_iters)
+        if not (m.is_watertight() and not s.is_watertight()):
+            m = s
     if not m.has_vertex_normals():
         m.compute_vertex_normals()
     ok = o3d.io.write_triangle_mesh(str(path), m)
