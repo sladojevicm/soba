@@ -31,17 +31,22 @@ def smooth_taubin(mesh, iterations: int):
 
     Taubin's lambda/mu pair (Open3D defaults 0.5 / -0.53) counteracts the shrink
     of plain Laplacian, so a watertight mesh stays watertight and the enclosed
-    volume is preserved. Topology is cleaned first (Taubin needs manifold input).
+    volume is preserved.
+
+    We ONLY weld coincident vertices/triangles first — that connects the
+    marching-cubes / TripoSG triangle soup so neighbour-averaging actually
+    propagates. We deliberately do NOT run remove_degenerate_triangles /
+    remove_non_manifold_edges here: those DELETE geometry, and on the thin shells
+    the generative (TripoSG) meshes are, they punch holes and shred the surface
+    into ribbons (visible tearing). Smoothing must never remove surface.
     """
     if iterations <= 0 or len(mesh.vertices) == 0:
         return mesh
     import open3d as o3d
 
     m = o3d.geometry.TriangleMesh(mesh)  # copy — never mutate the caller's mesh
-    m.remove_duplicated_vertices()
+    m.remove_duplicated_vertices()   # weld only — connects the soup, deletes nothing
     m.remove_duplicated_triangles()
-    m.remove_degenerate_triangles()
-    m.remove_non_manifold_edges()
     m = m.filter_smooth_taubin(number_of_iterations=int(iterations))
     m.compute_vertex_normals()
     return m
