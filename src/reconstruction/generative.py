@@ -70,39 +70,72 @@ def _transfer_colors(src_mesh, dst_mesh):
     return dst_mesh
 
 
-def coarse_align_to_cloud(mesh, cloud):
-    """Scale + place a unit-cube GENERATED mesh onto the observed cloud's AABB.
+# Canonical real-world size (metres) of the LARGEST object dimension, per COCO
+# class. A generated mesh arrives in a unit cube with NO real size, and every
+# object in the generative band is poorly observed (that is WHY it routed here),
+# so the observed cloud's extent is an unreliable partial fragment and cannot set
+# the size. Instead we scale each mesh to a fixed physical size for its class so
+# masses are consistent and plausible; the cloud is used only for placement.
+# Value = the object's biggest side in metres (chair/table ~ height or length).
+CLASS_SIZE_PRIOR_M = {
+    "chair": 0.90,          # seat-back height
+    "couch": 2.00,          # length
+    "sofa": 2.00,
+    "bench": 1.50,
+    "dining table": 1.40,   # length
+    "table": 1.20,
+    "desk": 1.40,
+    "bed": 2.00,
+    "tv": 1.00,
+    "laptop": 0.35,
+    "bottle": 0.25,         # height
+    "cup": 0.12,
+    "bowl": 0.18,
+    "vase": 0.30,
+    "potted plant": 0.45,
+    "book": 0.25,
+}
+DEFAULT_SIZE_PRIOR_M = 0.60  # unknown class -> a modest object
 
-    A generative model returns its mesh in a unit cube with no real size; this
-    recovers a coarse world pose by matching the mesh's bounding box to the
-    observed cloud's bounding box (per-axis scale + centre). This is the
-    "coarse_aligned" / "class_prior" path — the precise FPFH-rotation + per-axis
-    ICP is Phase 8 (icp_align.py). CPU-only (Open3D), so it runs without a GPU.
+
+def coarse_align_to_cloud(mesh, cloud, coco_class: str | None = None):
+    """Scale a unit-cube GENERATED mesh to a real size and place it on the cloud.
+
+    A generative model returns its mesh in a unit cube with no real size. These
+    objects are ALL poorly observed (that is why they routed generative), so the
+    observed cloud is a partial fragment whose extent cannot be trusted for size
+    (fragment-fitting gave masses of 0.1-25 kg for the same chairs). So SIZE comes
+    from a per-class real-world prior (CLASS_SIZE_PRIOR_M) — a uniform scale that
+    preserves the model's proportions — and the cloud sets only PLACEMENT (its
+    centroid). This is the "coarse_aligned" / "class_prior" path; precise
+    FPFH-rotation + ICP is Phase 8 (icp_align.py). CPU-only, runs without a GPU.
     """
     import numpy as np
     import open3d as o3d
 
     cloud = np.asarray(cloud, dtype=np.float64)
-    if len(cloud) < 2 or len(mesh.vertices) == 0:
+    if len(mesh.vertices) == 0:
         return mesh
-    c_lo, c_hi = cloud.min(axis=0), cloud.max(axis=0)
-    c_size, c_centre = c_hi - c_lo, (c_lo + c_hi) / 2.0
 
     out = o3d.geometry.TriangleMesh(mesh)  # copy
     ab = out.get_axis_aligned_bounding_box()
     m_lo, m_hi = np.asarray(ab.min_bound), np.asarray(ab.max_bound)
     m_size, m_centre = m_hi - m_lo, (m_lo + m_hi) / 2.0
+    m_max = float(m_size.max())
+    if m_max <= 1e-9:
+        return mesh
 
-    # UNIFORM scale (not per-axis): these objects routed generative because they
-    # are poorly observed, so the cloud is a thin partial — per-axis scaling
-    # squashes/bloats the model to fit it (masses ranged 0.1-25 kg). A single
-    # scale keeps the model's real proportions; take the MEDIAN of the per-axis
-    # ratios so one collapsed (thin/unseen) axis can't dominate. Yaw stays
-    # unconstrained — precise rotation is Phase-8 ICP.
-    ratios = c_size[m_size > 1e-9] / m_size[m_size > 1e-9]
-    s = float(np.median(ratios)) if len(ratios) else 1.0
-    if not np.isfinite(s) or s <= 0:
-        s = 1.0
+    # SIZE: class prior / model's largest extent -> uniform scale (keeps shape).
+    target = CLASS_SIZE_PRIOR_M.get((coco_class or "").lower(), DEFAULT_SIZE_PRIOR_M)
+    s = target / m_max
+
+    # PLACEMENT: centre on the observed cloud so the object lands where it was
+    # seen (horizontal); the assembler's ground pass fixes the vertical drop.
+    # Fall back to the mesh's own centre if the cloud is empty/degenerate.
+    if len(cloud) >= 1:
+        c_centre = (cloud.min(axis=0) + cloud.max(axis=0)) / 2.0
+    else:
+        c_centre = m_centre
 
     v = (np.asarray(out.vertices) - m_centre) * s + c_centre
     out.vertices = o3d.utility.Vector3dVector(v)
@@ -252,9 +285,9 @@ class RunPodEngine(Engine):
             mode="regenerate", model=self.gen_model, crop_path=crop_path,
             coco_class=coco_class, cloud=cloud)
         gen_mesh = self._decode_mesh(self._runsync(self.gen_endpoint, payload))
-        # The model returns a unit-cube mesh; scale/place it against the observed
-        # cloud (coarse AABB fit; precise FPFH+ICP is Phase 8).
-        aligned = coarse_align_to_cloud(gen_mesh, cloud)
+        # The model returns a unit-cube mesh; scale it to a class-size prior and
+        # place it on the observed cloud (precise FPFH+ICP is Phase 8).
+        aligned = coarse_align_to_cloud(gen_mesh, cloud, coco_class)
         return RegenResult(mesh=aligned, alignment_method="coarse_aligned",
                            scale_method="class_prior")
 
@@ -303,7 +336,7 @@ class LocalGpuEngine(Engine):
     def regenerate(self, *, cloud, crop_path, coco_class):
         try:
             gen_mesh = self._run_gen(crop_path=crop_path, coco_class=coco_class)
-            aligned = coarse_align_to_cloud(gen_mesh, cloud)
+            aligned = coarse_align_to_cloud(gen_mesh, cloud, coco_class)
             return RegenResult(mesh=aligned, alignment_method="coarse_aligned",
                                scale_method="class_prior")
         except Exception as e:  # missing model / OOM -> drop (as with no GPU)

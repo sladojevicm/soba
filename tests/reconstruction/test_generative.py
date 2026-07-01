@@ -106,19 +106,31 @@ def test_local_gpu_falls_back_gracefully_when_models_missing():
     assert eng.regenerate(cloud=None, crop_path=None, coco_class="chair") is None
 
 
-def test_coarse_align_uniform_scales_and_centres_on_cloud():
+def test_coarse_align_uses_class_prior_for_size_not_the_cloud():
     o3d = pytest.importorskip("open3d")
     box = o3d.geometry.TriangleMesh.create_box(1, 1, 1)  # unit cube
     box.compute_vertex_normals()
-    # target cloud spanning 2 x 0.5 x 4 centred at (10, 1, -3): the 0.5 axis is a
-    # "thin partial" — per-axis scaling would squash the cube. Uniform must not:
-    # the median of the per-axis ratios [2, 0.5, 4] is 2, so the cube -> 2x2x2,
-    # proportions intact, centred on the cloud.
-    lo = np.array([9.0, 0.75, -5.0]); hi = np.array([11.0, 1.25, -1.0])
+    # The cloud is a PARTIAL fragment (0.2 x 0.05 x 0.4) — its extent must NOT set
+    # the size (that gave 0.1-25 kg chairs). Size comes from the class prior: a
+    # chair's largest side is 0.90 m, so the unit cube (max extent 1) -> 0.90 cube,
+    # proportions intact, and it is CENTRED on the cloud (placement only).
+    lo = np.array([9.0, 0.975, -5.2]); hi = np.array([9.2, 1.025, -4.8])
     cloud = np.array([lo, hi, (lo + hi) / 2])
-    out = generative.coarse_align_to_cloud(box, cloud)
+    out = generative.coarse_align_to_cloud(box, cloud, "chair")
     ab = out.get_axis_aligned_bounding_box()
     size = np.asarray(ab.max_bound) - np.asarray(ab.min_bound)
     centre = (np.asarray(ab.max_bound) + np.asarray(ab.min_bound)) / 2
-    assert np.allclose(size, 2.0, atol=1e-6)          # stays a cube (no pancake)
-    assert np.allclose(centre, [10.0, 1.0, -3.0], atol=1e-6)
+    assert np.allclose(size, 0.90, atol=1e-6)                 # class prior, not cloud
+    assert np.allclose(centre, [9.1, 1.0, -5.0], atol=1e-6)   # placed on the cloud
+
+
+def test_coarse_align_unknown_class_uses_default_size():
+    o3d = pytest.importorskip("open3d")
+    box = o3d.geometry.TriangleMesh.create_box(2, 1, 1)  # max extent 2
+    box.compute_vertex_normals()
+    cloud = np.array([[0.0, 0.0, 0.0], [0.1, 0.1, 0.1]])
+    out = generative.coarse_align_to_cloud(box, cloud, "unicorn")
+    ab = out.get_axis_aligned_bounding_box()
+    size = np.asarray(ab.max_bound) - np.asarray(ab.min_bound)
+    # default prior 0.60 on the largest side; proportions kept (2:1:1 -> 0.6:0.3:0.3)
+    assert np.allclose(size, [0.60, 0.30, 0.30], atol=1e-6)
