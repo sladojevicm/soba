@@ -41,6 +41,11 @@ def main() -> None:
     ap.add_argument("--bundle", required=True, type=Path)
     ap.add_argument("--tier", type=int, default=4, choices=[2, 3, 4])
     ap.add_argument("--out", required=True, type=Path)
+    ap.add_argument("--force-strategy", choices=["tsdf", "completion", "generative"],
+                    default=None,
+                    help="Override the gate: route EVERY object to this strategy "
+                         "(e.g. 'completion' to fuse+fill all objects from their "
+                         "real TSDF instead of regenerating). For A/B comparison.")
     ap.add_argument("--smooth-iters", type=int, default=assembler.RENDER_SMOOTH_ITERS,
                     help="Taubin iterations on the RENDER mesh only (0 = off, the "
                          "A/B baseline; collider/mass geometry is never smoothed)")
@@ -72,9 +77,10 @@ def main() -> None:
             continue
         cams = np.array([poses[fids[i]][:3, 3] for i in keep])
         res = cf.gate_object(cloud, cams, args.tier)
-        strat = res["strategy"]
+        strat = args.force_strategy or res["strategy"]
+        forced = "  (forced)" if args.force_strategy else ""
         print(f"  {classes.get(tid,'obj'):13} #{tid:<3} angle={res['angular_coverage_deg']} "
-              f"compl={res['completeness_ratio']} -> {strat}")
+              f"compl={res['completeness_ratio']} -> {strat}{forced}")
         routed[tid] = (strat, cloud)
 
     fusable = {tid: cl for tid, (s, cl) in routed.items() if s in cf.FUSABLE}
