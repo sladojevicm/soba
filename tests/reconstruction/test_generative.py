@@ -214,6 +214,28 @@ def test_strip_keeps_table_with_legs():
     assert len(cleaned.triangles) == n_before
 
 
+def test_strip_drops_large_detached_component():
+    # a 17%-area armrest floating 65 cm from its chair passed the old <15%
+    # size rule (seen live) — detachment alone must drop it now, any size
+    body = _box(0, 0.5, 0, 0.5, 1.0, 0.5)
+    armrest = _box(0, 2.0, 0, 0.4, 0.2, 0.2)
+    import numpy as np
+    cleaned, frac = generative._strip_base_and_fragments(body + armrest,
+                                                         return_stats=True)
+    assert np.asarray(cleaned.get_max_bound())[1] < 1.5   # floater gone
+    assert 0.05 < frac < 0.3                              # its share reported
+
+
+def test_clean_gen_rejects_mostly_debris(monkeypatch):
+    # when a third+ of the generation floats detached, the object is broken:
+    # ship nothing rather than an amputated body + hovering pieces
+    monkeypatch.delenv("VID2SIM_GEN_CLEAN", raising=False)
+    body = _box(0, 0.5, 0, 0.4, 0.8, 0.4)
+    debris = _box(2.0, 0.5, 0, 0.5, 0.5, 0.5)
+    m, frac = generative._clean_gen(body + debris)
+    assert m is None and frac > 0.3
+
+
 def test_shattered_generation_is_rejected():
     # three similar-size disconnected pieces = debris, not an object
     debris = _box(0, 0, 0, 0.3, 0.3, 0.3) + _box(1, 0, 0, 0.3, 0.3, 0.3) \

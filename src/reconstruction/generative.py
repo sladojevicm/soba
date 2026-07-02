@@ -228,7 +228,7 @@ def _register_full_to_cloud(verts, cloud, voxel: float = 0.03):
     return (np.c_[V, np.ones(len(V))] @ T_mc.T)[:, :3]
 
 
-def _strip_base_and_fragments(mesh):
+def _strip_base_and_fragments(mesh, return_stats: bool = False):
     """Clean an image-to-3D output BEFORE scaling/placement.
 
     Two failure modes seen on real Hunyuan3D output (2026-07-02, office_3):
@@ -246,7 +246,9 @@ def _strip_base_and_fragments(mesh):
     plane's own footprint, it is a mat with a miniature standing on it — cut
     it. A real table/couch never matches: its top/bottom plane holds <40% of
     samples and its legs/body span the whole footprint. FRAGMENT rule: drop
-    components with <15% of the largest component's surface area.
+    components spatially DETACHED from the dominant one (any size — the
+    detached fraction is returned with return_stats=True so the caller can
+    reject a generation that lost >30% of itself as structurally broken).
     Disable with VID2SIM_GEN_CLEAN=0.
     """
     import numpy as np
@@ -255,7 +257,7 @@ def _strip_base_and_fragments(mesh):
     verts = np.asarray(mesh.vertices)
     tris = np.asarray(mesh.triangles)
     if len(verts) == 0 or len(tris) == 0:
-        return mesh
+        return (mesh, 0.0) if return_stats else mesh
 
     out = o3d.geometry.TriangleMesh(mesh)
 
@@ -293,13 +295,16 @@ def _strip_base_and_fragments(mesh):
                 out.remove_triangles_by_mask(cut)
                 out.remove_unreferenced_vertices()
 
-    # --- fragment filter --------------------------------------------------
-    # A small component is dropped only when it is BOTH minor (<15% of the
-    # dominant component's area) AND spatially detached from it (>3% of the
-    # object extent away). Area alone would eat a table's thin legs when the
-    # generator emits them as separate components; touching parts stay.
+    # --- fragment filter: connectivity, not size ---------------------------
+    # ANY component spatially detached from the dominant one (>3% of the
+    # object extent from its SURFACE) is dropped — a 17%-area armrest floating
+    # 65 cm from its chair passed the old <15% size rule (seen live, hy4).
+    # Touching components of any size stay (a table's separate-component legs).
+    # Vertex-to-vertex distance misjudges touching parts on vertex-sparse
+    # meshes, hence the raycast surface distance.
+    detached_frac = 0.0
     if len(out.triangles) == 0:
-        return mesh
+        return (mesh, detached_frac) if return_stats else mesh
     cluster, _, areas = out.cluster_connected_triangles()
     cluster = np.asarray(cluster)
     areas = np.asarray(areas)
@@ -308,8 +313,6 @@ def _strip_base_and_fragments(mesh):
         o_tris = np.asarray(out.triangles)
         dom = int(areas.argmax())
         gap = 0.03 * float((o_verts.max(axis=0) - o_verts.min(axis=0)).max())
-        # point-to-SURFACE distance against the dominant component (vertex-to-
-        # vertex misjudges touching parts on vertex-sparse meshes)
         dom_mesh = o3d.geometry.TriangleMesh(out)
         dom_mesh.remove_triangles_by_mask(cluster != dom)
         dom_mesh.remove_unreferenced_vertices()
@@ -317,16 +320,18 @@ def _strip_base_and_fragments(mesh):
         scene_rc.add_triangles(o3d.t.geometry.TriangleMesh.from_legacy(dom_mesh))
         keep = np.ones(len(areas), dtype=bool)
         for ci in range(len(areas)):
-            if ci == dom or areas[ci] >= 0.15 * areas[dom]:
+            if ci == dom:
                 continue
             cp = o_verts[np.unique(o_tris[cluster == ci])].astype(np.float32)
             dmin = float(scene_rc.compute_distance(
                 o3d.core.Tensor(cp)).numpy().min())
             keep[ci] = dmin < gap
+        detached_frac = float(areas[~keep].sum() / max(areas.sum(), 1e-12))
         if not keep.all():
             out.remove_triangles_by_mask(~keep[cluster])
             out.remove_unreferenced_vertices()
-    return out if len(out.vertices) else mesh
+    result = out if len(out.vertices) else mesh
+    return (result, detached_frac) if return_stats else result
 
 
 def _looks_shattered(mesh, min_dominant: float = 0.6) -> bool:
@@ -364,6 +369,23 @@ def _class_dims_ok(mesh, coco_class: str | None) -> bool:
     return 0.7 * lo_hi[0] <= height <= 1.5 * lo_hi[1]
 
 
+def _clean_gen(mesh, max_detached: float = 0.3):
+    """Clean a raw generation and decide whether it is structurally usable.
+
+    Returns (cleaned_mesh, detached_frac); cleaned_mesh is None when more than
+    max_detached of the surface was floating debris — a generation that lost a
+    third of itself detached is broken (its 'missing part' was the floater),
+    so ship nothing rather than an amputated object + hovering pieces.
+    Respects VID2SIM_GEN_CLEAN=0 (no cleaning, never rejects here).
+    """
+    if os.environ.get("VID2SIM_GEN_CLEAN", "1") == "0":
+        return mesh, 0.0
+    cleaned, detached = _strip_base_and_fragments(mesh, return_stats=True)
+    if detached > max_detached:
+        return None, detached
+    return cleaned, detached
+
+
 def _accept_regen(mesh, coco_class) -> bool:
     """Post-alignment quality gate for the generative band: drop debris and
     dimensionally-absurd generations instead of shipping them into the scene.
@@ -379,7 +401,8 @@ def _accept_regen(mesh, coco_class) -> bool:
     return True
 
 
-def coarse_align_to_cloud(mesh, cloud, coco_class: str | None = None):
+def coarse_align_to_cloud(mesh, cloud, coco_class: str | None = None,
+                          clean: bool = True):
     """Scale a unit-cube GENERATED mesh to a real size, YAW-align it to the
     observed cloud, and place it where the object was seen.
 
@@ -405,8 +428,10 @@ def coarse_align_to_cloud(mesh, cloud, coco_class: str | None = None):
         return mesh
 
     # Strip the hallucinated display mat + loose fragments FIRST, so the
-    # class-prior scale sizes the actual object, not object+mat.
-    if os.environ.get("VID2SIM_GEN_CLEAN", "1") != "0":
+    # class-prior scale sizes the actual object, not object+mat. (clean=False
+    # when the caller already cleaned — e.g. regenerate(), which needs the
+    # detached-fraction stats to reject broken generations.)
+    if clean and os.environ.get("VID2SIM_GEN_CLEAN", "1") != "0":
         mesh = _strip_base_and_fragments(mesh)
 
     out = o3d.geometry.TriangleMesh(mesh)  # copy
@@ -643,7 +668,12 @@ class RunPodEngine(Engine):
         gen_mesh = self._decode_mesh(self._runsync(self.gen_endpoint, payload))
         # The model returns a unit-cube mesh; scale it to a class-size prior and
         # place it on the observed cloud (precise FPFH+ICP is Phase 8).
-        aligned = coarse_align_to_cloud(gen_mesh, cloud, coco_class)
+        gen_mesh, detached = _clean_gen(gen_mesh)
+        if gen_mesh is None:
+            log.info("generation rejected: %.0f%% of it was detached debris",
+                     detached * 100)
+            return None
+        aligned = coarse_align_to_cloud(gen_mesh, cloud, coco_class, clean=False)
         if not _accept_regen(aligned, coco_class):
             return None    # debris/absurd generation -> drop the object
         return RegenResult(mesh=aligned, alignment_method="coarse_aligned",
@@ -695,7 +725,12 @@ class LocalGpuEngine(Engine):
     def regenerate(self, *, cloud, crop_path, coco_class):
         try:
             gen_mesh = self._run_gen(crop_path=crop_path, coco_class=coco_class)
-            aligned = coarse_align_to_cloud(gen_mesh, cloud, coco_class)
+            gen_mesh, detached = _clean_gen(gen_mesh)
+            if gen_mesh is None:
+                log.info("generation rejected: %.0f%% of it was detached debris",
+                         detached * 100)
+                return None
+            aligned = coarse_align_to_cloud(gen_mesh, cloud, coco_class, clean=False)
             if not _accept_regen(aligned, coco_class):
                 return None    # debris/absurd generation -> drop the object
             return RegenResult(mesh=aligned, alignment_method="coarse_aligned",

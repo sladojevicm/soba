@@ -49,6 +49,9 @@ def main() -> None:
     ap.add_argument("--smooth-iters", type=int, default=assembler.RENDER_SMOOTH_ITERS,
                     help="Taubin iterations on the RENDER mesh only (0 = off, the "
                          "A/B baseline; collider/mass geometry is never smoothed)")
+    ap.add_argument("--tracks", type=int, nargs="*", default=None,
+                    help="only process these track ids (fast iteration on a "
+                         "subset, e.g. just the chairs)")
     ap.add_argument("--gate-stride", type=int, default=1,
                     help="score the Step-5 gate on every Nth frame only. Angular "
                          "coverage/completeness change slowly with viewpoint, so "
@@ -77,7 +80,7 @@ def main() -> None:
 
     # --- Step 5 gate (on the cheap observed cloud), THREE-WAY routing
     routed = {}  # tid -> (strategy, cloud)
-    for tid in tsdf._all_track_ids(b):
+    for tid in (args.tracks or tsdf._all_track_ids(b)):
         fids, frames = tsdf._object_frames(b, tid, poses)
         if args.gate_stride > 1:
             fids, frames = fids[::args.gate_stride], frames[::args.gate_stride]
