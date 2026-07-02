@@ -79,6 +79,11 @@ const tempBalls = [];             // {body, mesh, dieAt}
 let hasCameraPose = false;        // scene.json camera_pose wins initial placement (W5)
 let userInteracted = false;       // stop auto-framing once the user touches the camera
 
+// Debug handle for headless verification (scripts/verify_browser.js). Additive
+// and harmless: getters read live Rapier state, nothing in the viewer uses it.
+const dbg = { objects: [], framedAll: false, screenPos: null };
+window.__vid2sim = dbg;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -144,6 +149,7 @@ function frameAll() {
   camera.position.copy(center).addScaledVector(dir, dist);
   controls.target.copy(center);
   controls.update();
+  dbg.framedAll = true;
 }
 
 // Called after each object loads. Auto-frame only until the user first touches
@@ -270,6 +276,19 @@ async function addObject(id, sceneJson) {
   }
 
   syncMap.set(body, obj3d);
+
+  // Verification handle entry: getters read LIVE Rapier state so a headless
+  // checker sees exactly what the physics world holds (mass regression guard).
+  dbg.objects.push({
+    id,
+    get massKg() { return body.mass(); },
+    get bodyType() {
+      const t = body.bodyType();
+      return t === RAPIER.RigidBodyType.Dynamic ? "dynamic"
+        : t === RAPIER.RigidBodyType.Fixed ? "fixed" : "kinematic";
+    },
+    get position() { const p = body.translation(); return [p.x, p.y, p.z]; },
+  });
 
   // Re-frame the camera as objects stream in (until the user interacts).
   maybeAutoFrame();
@@ -404,6 +423,17 @@ function setupInteraction() {
   // stops the streaming auto-frame from fighting the user.
   controls.addEventListener("start", () => { userInteracted = true; });
   dom.addEventListener("pointerdown", () => { userInteracted = true; });
+
+  // Screen-space centre of an object (pixels) — lets the headless verifier
+  // click objects through the REAL pointer path instead of poking Rapier.
+  dbg.screenPos = (id) => {
+    for (const [mesh, entry] of meshToEntry) {
+      if (entry.id !== id) continue;
+      const p = mesh.position.clone().project(camera);
+      return [(p.x + 1) / 2 * window.innerWidth, (1 - p.y) / 2 * window.innerHeight];
+    }
+    return null;
+  };
 
   dom.addEventListener("pointerdown", (e) => {
     setNdc(e);
