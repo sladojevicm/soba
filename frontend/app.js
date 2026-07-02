@@ -133,22 +133,6 @@ function makeLabel(text, hex) {
   return sprite;
 }
 
-// Color->model legend + row guide, top-right overlay.
-window.addEventListener("load", () => {
-  const models = [["input (real scan)", 0x4caf50], ["PoinTr", 0xff9800],
-    ["AdaPoinTr", 0xf44336], ["ComPC", 0x9c27b0], ["PatchComplete", 0x2196f3],
-    ["SDFusion", 0x00bcd4]];
-  const hexs = (c) => "#" + ("000000" + c.toString(16)).slice(-6);
-  const box = document.createElement("div");
-  box.style.cssText = "position:fixed;top:10px;right:10px;background:rgba(18,20,26,0.9);" +
-    "color:#fff;padding:10px 13px;font:13px sans-serif;border-radius:6px;z-index:1000;line-height:1.7";
-  box.innerHTML = "<b>Model (column / color)</b><br>" +
-    models.map(([n, c]) => `<span style="display:inline-block;width:12px;height:12px;` +
-      `background:${hexs(c)};margin-right:7px;vertical-align:middle;border-radius:2px"></span>${n}`).join("<br>") +
-    '<br><br><b>Rows (front→back)</b><br>chair · couch · table';
-  document.body.appendChild(box);
-});
-
 // ---------------------------------------------------------------------------
 // Object loading (one object_added event)
 // ---------------------------------------------------------------------------
