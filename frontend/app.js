@@ -10,7 +10,9 @@
 //   * gravity + ground.y come FROM scene.json (fix Z-J / K4), not hardcoded.
 //   * each object_added SSE event triggers a re-GET of /scene.json and a lookup
 //     by id (fix Z-C); the event carries only the id.
-//   * the camera starts from scene.json camera_pose when present (fix W5).
+//   * the camera starts from scene.json camera_pose when present (fix W5); the
+//     view then frames the bbox of ALL objects (auto until the user interacts,
+//     "f" to re-frame any time) so a full room never looks like one lone object.
 
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
@@ -74,8 +76,8 @@ const bodyMeshes = [];            // selectable THREE meshes (for raycasting)
 const meshToEntry = new Map();    // THREE.Object3D -> scene.json object entry
 const loadedIds = new Set();      // ids already added
 const tempBalls = [];             // {body, mesh, dieAt}
-let sceneCentroid = new THREE.Vector3();
-let centroidN = 0;
+let hasCameraPose = false;        // scene.json camera_pose wins initial placement (W5)
+let userInteracted = false;       // stop auto-framing once the user touches the camera
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -107,6 +109,55 @@ function enableShadows(obj) {
   obj.traverse((o) => {
     if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; }
   });
+}
+
+// ---------------------------------------------------------------------------
+// Camera framing (DEBT A): frame the WHOLE ROOM, not one object.
+// ---------------------------------------------------------------------------
+function sceneBounds() {
+  if (!bodyMeshes.length) return null;
+  scene.updateMatrixWorld(true); // objects may not have rendered yet
+  const box = new THREE.Box3();
+  for (const m of bodyMeshes) box.expandByObject(m);
+  return box.isEmpty() ? null : box;
+}
+
+// Fit the bbox of ALL loaded meshes into the view: OrbitControls target at the
+// bbox centre, camera along a pleasant 35°-elevation diagonal, distance chosen
+// so the bounding sphere fits the narrower FOV axis with ~15% margin.
+function frameAll() {
+  const box = sceneBounds();
+  if (!box) return;
+  const center = box.getCenter(new THREE.Vector3());
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  const vFov = THREE.MathUtils.degToRad(camera.fov);
+  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+  const fov = Math.min(vFov, hFov);
+  const dist = Math.max(0.5, (sphere.radius * 1.15) / Math.sin(fov / 2));
+  const elev = THREE.MathUtils.degToRad(35);
+  const azim = THREE.MathUtils.degToRad(45);
+  const dir = new THREE.Vector3(
+    Math.cos(elev) * Math.sin(azim),
+    Math.sin(elev),
+    Math.cos(elev) * Math.cos(azim)
+  );
+  camera.position.copy(center).addScaledVector(dir, dist);
+  controls.target.copy(center);
+  controls.update();
+}
+
+// Called after each object loads. Auto-frame only until the user first touches
+// the camera (don't fight the user). When scene.json has a camera_pose it wins
+// the INITIAL camera position (fix W5) — then we only aim the controls target
+// at the whole scene; "f" re-frames fully at any time.
+function maybeAutoFrame() {
+  if (userInteracted) return;
+  if (hasCameraPose) {
+    const box = sceneBounds();
+    if (box) { controls.target.copy(box.getCenter(new THREE.Vector3())); controls.update(); }
+  } else {
+    frameAll();
+  }
 }
 
 // Floating text label (canvas-texture sprite) that always faces the camera.
@@ -180,11 +231,6 @@ async function addObject(id, sceneJson) {
     scene.add(label);
   }
 
-  // running centroid so OrbitControls looks at the objects
-  sceneCentroid.add(new THREE.Vector3(tx, ty, tz));
-  centroidN += 1;
-  controls.target.copy(sceneCentroid.clone().multiplyScalar(1 / centroidN));
-
   // 5. Rigid body. Objects start FIXED (static) so a reconstructed room LOADS
   // STABLE — the meshes are placed at their observed positions and are often
   // sized by a class prior, so several can overlap; if they were all dynamic on
@@ -224,6 +270,9 @@ async function addObject(id, sceneJson) {
   }
 
   syncMap.set(body, obj3d);
+
+  // Re-frame the camera as objects stream in (until the user interacts).
+  maybeAutoFrame();
   log(statusLine());
 }
 
@@ -232,7 +281,8 @@ function statusLine() {
     `objects: ${loadedIds.size}\n` +
     `<span class="key">click</span> select · ` +
     `<span class="key">drag</span> push · ` +
-    `<span class="key">space</span> drop ball\n` +
+    `<span class="key">space</span> drop ball · ` +
+    `<span class="key">f</span> frame all\n` +
     `(sparse scene: only well-observed "tsdf" objects exist — generative ones\n` +
     ` are deferred until a GPU is connected)`;
 }
@@ -246,10 +296,12 @@ async function boot() {
 
   const sceneJson = await getScene();
 
-  // Camera from capture pose when present (fix W5); OrbitControls then recenters
-  // on the objects so the start view always frames the scene.
+  // Camera from capture pose when present (fix W5); the controls target is then
+  // aimed at the bbox of ALL objects (maybeAutoFrame) so the start view frames
+  // the whole room. Without a camera_pose we auto-frame fully (frameAll).
   const cp = sceneJson.camera_pose;
-  if (cp && cp.translation) {
+  hasCameraPose = !!(cp && cp.translation);
+  if (hasCameraPose) {
     camera.position.set(cp.translation[0], cp.translation[1], cp.translation[2]);
   }
 
@@ -348,6 +400,11 @@ function highlight(object3d, on) {
 function setupInteraction() {
   const dom = renderer.domElement;
 
+  // Any camera interaction (orbit/zoom/pan start, or a click on the canvas)
+  // stops the streaming auto-frame from fighting the user.
+  controls.addEventListener("start", () => { userInteracted = true; });
+  dom.addEventListener("pointerdown", () => { userInteracted = true; });
+
   dom.addEventListener("pointerdown", (e) => {
     setNdc(e);
     raycaster.setFromCamera(ndc, camera);
@@ -398,6 +455,7 @@ function setupInteraction() {
 
   window.addEventListener("keydown", (e) => {
     if (e.code === "Space") { e.preventDefault(); spawnBall(); }
+    if (e.code === "KeyF") frameAll(); // re-frame ALL objects on demand
   });
 }
 
