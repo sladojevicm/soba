@@ -175,15 +175,58 @@ def _box(cx, cy, cz, sx, sy, sz):
 
 
 def test_strip_removes_hallucinated_mat():
-    # a chair-sized box standing on a thin full-footprint mat (the Hunyuan
+    # a SMALL box standing on a thin full-footprint mat (the Hunyuan
     # display-base artifact): the mat must go, the object must stay.
-    chair = _box(0, 0.45, 0, 0.4, 0.9, 0.4)
+    chair = _box(0, 0.15, 0, 0.2, 0.3, 0.2)   # miniature on the mat
     mat = _box(0, 0.005, 0, 1.6, 0.01, 1.6)
     cleaned = generative._strip_base_and_fragments(chair + mat)
     import numpy as np
     ext = np.asarray(cleaned.get_max_bound()) - np.asarray(cleaned.get_min_bound())
     assert ext[0] < 0.6 and ext[2] < 0.6      # mat footprint (1.6 m) gone
-    assert ext[1] > 0.8                        # chair height kept
+    assert ext[1] > 0.25                       # object height kept
+
+
+def test_strip_removes_tilted_mat():
+    # the mesh comes out VIEW-ALIGNED (tilted) — the mat is not axis-aligned,
+    # which defeated the first (axis-band) detector. Plane RANSAC must not care.
+    import numpy as np
+    import open3d as o3d
+    chair = _box(0, 0.15, 0, 0.2, 0.3, 0.2)
+    mat = _box(0, 0.005, 0, 1.6, 0.01, 1.6)
+    m = chair + mat
+    R = m.get_rotation_matrix_from_xyz((0.5, 0.2, 0.3))   # arbitrary tilt
+    m.rotate(R, center=(0, 0, 0))
+    cleaned = generative._strip_base_and_fragments(m)
+    diag0 = np.linalg.norm(np.asarray(m.get_max_bound()) - np.asarray(m.get_min_bound()))
+    diag1 = np.linalg.norm(np.asarray(cleaned.get_max_bound()) - np.asarray(cleaned.get_min_bound()))
+    assert diag1 < 0.5 * diag0                 # mat (the dominant extent) gone
+
+
+def test_strip_keeps_table_with_legs():
+    # a table = dominant flat top + legs spanning the same footprint: the
+    # rest-footprint test must keep it whole (legs cover the top's footprint).
+    table = _box(0, 0.72, 0, 1.6, 0.06, 0.9)
+    for x in (-0.7, 0.7):
+        for z in (-0.35, 0.35):
+            table = table + _box(x, 0.35, z, 0.08, 0.7, 0.08)
+    n_before = len(table.triangles)
+    cleaned = generative._strip_base_and_fragments(table)
+    assert len(cleaned.triangles) == n_before
+
+
+def test_shattered_generation_is_rejected():
+    # three similar-size disconnected pieces = debris, not an object
+    debris = _box(0, 0, 0, 0.3, 0.3, 0.3) + _box(1, 0, 0, 0.3, 0.3, 0.3) \
+        + _box(2, 0, 0, 0.28, 0.28, 0.28)
+    assert generative._looks_shattered(debris)
+    assert not generative._looks_shattered(_box(0, 0, 0, 0.5, 0.5, 0.5))
+
+
+def test_class_dims_gate_rejects_slab_chair():
+    # a 'chair' that is a 0.24 m-tall slab (thick fused mat) is nonsense;
+    # a 0.9 m one is fine
+    assert not generative._class_dims_ok(_box(0, 0.12, 0, 1.2, 0.24, 1.2), "chair")
+    assert generative._class_dims_ok(_box(0, 0.45, 0, 0.5, 0.9, 0.5), "chair")
 
 
 def test_strip_keeps_solid_objects_untouched():

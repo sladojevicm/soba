@@ -239,12 +239,15 @@ def _strip_base_and_fragments(mesh):
       * loose FRAGMENTS — a weak crop yields disconnected pieces that float
         once the object is simulated as one rigid body.
 
-    MAT rule (orientation-free, works even when the mesh is view-tilted): a
-    thin band (6%) at one END of an axis whose cross-section covers >65% of
-    the bbox while the NEXT band up covers <35%. An object body is much
-    smaller than its mat; a couch/table is fat all the way up so it never
-    matches. FRAGMENT rule: drop components with <15% of the largest
-    component's surface area. Disable with VID2SIM_GEN_CLEAN=0.
+    MAT rule (plane-based, so a VIEW-TILTED mesh is caught too — the first
+    axis-band version missed tilted mats, seen live in scene hy3): RANSAC the
+    dominant plane of the sampled surface. If it holds >50% of the samples AND
+    the remaining points' footprint (projected onto that plane) is <50% of the
+    plane's own footprint, it is a mat with a miniature standing on it — cut
+    it. A real table/couch never matches: its top/bottom plane holds <40% of
+    samples and its legs/body span the whole footprint. FRAGMENT rule: drop
+    components with <15% of the largest component's surface area.
+    Disable with VID2SIM_GEN_CLEAN=0.
     """
     import numpy as np
     import open3d as o3d
@@ -256,57 +259,124 @@ def _strip_base_and_fragments(mesh):
 
     out = o3d.geometry.TriangleMesh(mesh)
 
-    # --- mat cut ---------------------------------------------------------
-    # ALL band geometry is anchored on SAMPLED surface points, not vertices:
-    # a coarse mesh (box with corner-only vertices) has empty vertex bands, and
-    # stray vertices below the surface shift a vertex-anchored band so the mat
-    # lands in band2 and the profile check misses it (both seen for real).
-    pts = np.asarray(mesh.sample_points_uniformly(5000).points)
-    lo, hi = pts.min(axis=0), pts.max(axis=0)
-    ext = hi - lo
+    # --- mat cut (dominant-plane test on sampled surface points) ----------
+    pc = mesh.sample_points_uniformly(4000)
+    pts = np.asarray(pc.points)
+    ext = pts.max(axis=0) - pts.min(axis=0)
+    thr = 0.012 * float(ext.max())
 
-    def _cover(sel, a):
-        """Cross-section bbox area of selected sample points on the axes != a,
-        as a fraction of the full bbox cross-section."""
-        if sel.sum() < 8:
+    def _footprint(p, n):
+        """2D bbox area of points projected onto the plane with normal n."""
+        if len(p) < 8:
             return 0.0
-        o1, o2 = [x for x in (0, 1, 2) if x != a]
-        b = pts[sel]
-        num = (b[:, o1].max() - b[:, o1].min()) * (b[:, o2].max() - b[:, o2].min())
-        den = max(ext[o1] * ext[o2], 1e-12)
-        return float(num / den)
+        d = p - p.mean(axis=0)
+        d = d - np.outer(d @ n, n)
+        basis = np.linalg.svd(d, full_matrices=False)[2][:2]
+        q = d @ basis.T
+        return float((q[:, 0].max() - q[:, 0].min()) * (q[:, 1].max() - q[:, 1].min()))
 
-    for a in (0, 1, 2):
-        if ext[a] <= 1e-9:
-            continue
-        for end in (lo[a], hi[a]):
-            sign = 1.0 if end == lo[a] else -1.0
-            dp = sign * (pts[:, a] - end)           # sample depth into the mesh
-            d = sign * (verts[:, a] - end)          # vertex depth (for the cut)
-            band1 = dp < 0.06 * ext[a]
-            band2 = (dp >= 0.06 * ext[a]) & (dp < 0.18 * ext[a])
-            if _cover(band1, a) > 0.65 and _cover(band2, a) < 0.35:
-                band1 = d < 0.06 * ext[a]           # vertex-space mat band
-                cut = band1[tris].all(axis=1)       # faces fully inside the mat
-                if cut.any() and not cut.all():
-                    out.remove_triangles_by_mask(cut)
-                    out.remove_unreferenced_vertices()
-                break
-        else:
-            continue
-        break
+    try:
+        plane, inliers = pc.segment_plane(
+            distance_threshold=thr, ransac_n=3, num_iterations=500)
+    except Exception:
+        plane, inliers = None, []
+    if plane is not None and len(inliers) > 0.5 * len(pts):
+        n = np.asarray(plane[:3], dtype=np.float64)
+        n /= max(np.linalg.norm(n), 1e-12)
+        rest = np.delete(pts, inliers, axis=0)
+        foot_plane = _footprint(pts[inliers], n)
+        foot_rest = _footprint(rest, n)
+        if foot_plane > 1e-9 and foot_rest < 0.5 * foot_plane:
+            vd = np.abs(verts @ n + plane[3])
+            cut = (vd < 1.5 * thr)[tris].all(axis=1)   # faces lying in the mat
+            if cut.any() and not cut.all():
+                out.remove_triangles_by_mask(cut)
+                out.remove_unreferenced_vertices()
 
     # --- fragment filter --------------------------------------------------
+    # A small component is dropped only when it is BOTH minor (<15% of the
+    # dominant component's area) AND spatially detached from it (>3% of the
+    # object extent away). Area alone would eat a table's thin legs when the
+    # generator emits them as separate components; touching parts stay.
     if len(out.triangles) == 0:
         return mesh
     cluster, _, areas = out.cluster_connected_triangles()
+    cluster = np.asarray(cluster)
     areas = np.asarray(areas)
     if len(areas) > 1:
-        keep = areas >= 0.15 * areas.max()
+        o_verts = np.asarray(out.vertices)
+        o_tris = np.asarray(out.triangles)
+        dom = int(areas.argmax())
+        gap = 0.03 * float((o_verts.max(axis=0) - o_verts.min(axis=0)).max())
+        # point-to-SURFACE distance against the dominant component (vertex-to-
+        # vertex misjudges touching parts on vertex-sparse meshes)
+        dom_mesh = o3d.geometry.TriangleMesh(out)
+        dom_mesh.remove_triangles_by_mask(cluster != dom)
+        dom_mesh.remove_unreferenced_vertices()
+        scene_rc = o3d.t.geometry.RaycastingScene()
+        scene_rc.add_triangles(o3d.t.geometry.TriangleMesh.from_legacy(dom_mesh))
+        keep = np.ones(len(areas), dtype=bool)
+        for ci in range(len(areas)):
+            if ci == dom or areas[ci] >= 0.15 * areas[dom]:
+                continue
+            cp = o_verts[np.unique(o_tris[cluster == ci])].astype(np.float32)
+            dmin = float(scene_rc.compute_distance(
+                o3d.core.Tensor(cp)).numpy().min())
+            keep[ci] = dmin < gap
         if not keep.all():
-            out.remove_triangles_by_mask(~keep[np.asarray(cluster)])
+            out.remove_triangles_by_mask(~keep[cluster])
             out.remove_unreferenced_vertices()
     return out if len(out.vertices) else mesh
+
+
+def _looks_shattered(mesh, min_dominant: float = 0.6) -> bool:
+    """True when no single connected component holds >=min_dominant of the
+    surface area — the generation is loose debris (floating pieces once
+    simulated as one rigid body), not an object. Seen live: a 'chair' of four
+    similar-size fragments (armrest, star-base, ...)."""
+    import numpy as np
+
+    if len(mesh.triangles) == 0:
+        return True
+    _, _, areas = mesh.cluster_connected_triangles()
+    areas = np.asarray(areas)
+    return bool(areas.max() < min_dominant * areas.sum())
+
+
+def _class_dims_ok(mesh, coco_class: str | None) -> bool:
+    """Reject a generated object whose ALIGNED height is wildly outside its
+    class's physical range (config class_gates, fix R2) — e.g. a 'chair' that
+    is a 0.24 m-tall slab (a thick hallucinated mat fused with a miniature,
+    which the mat cut cannot separate). Wide tolerance (0.7x low, 1.5x high):
+    this only catches nonsense, not honest variance."""
+    try:
+        from scene import lookup  # lazy: avoid import cycles at module load
+        gates = lookup.load_config().get("class_gates", {})
+    except Exception:
+        return True
+    g = gates.get((coco_class or "").lower(), gates.get("default"))
+    if not g:
+        return True
+    lo_hi = g.get("height") or g.get("diameter")
+    if not lo_hi:
+        return True
+    height = float(mesh.get_max_bound()[1] - mesh.get_min_bound()[1])
+    return 0.7 * lo_hi[0] <= height <= 1.5 * lo_hi[1]
+
+
+def _accept_regen(mesh, coco_class) -> bool:
+    """Post-alignment quality gate for the generative band: drop debris and
+    dimensionally-absurd generations instead of shipping them into the scene.
+    VID2SIM_GEN_STRICT=0 disables (every generation is kept)."""
+    if os.environ.get("VID2SIM_GEN_STRICT", "1") == "0":
+        return True
+    if _looks_shattered(mesh):
+        log.info("generated mesh rejected: shattered (no dominant component)")
+        return False
+    if not _class_dims_ok(mesh, coco_class):
+        log.info("generated mesh rejected: implausible %s dimensions", coco_class)
+        return False
+    return True
 
 
 def coarse_align_to_cloud(mesh, cloud, coco_class: str | None = None):
@@ -574,6 +644,8 @@ class RunPodEngine(Engine):
         # The model returns a unit-cube mesh; scale it to a class-size prior and
         # place it on the observed cloud (precise FPFH+ICP is Phase 8).
         aligned = coarse_align_to_cloud(gen_mesh, cloud, coco_class)
+        if not _accept_regen(aligned, coco_class):
+            return None    # debris/absurd generation -> drop the object
         return RegenResult(mesh=aligned, alignment_method="coarse_aligned",
                            scale_method="class_prior")
 
@@ -624,6 +696,8 @@ class LocalGpuEngine(Engine):
         try:
             gen_mesh = self._run_gen(crop_path=crop_path, coco_class=coco_class)
             aligned = coarse_align_to_cloud(gen_mesh, cloud, coco_class)
+            if not _accept_regen(aligned, coco_class):
+                return None    # debris/absurd generation -> drop the object
             return RegenResult(mesh=aligned, alignment_method="coarse_aligned",
                                scale_method="class_prior")
         except Exception as e:  # missing model / OOM -> drop (as with no GPU)
