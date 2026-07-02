@@ -25,9 +25,41 @@ def test_make_engine_picks_runpod_when_configured(monkeypatch):
     monkeypatch.delenv("RUNPOD_COMPLETION_ENDPOINT_ID", raising=False)
     monkeypatch.setenv("RUNPOD_API_KEY", "k")
     monkeypatch.setenv("RUNPOD_ENDPOINT_ID", "gen")  # back-compat alias for gen
+    # no local GPU -> plain RunPodEngine (no SplitEngine composition)
+    monkeypatch.setattr(generative.LocalGpuEngine, "is_available", staticmethod(lambda: False))
     eng = generative.make_engine()
     assert isinstance(eng, generative.RunPodEngine)
     assert eng.gen_endpoint == "gen" and eng.api_key == "k"
+
+
+def test_make_engine_splits_gen_remote_completion_local(monkeypatch):
+    # RunPod gen endpoint + NO completion endpoint + local CUDA -> SplitEngine:
+    # the completion band keeps PatchComplete instead of degrading to Poisson.
+    monkeypatch.setenv("RUNPOD_API_KEY", "k")
+    monkeypatch.setenv("RUNPOD_GEN_ENDPOINT_ID", "gen")
+    monkeypatch.delenv("RUNPOD_ENDPOINT_ID", raising=False)
+    monkeypatch.delenv("RUNPOD_COMPLETION_ENDPOINT_ID", raising=False)
+    monkeypatch.setattr(generative.LocalGpuEngine, "is_available", staticmethod(lambda: True))
+    eng = generative.make_engine()
+    assert isinstance(eng, generative.SplitEngine)
+    assert isinstance(eng._regenerator, generative.RunPodEngine)
+    assert isinstance(eng._completer, generative.LocalGpuEngine)
+    assert eng._completer.completion_model == "patchcomplete"
+
+
+def test_split_engine_delegates_per_band():
+    class FakeCompleter:
+        completion_model = "c"
+        def complete(self, **kw):
+            return ("completed", kw["cloud"])
+    class FakeRegen:
+        gen_model = "g"
+        def regenerate(self, **kw):
+            return ("regenerated", kw["coco_class"])
+    eng = generative.SplitEngine(completer=FakeCompleter(), regenerator=FakeRegen())
+    assert eng.complete(mesh=None, cloud=7, crop_path=None, coco_class="x") == ("completed", 7)
+    assert eng.regenerate(cloud=None, crop_path=None, coco_class="chair") == ("regenerated", "chair")
+    assert eng.gen_model == "g" and eng.completion_model == "c"
 
 
 def test_make_engine_reads_both_endpoints(monkeypatch):
@@ -126,6 +158,8 @@ def test_make_engine_tier_sets_runpod_gen_model(monkeypatch):
     monkeypatch.setenv("RUNPOD_API_KEY", "k")
     monkeypatch.setenv("RUNPOD_GEN_ENDPOINT_ID", "gen")
     monkeypatch.delenv("RUNPOD_GEN_MODEL", raising=False)
+    # no local GPU: model selection is what's under test, not Split composition
+    monkeypatch.setattr(generative.LocalGpuEngine, "is_available", staticmethod(lambda: False))
     eng = generative.make_engine(tier=4)
     assert isinstance(eng, generative.RunPodEngine) and eng.gen_model == "hunyuan3d"
     # explicit override still wins

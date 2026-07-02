@@ -796,11 +796,35 @@ def gen_model_for_tier(tier) -> str:
         return "triposg"
 
 
+class SplitEngine(Engine):
+    """A different backend per band. The natural split: the image-to-3D model
+    outgrows the local card first (Hunyuan3D ~10 GB), so the GENERATIVE band
+    goes to RunPod while the COMPLETION band (PatchComplete, ~small) stays on
+    the local GPU. Composed automatically by make_engine when RunPod has a gen
+    endpoint but no completion endpoint and a local CUDA device exists."""
+
+    def __init__(self, completer: Engine, regenerator: Engine):
+        self._completer = completer
+        self._regenerator = regenerator
+        # surfaced for run_assemble's "engine: ..." print
+        self.gen_model = getattr(regenerator, "gen_model", None)
+        self.completion_model = getattr(completer, "completion_model", None)
+
+    def complete(self, **kw):
+        return self._completer.complete(**kw)
+
+    def regenerate(self, **kw):
+        return self._regenerator.regenerate(**kw)
+
+
 def make_engine(tier=None) -> Engine:
     """Pick the geometry-invention backend, in priority order:
       1. RunPodEngine  — if RUNPOD_API_KEY + an endpoint are set.
            RUNPOD_GEN_ENDPOINT_ID (alias RUNPOD_ENDPOINT_ID) — image-to-3D.
            RUNPOD_COMPLETION_ENDPOINT_ID                     — shape-completion.
+           If only the GEN endpoint is set and a local CUDA GPU exists, the
+           completion band stays local (SplitEngine) instead of degrading from
+           PatchComplete to the Poisson fallback.
       2. LocalGpuEngine — if a CUDA GPU is visible (and VID2SIM_LOCAL_GPU != "0").
       3. LocalEngine    — no GPU: completion = Poisson, generation = drop.
 
@@ -815,11 +839,19 @@ def make_engine(tier=None) -> Engine:
     gen = os.environ.get("RUNPOD_GEN_ENDPOINT_ID") or os.environ.get("RUNPOD_ENDPOINT_ID")
     comp = os.environ.get("RUNPOD_COMPLETION_ENDPOINT_ID")
     if key and (gen or comp):
-        return RunPodEngine(
+        runpod = RunPodEngine(
             key, gen_endpoint=gen, completion_endpoint=comp,
             gen_model=os.environ.get("RUNPOD_GEN_MODEL", tier_gen),
             completion_model=os.environ.get("RUNPOD_COMPLETION_MODEL", "pointr"),
         )
+        local_ok = (os.environ.get("VID2SIM_LOCAL_GPU", "1") != "0"
+                    and LocalGpuEngine.is_available())
+        if gen and not comp and local_ok:
+            local = LocalGpuEngine(
+                completion_model=os.environ.get(
+                    "VID2SIM_COMPLETION_MODEL", "patchcomplete"))
+            return SplitEngine(completer=local, regenerator=runpod)
+        return runpod
     if os.environ.get("VID2SIM_LOCAL_GPU", "1") != "0" and LocalGpuEngine.is_available():
         return LocalGpuEngine(
             gen_model=os.environ.get("VID2SIM_GEN_MODEL", tier_gen),
