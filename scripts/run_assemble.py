@@ -63,9 +63,12 @@ def main() -> None:
             classes.setdefault(int(d["track_id"]), d.get("class", "obj"))
 
     # The completion/generative backend: LocalEngine (Poisson fill, no
-    # regeneration) unless RUNPOD_API_KEY + RUNPOD_ENDPOINT_ID are set.
-    engine = generative.make_engine()
-    print(f"engine: {type(engine).__name__}")
+    # regeneration) unless RUNPOD_API_KEY + RUNPOD_ENDPOINT_ID are set. The tier
+    # selects the default generative model (T1-2 TripoSG, T3-4 Hunyuan3D, fix K1).
+    engine = generative.make_engine(tier=args.tier)
+    gen_model = getattr(engine, "gen_model", None)
+    print(f"engine: {type(engine).__name__}"
+          + (f"  gen_model={gen_model}" if gen_model else ""))
 
     # --- Step 5 gate (on the cheap observed cloud), THREE-WAY routing
     routed = {}  # tid -> (strategy, cloud)

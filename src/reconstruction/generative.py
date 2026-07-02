@@ -98,17 +98,153 @@ CLASS_SIZE_PRIOR_M = {
 DEFAULT_SIZE_PRIOR_M = 0.60  # unknown class -> a modest object
 
 
-def coarse_align_to_cloud(mesh, cloud, coco_class: str | None = None):
-    """Scale a unit-cube GENERATED mesh to a real size and place it on the cloud.
+def _fit_pose_to_cloud(verts, cloud, n_coarse: int = 24, icp_iters: int = 8):
+    """Yaw-constrained ICP: find the rigid pose (rotation about vertical Y +
+    translation) that seats the generated mesh in the observed cloud.
 
-    A generative model returns its mesh in a unit cube with no real size. These
+    Objects rest upright on the ground, so the rotation is a single yaw — a 6-DoF
+    fit would let a partial cloud tip the object off-vertical. Translation is
+    solved TOGETHER with yaw because the cloud is a partial fragment: its extent
+    (hence its bbox-centre placement) is offset from the true object centre, and
+    that offset must be absorbed or it swamps the rotation signal.
+
+    For each of n_coarse yaw seeds it runs a few translation-only ICP steps
+    (scored cloud->mesh: every partial-cloud point should land on the full mesh,
+    not vice-versa) and keeps the lowest-residual seed. Returns (R, offset) such
+    that new_vertices = verts @ R.T + offset. CPU-only.
+    """
+    import numpy as np
+    import open3d as o3d
+
+    V = np.asarray(verts, dtype=np.float64)
+    C = np.asarray(cloud, dtype=np.float64)
+    if len(V) < 8 or len(C) < 8:
+        return np.eye(3), np.zeros(3)
+
+    rng = np.random.default_rng(0)
+    def _sub(a, n):
+        return a if len(a) <= n else a[rng.choice(len(a), n, replace=False)]
+    Vs = _sub(V, 6000)
+    Cs = _sub(C, 2000)
+    cM = Vs.mean(axis=0)  # yaw pivot
+
+    def _tree(P):
+        pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.ascontiguousarray(P)))
+        return o3d.geometry.KDTreeFlann(pc)
+
+    def _nn(P, kdt):
+        idx = np.empty(len(P), dtype=np.int64)
+        d2 = np.empty(len(P))
+        for i, p in enumerate(P):
+            _, j, dd = kdt.search_knn_vector_3d(np.ascontiguousarray(p, dtype=np.float64), 1)
+            idx[i] = j[0]; d2[i] = dd[0]
+        return idx, d2
+
+    best = (np.inf, np.eye(3), np.zeros(3))
+    for k in range(n_coarse):
+        phi = 2.0 * np.pi * k / n_coarse
+        c, s = np.cos(phi), np.sin(phi)
+        R = np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
+        Vt = (Vs - cM) @ R.T + cM      # yaw-rotated mesh points
+        t = np.zeros(3)
+        for _ in range(icp_iters):     # translation-only refine at this yaw
+            kdt = _tree(Vt + t)
+            idx, _ = _nn(Cs, kdt)
+            t = t + (Cs - (Vt + t)[idx]).mean(axis=0)
+        kdt = _tree(Vt + t)
+        _, d2 = _nn(Cs, kdt)
+        score = float(np.mean(d2))
+        if score < best[0]:
+            best = (score, R, cM - R @ cM + t)
+    return best[1], best[2]
+
+
+def _cloud_fit_rmsd(verts, cloud, n_mesh: int = 8000, n_cloud: int = 2000) -> float:
+    """Mean nearest-neighbour distance from the observed CLOUD to the mesh surface
+    (cloud->mesh: every partial-cloud point should land on the full mesh). The
+    single fair metric used to choose between candidate poses — lower is better."""
+    import numpy as np
+    import open3d as o3d
+
+    V = np.asarray(verts, dtype=np.float64)
+    C = np.asarray(cloud, dtype=np.float64)
+    if len(V) < 8 or len(C) < 8:
+        return float("inf")
+    rng = np.random.default_rng(0)
+    def _sub(a, n):
+        return a if len(a) <= n else a[rng.choice(len(a), n, replace=False)]
+    pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.ascontiguousarray(_sub(V, n_mesh))))
+    kdt = o3d.geometry.KDTreeFlann(pc)
+    tot = 0.0
+    Cs = _sub(C, n_cloud)
+    for p in Cs:
+        _, _, d2 = kdt.search_knn_vector_3d(np.ascontiguousarray(p, dtype=np.float64), 1)
+        tot += d2[0]
+    return float(tot / len(Cs))
+
+
+def _register_full_to_cloud(verts, cloud, voxel: float = 0.03):
+    """FULL 3-DoF rotation alignment (the plan's Step-7 FPFH+ICP) of an already
+    scaled+placed generative mesh to the observed cloud. Needed because the
+    image-to-3D model emits the object VIEW-ALIGNED (in the crop's camera frame),
+    so a table shot from an oblique angle comes out tilted ~50deg — a yaw-only fit
+    cannot stand it up. FPFH+RANSAC global registration then point-to-plane ICP
+    recovers the full rotation; the observed cloud (world frame) is the truth.
+
+    Registers cloud->mesh (source=cloud: every partial point has a real match on
+    the full mesh) and applies the INVERSE to the mesh. Returns transformed verts,
+    or None if registration is unusable (caller then keeps the yaw-only result).
+    """
+    import numpy as np
+    import open3d as o3d
+
+    V = np.asarray(verts, dtype=np.float64)
+    C = np.asarray(cloud, dtype=np.float64)
+    if len(V) < 32 or len(C) < 32:
+        return None
+    def _pcd(x):
+        return o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.ascontiguousarray(x)))
+    try:
+        src = _pcd(C).voxel_down_sample(voxel)   # observed (world frame)
+        tgt = _pcd(V).voxel_down_sample(voxel)   # full mesh (view-tilted)
+        if len(src.points) < 8 or len(tgt.points) < 8:
+            return None
+        nrm = o3d.geometry.KDTreeSearchParamHybrid(radius=voxel * 2, max_nn=30)
+        src.estimate_normals(nrm); tgt.estimate_normals(nrm)
+        fpar = o3d.geometry.KDTreeSearchParamHybrid(radius=voxel * 5, max_nn=100)
+        fs = o3d.pipelines.registration.compute_fpfh_feature(src, fpar)
+        ft = o3d.pipelines.registration.compute_fpfh_feature(tgt, fpar)
+        res = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
+            src, tgt, fs, ft, True, voxel * 1.5,
+            o3d.pipelines.registration.TransformationEstimationPointToPoint(False), 3,
+            [o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(voxel * 1.5)],
+            o3d.pipelines.registration.RANSACConvergenceCriteria(200000, 0.999))
+        icp = o3d.pipelines.registration.registration_icp(
+            src, tgt, voxel * 2, res.transformation,
+            o3d.pipelines.registration.TransformationEstimationPointToPlane())
+        T_mc = np.linalg.inv(icp.transformation)  # mesh -> cloud frame
+    except Exception:
+        return None
+    return (np.c_[V, np.ones(len(V))] @ T_mc.T)[:, :3]
+
+
+def coarse_align_to_cloud(mesh, cloud, coco_class: str | None = None):
+    """Scale a unit-cube GENERATED mesh to a real size, YAW-align it to the
+    observed cloud, and place it where the object was seen.
+
+    A generative model returns its mesh in a unit cube with no real size and in
+    its OWN canonical pose (no relation to how the object sits in the room). These
     objects are ALL poorly observed (that is why they routed generative), so the
     observed cloud is a partial fragment whose extent cannot be trusted for size
-    (fragment-fitting gave masses of 0.1-25 kg for the same chairs). So SIZE comes
-    from a per-class real-world prior (CLASS_SIZE_PRIOR_M) — a uniform scale that
-    preserves the model's proportions — and the cloud sets only PLACEMENT (its
-    centroid). This is the "coarse_aligned" / "class_prior" path; precise
-    FPFH-rotation + ICP is Phase 8 (icp_align.py). CPU-only, runs without a GPU.
+    (fragment-fitting gave masses of 0.1-25 kg for the same chairs). So:
+      * SIZE   — a per-class real-world prior (CLASS_SIZE_PRIOR_M): a uniform
+                 scale that preserves the model's proportions.
+      * YAW    — the rotation about vertical Y that best seats the mesh in the
+                 cloud (objects rest upright, so yaw is the only free rotation).
+      * PLACE  — the cloud's centroid.
+    CPU-only, runs without a GPU. (Full FPFH+ICP would add pitch/roll, but upright
+    furniture on a floor needs only yaw, and the partial cloud makes a 6-DoF fit
+    less stable than this constrained one.)
     """
     import numpy as np
     import open3d as o3d
@@ -137,7 +273,28 @@ def coarse_align_to_cloud(mesh, cloud, coco_class: str | None = None):
     else:
         c_centre = m_centre
 
+    # Scale + place first (into world metres, roughly centred on the cloud).
     v = (np.asarray(out.vertices) - m_centre) * s + c_centre
+
+    # POSE: two candidates, keep whichever seats the mesh best in the cloud.
+    #   * yaw-only   — rotation about vertical Y + translation (safe for objects
+    #                  the model already emits ~upright, e.g. a front-on couch).
+    #   * full 3-DoF — FPFH+ICP, recovers pitch/roll too (needed because the
+    #                  image-to-3D model is VIEW-ALIGNED: an obliquely-shot table
+    #                  comes out tilted and yaw-only cannot stand it up).
+    # Scored by cloud->mesh RMSD so a wrong full-registration never beats a good
+    # yaw-only fit (that would otherwise tip an already-correct object over).
+    if len(cloud) >= 8:
+        R, offset = _fit_pose_to_cloud(v, cloud)
+        v_yaw = v @ R.T + offset
+        best_v, best_score = v_yaw, _cloud_fit_rmsd(v_yaw, cloud)
+        v_full = _register_full_to_cloud(v, cloud)
+        if v_full is not None:
+            score_full = _cloud_fit_rmsd(v_full, cloud)
+            if score_full < best_score:
+                best_v, best_score = v_full, score_full
+        v = best_v
+
     out.vertices = o3d.utility.Vector3dVector(v)
     out.compute_vertex_normals()
     return out
@@ -238,31 +395,66 @@ class RunPodEngine(Engine):
             raise RuntimeError(f"RunPod job failed: {data.get('error') or data}")
         return data.get("output", {})
 
-    # --- endpoint-specific seams (FILL IN with the API contract) --------
+    # --- endpoint-specific seams (contract shared with the serverless handler,
+    #     deploy/runpod/generative_handler.py) ------------------------------
     def _build_input(self, *, mode: str, model: str, crop_path, coco_class, cloud,
                      mesh=None) -> dict:
         """Build the handler `input` dict for this object.
 
+        mode "regenerate" -> the image-to-3D model: send the crop image (base64
+                             JPEG/PNG) + class; no geometry.
         mode "complete"   -> the learned shape-completion model: send the PARTIAL
-                             GEOMETRY (the observed point `cloud`, and/or `mesh`),
-                             plus the class. The crop is optional context.
-        mode "regenerate" -> the image-to-3D model: send the crop image (base64)
-                             + class; no geometry.
-        Field names are the endpoint's contract — fill them in.
+                             GEOMETRY (the observed `cloud` as a base64 .npy) +
+                             class. The crop is optional context.
+        Mirrors generative_handler.py's expected `input` schema exactly.
         """
-        raise NotImplementedError(
-            "RunPod input contract not set — provide the endpoint's `input` schema"
-        )
+        import base64
+
+        payload = {"mode": mode, "model": model, "coco_class": coco_class or "obj"}
+        if mode == "regenerate":
+            if crop_path is None:
+                raise RuntimeError("no crop staged for this object")
+            with open(crop_path, "rb") as f:
+                payload["image_b64"] = base64.b64encode(f.read()).decode()
+        elif mode == "complete":
+            import io
+
+            import numpy as np
+            buf = io.BytesIO()
+            np.save(buf, np.asarray(cloud, dtype=np.float32))
+            payload["cloud_npy_b64"] = base64.b64encode(buf.getvalue()).decode()
+            if crop_path is not None:
+                with open(crop_path, "rb") as f:
+                    payload["image_b64"] = base64.b64encode(f.read()).decode()
+        else:
+            raise ValueError(f"unknown mode {mode!r}")
+        return payload
 
     def _decode_mesh(self, output: dict):
         """Decode the handler `output` into an open3d TriangleMesh.
 
-        Decide the transfer format (obj/ply/glb, base64 or URL). NOTE: Open3D
-        cannot read GLB back — prefer OBJ/PLY for a server round-trip (gotcha).
+        Contract: {"mesh_b64": <base64>, "format": "obj"|"ply"}. OBJ/PLY on
+        purpose — Open3D cannot read GLB back (that gotcha is why the handler
+        never returns GLB for the round-trip).
         """
-        raise NotImplementedError(
-            "RunPod output contract not set — provide the returned mesh format"
-        )
+        import base64
+        import tempfile
+
+        import open3d as o3d
+
+        fmt = (output or {}).get("format", "obj").lower()
+        data = (output or {}).get("mesh_b64")
+        if not data:
+            raise RuntimeError(f"RunPod returned no mesh (output keys: {list((output or {}).keys())})")
+        raw = base64.b64decode(data)
+        with tempfile.NamedTemporaryFile(suffix=f".{fmt}", delete=True) as tf:
+            tf.write(raw)
+            tf.flush()
+            m = o3d.io.read_triangle_mesh(tf.name)
+        if len(m.vertices) == 0:
+            raise RuntimeError("RunPod mesh decoded to zero vertices")
+        m.compute_vertex_normals()
+        return m
 
     # --- capabilities ---------------------------------------------------
     def complete(self, *, mesh, cloud, crop_path, coco_class):
@@ -315,7 +507,8 @@ class LocalGpuEngine(Engine):
     def __init__(self, *, completion_model: str = "pointr", gen_model: str = "triposg"):
         self.completion_model = completion_model
         self.gen_model = gen_model
-        self._triposg = None  # cached (pipe, rmbg, prepare_image) — loaded once
+        self._triposg = None   # cached (pipe, rmbg, prepare_image) — loaded once
+        self._hunyuan = None   # cached (pipe, rembg) — loaded once
 
     @staticmethod
     def is_available() -> bool:
@@ -439,17 +632,65 @@ class LocalGpuEngine(Engine):
         return self._triposg
 
     def _run_gen(self, *, crop_path, coco_class):
-        """Run TripoSG (image-to-3D) on the crop -> open3d unit-cube mesh.
-
-        Removes the crop's background (BriaRMBG), samples a mesh, and returns it
-        in TripoSG's unit cube; coarse_align_to_cloud (caller) recovers real-world
-        scale/pose from the observed cloud. Steps/CFG/seed via
-        VID2SIM_TRIPOSG_STEPS / _CFG / _SEED. A raise here -> object dropped.
-        """
+        """Image-to-3D on the crop -> open3d mesh (model's own frame; the caller's
+        coarse_align_to_cloud recovers real-world scale/pose from the observed
+        cloud). Dispatches on self.gen_model (fix K1): "triposg" (Tiers 1-2) or
+        "hunyuan3d" (Tiers 3-4). A raise here -> object dropped."""
         if crop_path is None:
             raise RuntimeError("no crop staged for this object")
+        if self.gen_model == "triposg":
+            verts, faces = self._run_triposg(crop_path)
+        elif self.gen_model in ("hunyuan3d", "hunyuan"):
+            verts, faces = self._run_hunyuan(crop_path)
+        else:
+            raise NotImplementedError(f"local gen model '{self.gen_model}' not wired")
+        return self._finalize_gen_mesh(verts, faces)
+
+    @staticmethod
+    def _finalize_gen_mesh(verts, faces):
+        """Shared post-processing for any image-to-3D output: build the open3d
+        mesh, weld/clean, and decimate to a physics-sane budget. Generative
+        extractors emit 1-3M triangles (TripoSG at 505^3, Hunyuan3D's marching
+        cubes) which choke the downstream Poisson finalize + CoACD; VID2SIM_GEN_FACES
+        caps it (0 disables)."""
         import numpy as np
         import open3d as o3d
+
+        if len(verts) == 0 or len(faces) == 0:
+            raise RuntimeError("generative model produced an empty mesh")
+        m = o3d.geometry.TriangleMesh(
+            o3d.utility.Vector3dVector(np.asarray(verts, dtype=np.float64)),
+            o3d.utility.Vector3iVector(np.ascontiguousarray(faces, dtype=np.int32)))
+        m.remove_duplicated_vertices()
+        m.remove_degenerate_triangles()
+        # Keep the dominant connected surface: a high-res marching-cubes decode
+        # leaves a cloud of tiny floating shells around the real object (a full-
+        # octree TripoSG chair had ~927 floaters around one 2.7M-face surface).
+        # Drop clusters below 2% of the face count — cheap, and always correct for
+        # a single-object generation.
+        try:
+            labels, counts, _ = m.cluster_connected_triangles()
+            labels = np.asarray(labels)
+            counts = np.asarray(counts)
+            if len(counts) > 1:
+                big = set(np.where(counts > 0.02 * counts.sum())[0].tolist())
+                m.remove_triangles_by_mask(np.array([l not in big for l in labels]))
+                m.remove_unreferenced_vertices()
+        except Exception:
+            pass
+        # accept the legacy TripoSG knob as a fallback so existing runs are unchanged
+        budget = int(os.environ.get("VID2SIM_GEN_FACES",
+                                    os.environ.get("VID2SIM_TRIPOSG_FACES", "40000")))
+        if budget > 0 and len(m.triangles) > budget:
+            m = m.simplify_quadric_decimation(budget)
+        m.compute_vertex_normals()
+        return m
+
+    def _run_triposg(self, crop_path):
+        """TripoSG (image-to-3D) inference -> (verts, faces). Removes the crop's
+        background (BriaRMBG) and samples a mesh in TripoSG's unit cube.
+        Steps/CFG/seed via VID2SIM_TRIPOSG_STEPS / _CFG / _SEED."""
+        import numpy as np
         import torch
 
         pipe, rmbg, prepare_image = self._load_triposg()
@@ -462,12 +703,18 @@ class LocalGpuEngine(Engine):
         # TripoSG uses the marching-cubes extractor instead — no nvcc/diso needed.
         # Set VID2SIM_TRIPOSG_FLASH=1 on a pod that has diso built.
         use_flash = os.environ.get("VID2SIM_TRIPOSG_FLASH", "0") == "1"
-        # Mesh-extraction resolution. The default (dense 8 / hierarchical 9) decodes
-        # ~16M points through the VAE at once and OOMs an 8 GB GPU; 7/8 keeps it in
-        # memory and is plenty for a physics object (we decimate to 40k after).
-        # Raise on a big-VRAM host via VID2SIM_TRIPOSG_DENSE / _HIER.
-        dense = int(os.environ.get("VID2SIM_TRIPOSG_DENSE", "7"))
-        hier = int(os.environ.get("VID2SIM_TRIPOSG_HIER", "8"))
+        # Mesh-extraction resolution. TripoSG's default (dense 8 / hierarchical 9,
+        # a 512^3 grid) is REQUIRED for correct geometry: the reduced 7/8 (256^3)
+        # under-resolves the marching-cubes iso-surface and turns thin/concave
+        # objects (chairs) into a holey genus-~3000 sponge, while bulky objects
+        # (couch) survive. 8/9 decodes ~16M points and is tight on an 8 GB GPU; it
+        # fits when the card is otherwise free (serial per-object regen), and is a
+        # non-issue on RunPod. Dial DOWN via VID2SIM_TRIPOSG_DENSE/_HIER only if it
+        # OOMs — accepting the sponge — but prefer RunPod for 8 GB quality builds.
+        dense = int(os.environ.get("VID2SIM_TRIPOSG_DENSE", "8"))
+        hier = int(os.environ.get("VID2SIM_TRIPOSG_HIER", "9"))
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()  # free the prior object's decode before this one
         with torch.no_grad():
             out = pipe(
                 image=img,
@@ -476,46 +723,101 @@ class LocalGpuEngine(Engine):
                 use_flash_decoder=use_flash,
                 dense_octree_depth=dense, hierarchical_octree_depth=hier,
             ).samples[0]
-        verts = np.asarray(out[0], dtype=np.float64)
-        faces = np.ascontiguousarray(np.asarray(out[1], dtype=np.int32))
-        if len(verts) == 0 or len(faces) == 0:
-            raise RuntimeError("TripoSG produced an empty mesh")
-        m = o3d.geometry.TriangleMesh(
-            o3d.utility.Vector3dVector(verts),
-            o3d.utility.Vector3iVector(faces))
-        m.remove_duplicated_vertices()
-        m.remove_degenerate_triangles()
-        # TripoSG extracts at 505^3 -> ~1-3M triangles, which chokes the
-        # downstream Poisson finalize + CoACD decomposition. Decimate to a sane
-        # budget here so assembly stays fast; 0 disables.
-        budget = int(os.environ.get("VID2SIM_TRIPOSG_FACES", "40000"))
-        if budget > 0 and len(m.triangles) > budget:
-            m = m.simplify_quadric_decimation(budget)
-        m.compute_vertex_normals()
-        return m
+        return (np.asarray(out[0], dtype=np.float64),
+                np.ascontiguousarray(np.asarray(out[1], dtype=np.int32)))
+
+    def _load_hunyuan(self):
+        """Import + load the Hunyuan3D 2.1 SHAPE pipeline once, caching it.
+
+        The repo (cloned by deploy/runpod/setup_hunyuan3d.sh) exposes the shape
+        package under hy3dshape/ (and hy3dpaint/ for the optional PBR texture
+        model). Model id defaults to the full 2.1 checkpoint; override with
+        VID2SIM_HUNYUAN_MODEL=tencent/Hunyuan3D-2mini for the 0.6B variant that
+        fits an 8 GB GPU (the local cost-saver path). Shape gen needs ~10 GB, so
+        the full 2.1 OOMs an 8 GB box -> caught -> object dropped (RunPod carries
+        it); texture generation (21 GB) is RunPod-only and not run here.
+        """
+        if self._hunyuan is not None:
+            return self._hunyuan
+        import sys
+
+        home = os.environ.get("VID2SIM_HUNYUAN_HOME", "/workspace/Hunyuan3D-2.1")
+        for p in (home, os.path.join(home, "hy3dshape"), os.path.join(home, "hy3dpaint")):
+            if os.path.isdir(p) and p not in sys.path:
+                sys.path.insert(0, p)
+        from hy3dshape.pipelines import Hunyuan3DDiTFlowMatchingPipeline
+
+        model_id = os.environ.get("VID2SIM_HUNYUAN_MODEL", "tencent/Hunyuan3D-2.1")
+        pipe = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(model_id)
+        # Hunyuan ships its own background remover; if unavailable, we pass the raw
+        # crop (the shape model tolerates a light background but prefers a clean one).
+        try:
+            from hy3dshape.rembg import BackgroundRemover
+            rembg = BackgroundRemover()
+        except Exception:
+            rembg = None
+        self._hunyuan = (pipe, rembg)
+        return self._hunyuan
+
+    def _run_hunyuan(self, crop_path):
+        """Hunyuan3D 2.1 SHAPE inference -> (verts, faces). Background-removes the
+        crop, runs the flow-matching shape pipeline, and returns the untextured
+        mesh in the model's own frame. Steps/seed via VID2SIM_HUNYUAN_STEPS/_SEED."""
+        import numpy as np
+        import torch
+        from PIL import Image
+
+        pipe, rembg = self._load_hunyuan()
+        img = Image.open(str(crop_path)).convert("RGB")
+        if rembg is not None:
+            img = rembg(img)  # -> RGBA with background stripped
+        steps = int(os.environ.get("VID2SIM_HUNYUAN_STEPS", "30"))
+        seed = int(os.environ.get("VID2SIM_HUNYUAN_SEED", "42"))
+        with torch.no_grad():
+            mesh = pipe(image=img, num_inference_steps=steps,
+                        generator=torch.Generator().manual_seed(seed))[0]
+        # Hunyuan returns a trimesh.Trimesh (shape only, no texture on this path).
+        return (np.asarray(mesh.vertices, dtype=np.float64),
+                np.ascontiguousarray(np.asarray(mesh.faces, dtype=np.int32)))
 
 
-def make_engine() -> Engine:
+def gen_model_for_tier(tier) -> str:
+    """The generative (image-to-3D) model for a tier — the plan's single source
+    of truth (fix K1): Tiers 1-2 -> TripoSG (fast, good), Tiers 3-4 -> Hunyuan3D
+    2.1 (highest quality, PBR). Unknown/None tier -> TripoSG (the safe default)."""
+    try:
+        return "triposg" if int(tier) <= 2 else "hunyuan3d"
+    except (TypeError, ValueError):
+        return "triposg"
+
+
+def make_engine(tier=None) -> Engine:
     """Pick the geometry-invention backend, in priority order:
       1. RunPodEngine  — if RUNPOD_API_KEY + an endpoint are set.
            RUNPOD_GEN_ENDPOINT_ID (alias RUNPOD_ENDPOINT_ID) — image-to-3D.
            RUNPOD_COMPLETION_ENDPOINT_ID                     — shape-completion.
       2. LocalGpuEngine — if a CUDA GPU is visible (and VID2SIM_LOCAL_GPU != "0").
       3. LocalEngine    — no GPU: completion = Poisson, generation = drop.
-    Model overrides: RUNPOD_GEN_MODEL/RUNPOD_COMPLETION_MODEL (RunPod) or
-    VID2SIM_GEN_MODEL/VID2SIM_COMPLETION_MODEL (local; default triposg/pointr)."""
+
+    The generative model defaults to the per-tier pick (gen_model_for_tier: T1-2
+    TripoSG, T3-4 Hunyuan3D). An explicit env override always wins:
+    RUNPOD_GEN_MODEL/RUNPOD_COMPLETION_MODEL (RunPod) or VID2SIM_GEN_MODEL/
+    VID2SIM_COMPLETION_MODEL (local). This is why heavy Hunyuan3D (~10 GB, tiers
+    3-4) lands on RunPod by default while the local 8 GB box keeps TripoSG — and
+    a small local scene can still force Hunyuan-2mini via VID2SIM_GEN_MODEL."""
+    tier_gen = gen_model_for_tier(tier)
     key = os.environ.get("RUNPOD_API_KEY")
     gen = os.environ.get("RUNPOD_GEN_ENDPOINT_ID") or os.environ.get("RUNPOD_ENDPOINT_ID")
     comp = os.environ.get("RUNPOD_COMPLETION_ENDPOINT_ID")
     if key and (gen or comp):
         return RunPodEngine(
             key, gen_endpoint=gen, completion_endpoint=comp,
-            gen_model=os.environ.get("RUNPOD_GEN_MODEL", "triposg"),
+            gen_model=os.environ.get("RUNPOD_GEN_MODEL", tier_gen),
             completion_model=os.environ.get("RUNPOD_COMPLETION_MODEL", "pointr"),
         )
     if os.environ.get("VID2SIM_LOCAL_GPU", "1") != "0" and LocalGpuEngine.is_available():
         return LocalGpuEngine(
-            gen_model=os.environ.get("VID2SIM_GEN_MODEL", "triposg"),
+            gen_model=os.environ.get("VID2SIM_GEN_MODEL", tier_gen),
             # PatchComplete is the verdict completion pick (real-scan robust, runs
             # locally); override with VID2SIM_COMPLETION_MODEL=pointr/compc/etc.
             completion_model=os.environ.get("VID2SIM_COMPLETION_MODEL", "patchcomplete"),

@@ -68,13 +68,69 @@ def test_local_engine_complete_closes_an_open_shell():
     assert out is not None and len(out.vertices) > 0
 
 
-def test_runpod_seams_raise_until_contract_provided():
-    eng = generative.RunPodEngine("k", gen_endpoint="gen", completion_endpoint="comp")
-    with pytest.raises(NotImplementedError):
-        eng._build_input(mode="complete", model="pointr", crop_path=None,
-                         coco_class="chair", cloud=None, mesh=None)
-    with pytest.raises(NotImplementedError):
+def test_runpod_build_input_regenerate_encodes_the_crop(tmp_path):
+    Image = pytest.importorskip("PIL.Image")
+    import base64
+    crop = tmp_path / "crop.jpg"
+    Image.new("RGB", (32, 32), (10, 20, 30)).save(crop)
+    eng = generative.RunPodEngine("k", gen_endpoint="gen")
+    payload = eng._build_input(mode="regenerate", model="hunyuan3d",
+                               crop_path=str(crop), coco_class="chair", cloud=None)
+    assert payload["mode"] == "regenerate" and payload["model"] == "hunyuan3d"
+    assert payload["coco_class"] == "chair"
+    assert len(base64.b64decode(payload["image_b64"])) > 100
+
+
+def test_runpod_build_input_complete_encodes_the_cloud():
+    import base64
+    import io
+    eng = generative.RunPodEngine("k", completion_endpoint="comp")
+    cloud = np.arange(30, dtype=np.float32).reshape(10, 3)
+    payload = eng._build_input(mode="complete", model="pointr", crop_path=None,
+                               coco_class="couch", cloud=cloud, mesh=None)
+    back = np.load(io.BytesIO(base64.b64decode(payload["cloud_npy_b64"])))
+    assert back.shape == (10, 3) and np.allclose(back, cloud)
+
+
+def test_runpod_decode_mesh_round_trips_obj():
+    o3d = pytest.importorskip("open3d")
+    import base64
+    import tempfile
+    box = o3d.geometry.TriangleMesh.create_box(0.5, 0.5, 0.5)
+    with tempfile.NamedTemporaryFile(suffix=".obj", delete=False) as tf:
+        path = tf.name
+    o3d.io.write_triangle_mesh(path, box)
+    with open(path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    eng = generative.RunPodEngine("k", gen_endpoint="gen")
+    rec = eng._decode_mesh({"mesh_b64": b64, "format": "obj"})
+    assert len(rec.vertices) > 0
+
+
+def test_runpod_decode_mesh_rejects_empty_output():
+    eng = generative.RunPodEngine("k", gen_endpoint="gen")
+    with pytest.raises(RuntimeError):
         eng._decode_mesh({})
+
+
+def test_gen_model_selected_by_tier():
+    # fix K1: tiers 1-2 -> TripoSG, tiers 3-4 -> Hunyuan3D
+    assert generative.gen_model_for_tier(1) == "triposg"
+    assert generative.gen_model_for_tier(2) == "triposg"
+    assert generative.gen_model_for_tier(3) == "hunyuan3d"
+    assert generative.gen_model_for_tier(4) == "hunyuan3d"
+    assert generative.gen_model_for_tier(None) == "triposg"  # safe default
+
+
+def test_make_engine_tier_sets_runpod_gen_model(monkeypatch):
+    monkeypatch.setenv("RUNPOD_API_KEY", "k")
+    monkeypatch.setenv("RUNPOD_GEN_ENDPOINT_ID", "gen")
+    monkeypatch.delenv("RUNPOD_GEN_MODEL", raising=False)
+    eng = generative.make_engine(tier=4)
+    assert isinstance(eng, generative.RunPodEngine) and eng.gen_model == "hunyuan3d"
+    # explicit override still wins
+    monkeypatch.setenv("RUNPOD_GEN_MODEL", "triposg")
+    assert generative.make_engine(tier=4).gen_model == "triposg"
 
 
 def test_regen_result_defaults_are_generative_provenance():
