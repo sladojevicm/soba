@@ -37,7 +37,7 @@ log "Install Hunyuan3D shape-model deps (NOT torch — keep the pod's CUDA build
 python3 -m pip install -q \
   "diffusers>=0.30" transformers accelerate huggingface_hub safetensors \
   einops omegaconf trimesh pymeshlab scikit-image opencv-python-headless \
-  ninja pybind11 rembg onnxruntime
+  ninja pybind11 rembg onnxruntime timm
 
 # hy3dshape ships a custom CUDA rasteriser / mesh-processor built from source;
 # --no-build-isolation lets it see the pod's torch + nvcc (as with TripoSG's diso).
