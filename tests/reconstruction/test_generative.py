@@ -167,6 +167,13 @@ def test_make_engine_tier_sets_runpod_gen_model(monkeypatch):
     assert generative.make_engine(tier=4).gen_model == "triposg"
 
 
+def test_runpod_regenerate_declines_without_crop():
+    # image-conditioned band, no crop -> decline (None), never raise (a raise
+    # here killed a full assembly run: the caller must be able to drop and go on)
+    eng = generative.RunPodEngine("k", gen_endpoint="gen")
+    assert eng.regenerate(cloud=None, crop_path=None, coco_class="chair") is None
+
+
 def test_regen_result_defaults_are_generative_provenance():
     r = generative.RegenResult(mesh=object())
     assert r.alignment_method in ("fpfh_icp", "coarse_aligned")

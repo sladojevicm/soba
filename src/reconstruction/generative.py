@@ -475,8 +475,11 @@ class RunPodEngine(Engine):
 
     def regenerate(self, *, cloud, crop_path, coco_class):
         # BOTTOM band: image-to-3D (image-conditioned). No gen endpoint -> None
-        # so the object is dropped (as with no GPU at all).
-        if not self.gen_endpoint:
+        # so the object is dropped (as with no GPU at all). Same for no crop:
+        # regeneration is image-conditioned, so an object too small to crop is
+        # DECLINED per the Engine contract (LocalGpuEngine already does), not a
+        # raise that kills the whole assembly.
+        if not self.gen_endpoint or crop_path is None:
             return None
         payload = self._build_input(
             mode="regenerate", model=self.gen_model, crop_path=crop_path,
