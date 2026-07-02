@@ -49,6 +49,11 @@ def main() -> None:
     ap.add_argument("--smooth-iters", type=int, default=assembler.RENDER_SMOOTH_ITERS,
                     help="Taubin iterations on the RENDER mesh only (0 = off, the "
                          "A/B baseline; collider/mass geometry is never smoothed)")
+    ap.add_argument("--gate-stride", type=int, default=1,
+                    help="score the Step-5 gate on every Nth frame only. Angular "
+                         "coverage/completeness change slowly with viewpoint, so "
+                         "a dense (stride-1) bundle gates ~N x faster with ~the "
+                         "same routing; TSDF fusion still integrates EVERY frame.")
     args = ap.parse_args()
 
     b = PerceptionBundle.open(args.bundle)
@@ -74,6 +79,8 @@ def main() -> None:
     routed = {}  # tid -> (strategy, cloud)
     for tid in tsdf._all_track_ids(b):
         fids, frames = tsdf._object_frames(b, tid, poses)
+        if args.gate_stride > 1:
+            fids, frames = fids[::args.gate_stride], frames[::args.gate_stride]
         cloud, keep = observed_cloud.accumulate_object_cloud(
             frames, K, voxel_size=voxel, return_keep=True)
         if len(cloud) < 4:
