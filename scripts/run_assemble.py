@@ -20,7 +20,7 @@ import numpy as np
 
 from perception.bundle import PerceptionBundle
 from reconstruction import confidence as cf
-from reconstruction import generative, observed_cloud, tsdf
+from reconstruction import gate_cache, generative, observed_cloud, tsdf
 from scene import assembler, lookup
 
 
@@ -57,6 +57,14 @@ def main() -> None:
                          "coverage/completeness change slowly with viewpoint, so "
                          "a dense (stride-1) bundle gates ~N x faster with ~the "
                          "same routing; TSDF fusion still integrates EVERY frame.")
+    ap.add_argument("--no-gate-cache", action="store_true",
+                    help="recompute the Step-5 gate from scratch, ignoring (and "
+                         "not writing) <bundle>/.gate_cache/. The cache is keyed "
+                         "on the gate params + frame_count, so it normally "
+                         "invalidates itself; this flag is the manual override.")
+    ap.add_argument("--gate-only", action="store_true",
+                    help="stop after the Step-5 routing printout (fast gate "
+                         "iteration / cache warm-up; no fusion or assembly)")
     args = ap.parse_args()
 
     b = PerceptionBundle.open(args.bundle)
@@ -78,18 +86,31 @@ def main() -> None:
     print(f"engine: {type(engine).__name__}"
           + (f"  gen_model={gen_model}" if gen_model else ""))
 
-    # --- Step 5 gate (on the cheap observed cloud), THREE-WAY routing
+    # --- Step 5 gate (on the cheap observed cloud), THREE-WAY routing.
+    # Accumulation + metrics are cached per (bundle, track, gate params) under
+    # <bundle>/.gate_cache/ — a hit skips the per-frame accumulation entirely.
+    use_cache = not args.no_gate_cache
+    ckey = gate_cache.params_key(
+        frame_count=b.manifest.frame_count, gate_stride=args.gate_stride,
+        voxel_size=voxel, motion_filter=False, tier_params=params)
     routed = {}  # tid -> (strategy, cloud)
     for tid in (args.tracks or tsdf._all_track_ids(b)):
-        fids, frames = tsdf._object_frames(b, tid, poses)
-        if args.gate_stride > 1:
-            fids, frames = fids[::args.gate_stride], frames[::args.gate_stride]
-        cloud, keep = observed_cloud.accumulate_object_cloud(
-            frames, K, voxel_size=voxel, return_keep=True)
-        if len(cloud) < 4:
+        hit = gate_cache.load(args.bundle, tid, ckey) if use_cache else None
+        if hit is not None:
+            cloud, cams, res = hit
+        else:
+            fids, frames = tsdf._object_frames(b, tid, poses)
+            if args.gate_stride > 1:
+                fids, frames = fids[::args.gate_stride], frames[::args.gate_stride]
+            cloud, keep = observed_cloud.accumulate_object_cloud(
+                frames, K, voxel_size=voxel, return_keep=True)
+            cams = np.array([poses[fids[i]][:3, 3] for i in keep]).reshape(-1, 3)
+            res = cf.gate_object(cloud, cams, args.tier) if len(cloud) >= 4 else None
+            if use_cache:
+                gate_cache.store(args.bundle, tid, ckey,
+                                 cloud=cloud, cams=cams, metrics=res)
+        if res is None:  # cloud too small to gate (cached too, so reruns skip fast)
             continue
-        cams = np.array([poses[fids[i]][:3, 3] for i in keep])
-        res = cf.gate_object(cloud, cams, args.tier)
         strat = args.force_strategy or res["strategy"]
         forced = "  (forced)" if args.force_strategy else ""
         print(f"  {classes.get(tid,'obj'):13} #{tid:<3} angle={res['angular_coverage_deg']} "
@@ -102,6 +123,8 @@ def main() -> None:
     n_compl = sum(1 for s, _ in routed.values() if s == cf.COMPLETION)
     print(f"\nrouting: {n_tsdf} keep(tsdf), {n_compl} completion, "
           f"{len(gen_tids)} generative")
+    if args.gate_only:
+        return
 
     inputs = []
 
