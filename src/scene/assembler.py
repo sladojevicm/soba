@@ -230,13 +230,14 @@ def _assemble_object(obj: ObjectInput, oid: int, ground_y: float, out_dir: Path,
     elif obj.strategy == "tsdf":
         final_mesh, vol = _tsdf_watertight_finalize(mesh)
     elif obj.strategy == "generative":
-        # TripoSG returns a closed shell; RENDER it as-is (a real thin chair, not a
-        # Poisson blob) but measure mass from the CONVEX-HULL volume. finalize_mesh
-        # would instead give the true enclosed volume when the decimated mesh stayed
-        # watertight and a Poisson/hull volume when it didn't — a 600x mass swing on
-        # the same object. Hull volume is stable per object and is what the mass
-        # solidity factor is calibrated against (see mass.hull_volume).
-        final_mesh, vol = mesh, mass.hull_volume(mesh)
+        # Generated mesh: RENDER it as-is (a real thin chair, not a Poisson blob)
+        # and measure mass from the ENCLOSED volume, clamped into a plausible
+        # fraction of the hull (mass.generative_volume). Cleanup guarantees the
+        # generated mesh is a watertight single component, so the enclosed volume
+        # is trustworthy — the earlier hull-only rule overshot mass badly (a
+        # table's hull fills all the air under the top: 206 kg dining tables).
+        # Hull volume remains the fallback for a non-watertight generation.
+        final_mesh, vol = mesh, mass.generative_volume(mesh, config_path=config_path)[0]
     else:
         final_mesh, vol, _watertight = mass.finalize_mesh(mesh)
 

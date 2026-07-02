@@ -116,13 +116,12 @@ def hull_volume(mesh) -> float:
     """Convex-hull volume — a SOLID bounding proxy for objects whose true enclosed
     volume is an unreliable measure of "how much stuff is there".
 
-    The generative (TripoSG) meshes are thin closed shells: a chair's real enclosed
-    volume is nearly zero (legs + a thin seat/back), and worse, whether decimation
-    keeps the mesh watertight flips it between the true-tiny volume and a
-    Poisson/hull volume — so identical chairs got 0.05 kg or 30 kg. The hull is a
-    stable per-object size, and mass_kg's solidity[class] factor is defined against
-    exactly this solid bounding volume (it discounts the air), so the two compose
-    correctly. Returns 0.0 on any failure."""
+    Historically this was the mass volume for ALL generated meshes (decimation used
+    to flip watertightness, so the enclosed volume flip-flopped 600x on identical
+    chairs); cleanup now guarantees watertight generations, so generated meshes use
+    generative_volume() and the hull remains only the non-watertight fallback —
+    the hull of a table fills all the air under the top and overshoots mass ~4x.
+    Returns 0.0 on any failure."""
     if len(mesh.vertices) == 0:
         return 0.0
     try:
@@ -130,6 +129,43 @@ def hull_volume(mesh) -> float:
         return _signed_volume(hull)
     except Exception:
         return 0.0
+
+
+def generative_volume(mesh, *, config_path: str = str(lookup._DEFAULT_CONFIG)) -> tuple[float, bool]:
+    """Mass volume for a GENERATED (image-to-3D) mesh. Returns (volume_m3,
+    used_enclosed).
+
+    Cleanup now guarantees a generated mesh is a watertight single component,
+    so its ENCLOSED volume is trustworthy again — the convex hull (the previous
+    rule, from the era when decimation flip-flopped watertightness) fills every
+    concavity and overshoots mass badly: a dining table's hull includes all the
+    air under the top (206 kg tables, 50 kg chairs).
+
+    Generation STYLE still swings enclosed/hull ~20x on identical furniture —
+    Hunyuan renders one chair as a thin shell (enclosed ~3% of hull, mass
+    under-reported) and one table as a solid blob (~63%, over-reported) —
+    while real furniture occupies a roughly constant fraction of its hull. So
+    the enclosed volume is CLAMPED into the [min_hull_ratio, max_hull_ratio]
+    band of the hull volume (config: generative_mass) before mass_kg applies
+    the class solidity. A mesh with no sane enclosed volume (not watertight
+    and signed-tetrahedron volume outside (0, hull]) keeps the hull fallback.
+    """
+    if len(mesh.vertices) == 0:
+        return 0.0, False
+    hull_v = hull_volume(mesh)
+    if hull_v <= 0.0:
+        return 0.0, False
+    enc = _signed_volume(mesh)
+    # Sanity: a meaningful enclosed volume is positive and can't exceed the hull
+    # (tolerance for float noise). is_watertight() alone is too strict — a small
+    # seam left by decimation barely perturbs the signed-tetrahedron sum.
+    sane = 0.0 < enc <= hull_v * 1.001
+    if not (sane or mesh.is_watertight()):
+        return hull_v, False
+    cfg = lookup.load_config(config_path).get("generative_mass", {}) or {}
+    lo = float(cfg.get("min_hull_ratio", 0.15))
+    hi = float(cfg.get("max_hull_ratio", 0.35))
+    return float(min(max(enc, lo * hull_v), hi * hull_v)), True
 
 
 def closed_mesh_volume(mesh) -> float:

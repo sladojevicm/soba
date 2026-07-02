@@ -48,6 +48,50 @@ def test_volume_watertight_vs_hull_fallback():
     assert not wt2 and vol2 > 0
 
 
+def test_generative_volume_uses_enclosed_not_hull():
+    """A generated "table" (top + one leg) must be massed by its ENCLOSED volume,
+    not its convex hull (which fills all the air under the top — the 206 kg bug)."""
+    import open3d as o3d
+
+    top = o3d.geometry.TriangleMesh.create_box(1.6, 0.05, 0.9)
+    top.translate((0.0, 0.70, 0.0))
+    leg = o3d.geometry.TriangleMesh.create_box(0.08, 0.70, 0.08)
+    table = top + leg  # two watertight components; signed volume is still sane
+    enc = 1.6 * 0.05 * 0.9 + 0.08 * 0.70 * 0.08
+    hull = mass.hull_volume(table)
+    vol, used_enclosed = mass.generative_volume(table)
+    assert used_enclosed
+    assert vol < hull / 2  # nowhere near the hull
+    # enclosed (~0.076) is below min_hull_ratio * hull -> clamped UP to the floor
+    assert vol == pytest.approx(max(enc, 0.15 * hull), rel=1e-3)
+
+
+def test_generative_volume_clamps_solid_blob_to_hull_band():
+    """A solid-blob generation (enclosed == hull) is clamped DOWN to
+    max_hull_ratio so class solidity doesn't compound into an overshoot."""
+    import open3d as o3d
+
+    box = o3d.geometry.TriangleMesh.create_box(1.0, 1.0, 1.0)
+    vol, used_enclosed = mass.generative_volume(box)
+    assert used_enclosed
+    assert vol == pytest.approx(0.35, rel=1e-3)  # max_hull_ratio * 1 m^3
+
+
+def test_generative_volume_hull_fallback_when_not_sane():
+    """No sane enclosed volume (open shell with a garbage signed volume) ->
+    hull volume, the pre-fix behaviour."""
+    import open3d as o3d
+
+    box = o3d.geometry.TriangleMesh.create_box(1.0, 1.0, 1.0)
+    # keep only 2 faces -> wildly non-watertight; far from the origin the
+    # signed-tetrahedron sum of an open patch is garbage (way beyond the hull)
+    box.triangles = o3d.utility.Vector3iVector(np.asarray(box.triangles)[:2])
+    box.translate((100.0, 100.0, 100.0))
+    vol, used_enclosed = mass.generative_volume(box)
+    assert not used_enclosed
+    assert vol == pytest.approx(mass.hull_volume(box), rel=1e-6)
+
+
 # --- ground -------------------------------------------------------------
 def test_ground_y_from_clouds():
     a = np.array([[0, 0.50, 0], [0, 1.0, 0]], dtype=float)
