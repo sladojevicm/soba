@@ -117,7 +117,10 @@ def main() -> None:
             cloud=cloud, strategy="generative",
             alignment_method=r.alignment_method, scale_method=r.scale_method))
     if n_dropped:
-        print(f"  {n_dropped} generative object(s) dropped (no GPU engine — deferred)")
+        print(f"  {n_dropped} generative object(s) dropped — "
+              f"{type(engine).__name__} declined to regenerate (no engine, model "
+              f"not installed/failed, or no crop; e.g. hunyuan3d needs ~10 GB "
+              f"VRAM — VID2SIM_GEN_MODEL=triposg fits an 8 GB card)")
 
     # tsdf + completion bands: fuse, then assemble (completion gets gap-filled).
     if fusable:

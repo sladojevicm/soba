@@ -376,9 +376,14 @@ class RunPodEngine(Engine):
         non-200 status or a RunPod-level error field.
         """
         import json
+        import os
         import urllib.request
 
-        url = f"{self.BASE_URL}/{endpoint}/runsync"
+        # VID2SIM_RUNPOD_URL overrides the full runsync URL — for the SDK's
+        # local test server (`python generative_handler.py --rp_serve_api`) on
+        # a plain SSH pod, reached through a tunnel (no serverless endpoint).
+        url = os.environ.get("VID2SIM_RUNPOD_URL") or \
+            f"{self.BASE_URL}/{endpoint}/runsync"
         body = json.dumps({"input": payload}).encode()
         req = urllib.request.Request(
             url,
