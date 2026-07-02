@@ -1,9 +1,10 @@
 """Best-frame crop staging tests (CPU, no model).
 
 Builds a tiny real bundle with the SAME object visible at two sizes across two
-frames, and asserts the guarantees the generative band relies on: the frame with
-the LARGEST mask is chosen, the crop is whitened outside the mask, and an object
-that is never visible enough yields None so the caller drops it.
+frames, and asserts the guarantees the generative band relies on: the best view
+is chosen (largest 3D extent when depth+poses exist, else largest mask), the
+crop is whitened outside the mask, and an object that is never visible enough
+yields None so the caller drops it.
 """
 
 from __future__ import annotations
@@ -14,34 +15,74 @@ from perception import crop_stage
 from perception.bundle import Intrinsics, Manifest, PerceptionBundle
 
 
+def _diamond_mask(r: int, centre: int = 25) -> np.ndarray:
+    """A diamond (not a full square): the tight crop's CORNERS lie outside the
+    mask, so background whitening is observable at the corners."""
+    yy, xx = np.mgrid[0:64, 0:64]
+    return ((np.abs(yy - centre) + np.abs(xx - centre)) <= r).astype(np.uint8) * 255
+
+
 def _bundle(tmp_path):
     b = PerceptionBundle.create(
         tmp_path / "b",
         Manifest(session_id="t", fps=30.0, frame_count=2, source="test"),
         Intrinsics(fx=100.0, fy=100.0, cx=32.0, cy=32.0),
     )
-    # frame 0: small mask (16x16 red square). frame 1: large mask (40x40).
-    for fid, side, color in ((0, 16, (255, 0, 0)), (1, 40, (0, 255, 0))):
+    # frame 0: small mask (r=8 red diamond). frame 1: large mask (r=20 green).
+    for fid, r, color in ((0, 8, (255, 0, 0)), (1, 20, (0, 255, 0))):
+        mask = _diamond_mask(r)
         rgb = np.zeros((64, 64, 3), np.uint8)
-        mask = np.zeros((64, 64), np.uint8)
-        rgb[5:5 + side, 5:5 + side] = color
-        mask[5:5 + side, 5:5 + side] = 255
+        rgb[mask > 0] = color
         b.write_rgb(fid, rgb)
         b.write_mask(fid, 7, mask)
     return b
 
 
 def test_picks_largest_mask_frame_and_whitens_background(tmp_path):
+    # No poses/depth in this bundle -> falls back to the largest-mask rule.
     b = _bundle(tmp_path)
     p = crop_stage.stage_crop(b, 7, pad_frac=0.0, min_area_px=16)
     assert p is not None and p.exists()
     crop = b.read_crop(7)
-    # frame 1 (the 40x40 green view) wins -> crop ~40px, not ~16px
+    # frame 1 (the r=20 green view) wins -> crop ~41px, not ~17px
     assert min(crop.shape[:2]) >= 36
-    # corners are outside the object's footprint after tight crop -> white
-    assert tuple(int(c) for c in crop[0, 0]) == (255, 255, 255)
+    # corners are outside the diamond after tight crop -> whitened (JPEG-tolerant)
+    assert all(int(c) >= 240 for c in crop[0, 0])
     # the object's green survives somewhere in the crop
     assert (crop[:, :, 1] > 200).any()
+
+
+def test_prefers_frame_revealing_most_3d_structure(tmp_path):
+    """With depth + poses available, the best frame is the one whose
+    back-projected points span the largest WORLD extent (a front-on revealing
+    view), even if another frame has a bigger mask (a close-up grazing view)."""
+    b = PerceptionBundle.create(
+        tmp_path / "b3d",
+        Manifest(session_id="t", fps=30.0, frame_count=2, source="test"),
+        Intrinsics(fx=100.0, fy=100.0, cx=32.0, cy=32.0),
+    )
+    # frame 0: HUGE mask (40x40 red) but very close (0.1 m) -> tiny 3D extent.
+    # frame 1: smaller mask (24x24 green) but far (2.0 m) -> big 3D extent.
+    for fid, side, color, depth_mm in ((0, 40, (255, 0, 0), 100),
+                                       (1, 24, (0, 255, 0), 2000)):
+        rgb = np.zeros((64, 64, 3), np.uint8)
+        mask = np.zeros((64, 64), np.uint8)
+        depth = np.zeros((64, 64), np.uint16)
+        rgb[5:5 + side, 5:5 + side] = color
+        mask[5:5 + side, 5:5 + side] = 255
+        depth[5:5 + side, 5:5 + side] = depth_mm
+        b.write_rgb(fid, rgb)
+        b.write_mask(fid, 7, mask)
+        b.write_depth_mm(fid, depth)
+    b.write_poses([np.eye(4), np.eye(4)])
+
+    p = crop_stage.stage_crop(b, 7, pad_frac=0.0, min_area_px=16)
+    assert p is not None
+    crop = b.read_crop(7)
+    # frame 1's 24px view chosen (not frame 0's 40px close-up)
+    assert max(crop.shape[:2]) <= 30
+    assert (crop[:, :, 1] > 200).any()      # green view
+    assert not (crop[:, :, 0] > 200).any()  # not the red close-up
 
 
 def test_absent_object_returns_none(tmp_path):

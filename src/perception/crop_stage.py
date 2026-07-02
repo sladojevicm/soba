@@ -15,16 +15,56 @@ import numpy as np
 
 
 def _best_frame(bundle, track_id: int, *, min_area_px: int):
-    """Frame id with the largest mask for track_id (closest/cleanest view), or
-    None if the object is never visible enough to be worth regenerating."""
-    best_fid, best_area = None, 0
+    """Frame id of the BEST-LOOKING view of track_id for image-to-3D, or None if
+    the object is never visible enough to be worth regenerating.
+
+    NOT the largest mask (the old rule): a chair seen edge-on from up close has a
+    huge mask yet is a useless grazing panel — TripoSG then builds a blob from it.
+    The plan says "best picture in the whole sequence", i.e. the view that reveals
+    the MOST of the object's real 3D structure. We score each frame by the 3D
+    EXTENT (world-space bounding-box diagonal) of its back-projected object points:
+    a front-on view spans the whole chair (seat+back+base); a foreshortened edge-on
+    view spans a thin sliver. Falls back to mask area if depth/poses are missing.
+
+    The min_area_px gate (drop objects too small to regenerate usefully) is kept,
+    judged on the object's LARGEST mask across the sequence.
+    """
+    try:
+        poses = bundle.read_poses()
+        Kinv = np.linalg.inv(bundle.intrinsics.matrix())
+    except Exception:
+        poses, Kinv = None, None
+
+    # Score by 3D extent when poses/depth are available, else by mask area. The
+    # two metrics never mix within one pass (different scales), so pick the mode up
+    # front from whether any usable 3D score was produced.
+    best_ext_fid, best_ext = None, -1.0
+    best_area_fid, best_area = None, 0
     for fid in bundle.iter_frame_ids():
         if not bundle.mask_path(fid, track_id).exists():
             continue
-        area = int((bundle.read_mask(fid, track_id) > 0).sum())
+        mask = np.asarray(bundle.read_mask(fid, track_id)) > 0
+        area = int(mask.sum())
+        if area == 0:
+            continue
         if area > best_area:
-            best_fid, best_area = fid, area
-    return best_fid if best_area >= min_area_px else None
+            best_area_fid, best_area = fid, area
+        if poses is not None and area >= min_area_px:
+            try:
+                depth = np.asarray(bundle.read_depth_mm(fid)).astype(np.float64)
+                ys, xs = np.where(mask & (depth > 0))
+                if len(ys) >= 200:
+                    z = depth[ys, xs] / 1000.0
+                    cam = (Kinv @ np.c_[xs, ys, np.ones(len(xs))].T).T * z[:, None]
+                    world = (poses[fid][:3, :3] @ cam.T).T + poses[fid][:3, 3]
+                    ext = float(np.linalg.norm(world.max(0) - world.min(0)))
+                    if ext > best_ext:
+                        best_ext_fid, best_ext = fid, ext
+            except Exception:
+                pass
+    if best_area < min_area_px:
+        return None
+    return best_ext_fid if best_ext_fid is not None else best_area_fid
 
 
 def stage_crop(bundle, track_id: int, *, pad_frac: float = 0.12,
