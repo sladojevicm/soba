@@ -4,7 +4,81 @@ _Last updated: 2026-06-28. This is a working handoff so a fresh session can resu
 without re-deriving everything. The authoritative design is `PLAN_FINAL_FINAL.txt`
 (currently at `~/projects/vid2sim/PLAN_FINAL_FINAL.txt`, version 14)._
 
-## ⬆️ LATEST SESSION (2026-07-02): full-project sanity check, red test FIXED
+## ⬆️ LATEST SESSION (2026-07-02, part 3): RUNPOD POD LIVE — Hunyuan3D generative band REAL
+User provided a RunPod pod (RTX 3090 24 GB, `slow_tomato_gull`, SSH
+`root@213.192.2.110 -p 40028`; **REMIND USER TO STOP IT when done — bills
+hourly**). First-ever live run of the plan's cloud-GPU generative band:
+- **Hunyuan3D 2.1 installed on the pod** via `deploy/runpod/setup_hunyuan3d.sh`
+  (first real execution; it works — one missing dep `timm` found+added). Weights
+  (14 GB) in `/root/.cache` (NOT /workspace → gone if pod is REPLACED; script
+  restores in ~5 min). Pod pip needs `PIP_BREAK_SYSTEM_PACKAGES=1` (PEP 668).
+  Code shipped by `git archive HEAD | ssh ... tar -x` into /workspace/vid2sim-v2.
+- **The serverless handler runs on the pod as a plain HTTP server**
+  (`python3 generative_handler.py --rp_serve_api --rp_api_port 8777`, log
+  /workspace/handler.log) and the local pipeline drives it through an SSH
+  tunnel via the new **`VID2SIM_RUNPOD_URL`** override — the REAL
+  RunPodEngine transport (`_build_input`/`_decode_mesh`) validated live:
+  watertight chair mesh back on first post-timm attempt. No serverless
+  deployment needed for a pod; for real serverless later just set
+  RUNPOD_API_KEY + RUNPOD_GEN_ENDPOINT_ID and unset VID2SIM_RUNPOD_URL.
+- **`SplitEngine` added** (make_engine composes it: RunPod gen endpoint set,
+  no completion endpoint, local CUDA present) → generative band on the pod,
+  completion band stays local PatchComplete instead of degrading to Poisson.
+- **RunPodEngine contract fix:** regenerate() now DECLINES (None) on a missing
+  crop instead of raising — a raise killed a full 35-min tier-4 assembly at the
+  first uncroppable object (chair#9). Test pins it. 166 tests pass.
+- **Scenes from the dense (2000-frame) bundle, tier 4, gate-stride 10:**
+  - `out/scene_office_3_dense` — local: 3 fused (PatchComplete+fusion+seal) +
+    9 TripoSG, 12 objects (12-cap), **server smoke-tested: schema-valid, 12/12
+    meshes+hulls fetchable**. Generative masses still rough (125 kg table).
+  - `out/scene_office_3_hy` — same but generative band = **Hunyuan3D 2.1 on
+    the pod** (~40 min wall; 9 generated + 3 fused = 12 objects, 1 uncroppable
+    chair declined gracefully). Schema-valid, 12/12 meshes served. Masses far
+    saner than TripoSG's (chairs 2-20 kg vs 0.4-39 kg; tables still ~100 kg
+    high → solidity recalibration is future work). Serve either scene with
+    `scripts/serve.py --scene out/scene_office_3_hy`.
+- Gate scores on dense data ≈ identical to 100-frame (chair#25 120.8°/0.758 vs
+  121°/0.74) — coverage really is trajectory-bound; `--gate-stride` validated.
+
+## ⬆️ EARLIER (2026-07-02, part 2): dense rebuild AUDITED, YOLO+SAM2 REAL
+All committed + pushed on `fix/phase3-pose-and-eval` (through `1ae544a`).
+- **Dense office_3 bundle built**: ALL 2000 frames (stride 1) at
+  `~/projects/vid2sim/data/replica/bundles_dense/office_3` (1.2 GB). The old
+  100-frame bundle stays at `bundles/office_3`. Disk was 96% full — deleted the
+  superseded room_0 artifacts (demo zip + extracted/ + bundle_room0, ~9 GB
+  reclaimed, STATUS said deletable; `bundles/room_0` is the replacement).
+- **Data-loss audit (scripts/audit_data_loss.py) ANSWERED the June-28 questions:**
+  (1) the depth gate [400,8000]mm loses ZERO pixels on Replica — exonerated;
+  (2) the Open3D default weight threshold (~3 obs/voxel) cost 2-10% of TSDF
+  vertices on 100 frames (table worst = the thin legs) and the dense rebuild
+  FIXES it: w3/w1 goes to ~1.00 on all four audited objects (couch/table/
+  chair25/chair9), table +14% vertices; (3) density buys OBSERVATIONS per
+  voxel, not coverage — unique 5mm cells only +14-39%, dims unchanged, the
+  ≤123° room-scan ceiling stands. JSON: out/audit_dense{,_tsdf}.json.
+- **YOLO detection EXISTS now (`src/perception/detect.py`)**: ultralytics
+  YOLO-seg (yolo11s-seg) + the plan's Step-1 IoU tracker (class-gated greedy
+  match >0.4, retire after 5) as a `detector` callable for
+  `TUMReader.to_bundle`. Injectable infer seam, 7 unit tests, RGB→BGR flip is
+  load-bearing (ultralytics assumes BGR numpy input).
+- **Real SAM2 RAN for the first time** (Phase-4 validation): fr1/xyz, 16 stable
+  tracks (keyboard/tv/book/chair/cup/mouse) refined over 100 frames, ~1.5 fps
+  on the 4060 (4.4 GB VRAM), crops staged. Two latent bugs found+fixed by the
+  real run: Sam2VideoPredictor needs **bf16 autocast** (dtype crash without),
+  and refine_masks gained a `track_ids` filter (YOLO 1-frame flicker tracks —
+  32 of 48! — would each cost a SAM2 video pass). Driver script:
+  `scripts/run_tum_detect.py` (weights: ~/projects/vid2sim/models/
+  sam2.1_hiera_large.pt; yolo auto-downloads). Bundle:
+  `data/tum/bundle_f1xyz_yolo`.
+- **run_assemble gained `--gate-stride N`** (gate scores every Nth frame;
+  TSDF still fuses all) — the dense bundle's gate is otherwise ~20x the
+  100-frame cost (it re-reads depth per object). Default 1 = old behaviour.
+- **Dense reassembly**: `out/scene_office_3_dense` (tier 2, gate-stride 10) —
+  see the scene section / next-session note for the result.
+- **Next**: TUM pipeline continuation (poses on bundle_f1xyz_yolo → cloud →
+  gate → assemble = first REAL-SENSOR end-to-end scene); gate caching; CLI
+  (Phase 12); icp_align.py (Phase 8).
+
+## ⬆️ EARLIER (2026-07-02, part 1): full-project sanity check, red test FIXED
 - **Test suite: 156 pass, 0 fail** (was 154+1 red). The red
   `tests/perception/test_crop_stage.py` was the TEST's fault, not the code:
   it drew a FULL-SQUARE mask then asserted the tight crop's corners are
