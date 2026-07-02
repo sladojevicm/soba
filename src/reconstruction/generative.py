@@ -228,6 +228,87 @@ def _register_full_to_cloud(verts, cloud, voxel: float = 0.03):
     return (np.c_[V, np.ones(len(V))] @ T_mc.T)[:, :3]
 
 
+def _strip_base_and_fragments(mesh):
+    """Clean an image-to-3D output BEFORE scaling/placement.
+
+    Two failure modes seen on real Hunyuan3D output (2026-07-02, office_3):
+      * a hallucinated DISPLAY MAT under the object — the model reads the
+        object-on-white crop as a product shot on a base. The mat spans the
+        whole footprint, inflates the bbox, and the uniform class-prior scale
+        then shrinks the real object into a miniature standing on a platform.
+      * loose FRAGMENTS — a weak crop yields disconnected pieces that float
+        once the object is simulated as one rigid body.
+
+    MAT rule (orientation-free, works even when the mesh is view-tilted): a
+    thin band (6%) at one END of an axis whose cross-section covers >65% of
+    the bbox while the NEXT band up covers <35%. An object body is much
+    smaller than its mat; a couch/table is fat all the way up so it never
+    matches. FRAGMENT rule: drop components with <15% of the largest
+    component's surface area. Disable with VID2SIM_GEN_CLEAN=0.
+    """
+    import numpy as np
+    import open3d as o3d
+
+    verts = np.asarray(mesh.vertices)
+    tris = np.asarray(mesh.triangles)
+    if len(verts) == 0 or len(tris) == 0:
+        return mesh
+
+    out = o3d.geometry.TriangleMesh(mesh)
+
+    # --- mat cut ---------------------------------------------------------
+    # ALL band geometry is anchored on SAMPLED surface points, not vertices:
+    # a coarse mesh (box with corner-only vertices) has empty vertex bands, and
+    # stray vertices below the surface shift a vertex-anchored band so the mat
+    # lands in band2 and the profile check misses it (both seen for real).
+    pts = np.asarray(mesh.sample_points_uniformly(5000).points)
+    lo, hi = pts.min(axis=0), pts.max(axis=0)
+    ext = hi - lo
+
+    def _cover(sel, a):
+        """Cross-section bbox area of selected sample points on the axes != a,
+        as a fraction of the full bbox cross-section."""
+        if sel.sum() < 8:
+            return 0.0
+        o1, o2 = [x for x in (0, 1, 2) if x != a]
+        b = pts[sel]
+        num = (b[:, o1].max() - b[:, o1].min()) * (b[:, o2].max() - b[:, o2].min())
+        den = max(ext[o1] * ext[o2], 1e-12)
+        return float(num / den)
+
+    for a in (0, 1, 2):
+        if ext[a] <= 1e-9:
+            continue
+        for end in (lo[a], hi[a]):
+            sign = 1.0 if end == lo[a] else -1.0
+            dp = sign * (pts[:, a] - end)           # sample depth into the mesh
+            d = sign * (verts[:, a] - end)          # vertex depth (for the cut)
+            band1 = dp < 0.06 * ext[a]
+            band2 = (dp >= 0.06 * ext[a]) & (dp < 0.18 * ext[a])
+            if _cover(band1, a) > 0.65 and _cover(band2, a) < 0.35:
+                band1 = d < 0.06 * ext[a]           # vertex-space mat band
+                cut = band1[tris].all(axis=1)       # faces fully inside the mat
+                if cut.any() and not cut.all():
+                    out.remove_triangles_by_mask(cut)
+                    out.remove_unreferenced_vertices()
+                break
+        else:
+            continue
+        break
+
+    # --- fragment filter --------------------------------------------------
+    if len(out.triangles) == 0:
+        return mesh
+    cluster, _, areas = out.cluster_connected_triangles()
+    areas = np.asarray(areas)
+    if len(areas) > 1:
+        keep = areas >= 0.15 * areas.max()
+        if not keep.all():
+            out.remove_triangles_by_mask(~keep[np.asarray(cluster)])
+            out.remove_unreferenced_vertices()
+    return out if len(out.vertices) else mesh
+
+
 def coarse_align_to_cloud(mesh, cloud, coco_class: str | None = None):
     """Scale a unit-cube GENERATED mesh to a real size, YAW-align it to the
     observed cloud, and place it where the object was seen.
@@ -252,6 +333,11 @@ def coarse_align_to_cloud(mesh, cloud, coco_class: str | None = None):
     cloud = np.asarray(cloud, dtype=np.float64)
     if len(mesh.vertices) == 0:
         return mesh
+
+    # Strip the hallucinated display mat + loose fragments FIRST, so the
+    # class-prior scale sizes the actual object, not object+mat.
+    if os.environ.get("VID2SIM_GEN_CLEAN", "1") != "0":
+        mesh = _strip_base_and_fragments(mesh)
 
     out = o3d.geometry.TriangleMesh(mesh)  # copy
     ab = out.get_axis_aligned_bounding_box()

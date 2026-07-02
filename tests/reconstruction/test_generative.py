@@ -167,6 +167,42 @@ def test_make_engine_tier_sets_runpod_gen_model(monkeypatch):
     assert generative.make_engine(tier=4).gen_model == "triposg"
 
 
+def _box(cx, cy, cz, sx, sy, sz):
+    import open3d as o3d
+    b = o3d.geometry.TriangleMesh.create_box(sx, sy, sz)
+    b.translate((cx - sx / 2, cy - sy / 2, cz - sz / 2))
+    return b
+
+
+def test_strip_removes_hallucinated_mat():
+    # a chair-sized box standing on a thin full-footprint mat (the Hunyuan
+    # display-base artifact): the mat must go, the object must stay.
+    chair = _box(0, 0.45, 0, 0.4, 0.9, 0.4)
+    mat = _box(0, 0.005, 0, 1.6, 0.01, 1.6)
+    cleaned = generative._strip_base_and_fragments(chair + mat)
+    import numpy as np
+    ext = np.asarray(cleaned.get_max_bound()) - np.asarray(cleaned.get_min_bound())
+    assert ext[0] < 0.6 and ext[2] < 0.6      # mat footprint (1.6 m) gone
+    assert ext[1] > 0.8                        # chair height kept
+
+
+def test_strip_keeps_solid_objects_untouched():
+    # a couch-like solid is fat all the way up -> the mat rule must NOT fire
+    couch = _box(0, 0.45, 0, 2.0, 0.9, 0.9)
+    n_before = len(couch.triangles)
+    cleaned = generative._strip_base_and_fragments(couch)
+    assert len(cleaned.triangles) == n_before
+
+
+def test_strip_drops_floating_fragments():
+    body = _box(0, 0.5, 0, 0.5, 1.0, 0.5)
+    crumb = _box(2.0, 2.0, 2.0, 0.05, 0.05, 0.05)   # tiny far-away fragment
+    cleaned = generative._strip_base_and_fragments(body + crumb)
+    import numpy as np
+    hi = np.asarray(cleaned.get_max_bound())
+    assert hi[0] < 1.0 and hi[1] < 1.5          # crumb (at ~2.0) gone
+
+
 def test_runpod_regenerate_declines_without_crop():
     # image-conditioned band, no crop -> decline (None), never raise (a raise
     # here killed a full assembly run: the caller must be able to drop and go on)

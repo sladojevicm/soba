@@ -110,7 +110,7 @@ tiers:
     # PROVISIONAL/uncalibrated — set near walk-around quality, so on room-scan data
     # nothing clears them and the survivors route to "completion" (correct: the
     # best object we have is ~0.75 completeness / 121deg, i.e. partial, not "keep").
-    gate: { angular_deg: 110, completeness: 0.45, keep_angular_deg: 160, keep_completeness: 0.85 }
+    gate: { angular_deg: 105, completeness: 0.38, keep_angular_deg: 160, keep_completeness: 0.85 }  # complete bar widened 2026-07-02 (user: prefer completion over image-gen)
     generative_model: triposg      # BOTTOM band: image-to-3D (crop -> object)
     completion_model: pointr        # MIDDLE band: learned geometry shape-completion (GPU)
     physics: claude
@@ -121,7 +121,7 @@ tiers:
     pose_method: mast3r
     tsdf: true
     voxel_size_m: 0.003
-    gate: { angular_deg: 100, completeness: 0.42, keep_angular_deg: 155, keep_completeness: 0.85 }  # complete bar recalibrated (was 140/0.60); keep_completeness 0.85 -> geometric repair (Option D)
+    gate: { angular_deg: 95, completeness: 0.34, keep_angular_deg: 155, keep_completeness: 0.85 }  # complete bar widened 2026-07-02 (user: prefer completion over image-gen)
     generative_model: hunyuan3d    # BOTTOM band: image-to-3D (crop -> object)
     completion_model: pointr        # MIDDLE band: learned geometry shape-completion (GPU)
     physics: claude
@@ -132,7 +132,7 @@ tiers:
     pose_method: orbslam3
     tsdf: true
     voxel_size_m: 0.002
-    gate: { angular_deg: 90, completeness: 0.38, keep_angular_deg: 150, keep_completeness: 0.85 }  # complete bar recalibrated (was 130/0.55); keep_completeness 0.85 -> geometric repair (Option D)
+    gate: { angular_deg: 85, completeness: 0.30, keep_angular_deg: 150, keep_completeness: 0.85 }  # complete bar widened 2026-07-02 (user: prefer completion over image-gen)
     generative_model: hunyuan3d    # BOTTOM band: image-to-3D (crop -> object)
     completion_model: pointr        # MIDDLE band: learned geometry shape-completion (GPU)
     physics: claude
