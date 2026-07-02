@@ -1,17 +1,49 @@
 """Best-frame crop staging for the generative (image-to-3D) band.
 
 The generative engine regenerates an under-observed object from ONE image, so it
-needs a single clean crop per object. We pick the frame where the object is
-best-observed (largest refined mask = closest / least-occluded view) and write it
-segmented onto a white background — the input TripoSG's RMBG step expects. The
-bundle works in RGB throughout, so the staged jpg is correctly coloured. CPU-only;
-no model here.
+needs a single clean crop per object. Frame choice is two-stage: (1) score every
+frame by the 3D EXTENT of its back-projected object points (how much of the real
+structure the view reveals — mask area is the no-poses fallback), then (2) among
+the frames within the top ~20% of that score, pick the best IMAGE QUALITY:
+sharpness (variance of the Laplacian over the masked region) damped by an
+exposure factor that penalises very dark crops. Extent stays primary — a sharp
+sliver is still useless — but among equally revealing views a motion-blurred or
+underexposed frame no longer wins. The chosen view is written segmented onto a
+white background — the input TripoSG's RMBG step expects. The bundle works in
+RGB throughout, so the staged jpg is correctly coloured. CPU-only; no model here.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
 import numpy as np
+
+# A frame competes on image quality if its view score (3D extent, or mask area
+# on the fallback path) is within this fraction of the best frame's score —
+# i.e. roughly the top 20% band. 1.0 would disable the quality stage.
+SHORTLIST_FRAC = 0.8
+
+# Mean masked luminance (0-255 grayscale) below which a crop counts as
+# increasingly underexposed; the quality score scales down linearly with it.
+DARK_LUM = 60.0
+
+
+def _crop_quality(rgb, mask) -> float:
+    """Image quality of the masked object region: sharpness x exposure sanity.
+
+    Sharpness = variance of the Laplacian (grayscale) over the mask — motion
+    blur / defocus flattens it. Exposure = mean masked luminance, mapped to a
+    [~0, 1] damping factor so a very dark crop (which the generative model reads
+    as a black blob) loses to a lit one even if noise keeps its Laplacian busy.
+    """
+    import cv2
+
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    lap = cv2.Laplacian(gray, cv2.CV_64F)
+    sharpness = float(lap[mask].var())
+    lum = float(gray[mask].mean())
+    exposure = min(1.0, lum / DARK_LUM)
+    return sharpness * exposure
 
 
 def _best_frame(bundle, track_id: int, *, min_area_px: int):
@@ -25,6 +57,8 @@ def _best_frame(bundle, track_id: int, *, min_area_px: int):
     EXTENT (world-space bounding-box diagonal) of its back-projected object points:
     a front-on view spans the whole chair (seat+back+base); a foreshortened edge-on
     view spans a thin sliver. Falls back to mask area if depth/poses are missing.
+    Among the frames within SHORTLIST_FRAC of the best view score, the sharpest /
+    best-exposed one wins (_crop_quality) — extent first, image quality second.
 
     The min_area_px gate (drop objects too small to regenerate usefully) is kept,
     judged on the object's LARGEST mask across the sequence.
@@ -38,8 +72,9 @@ def _best_frame(bundle, track_id: int, *, min_area_px: int):
     # Score by 3D extent when poses/depth are available, else by mask area. The
     # two metrics never mix within one pass (different scales), so pick the mode up
     # front from whether any usable 3D score was produced.
-    best_ext_fid, best_ext = None, -1.0
-    best_area_fid, best_area = None, 0
+    ext_scores: list[tuple[int, float]] = []
+    area_scores: list[tuple[int, int]] = []
+    best_area = 0
     for fid in bundle.iter_frame_ids():
         if not bundle.mask_path(fid, track_id).exists():
             continue
@@ -47,8 +82,8 @@ def _best_frame(bundle, track_id: int, *, min_area_px: int):
         area = int(mask.sum())
         if area == 0:
             continue
-        if area > best_area:
-            best_area_fid, best_area = fid, area
+        area_scores.append((fid, area))
+        best_area = max(best_area, area)
         if poses is not None and area >= min_area_px:
             try:
                 depth = np.asarray(bundle.read_depth_mm(fid)).astype(np.float64)
@@ -57,14 +92,29 @@ def _best_frame(bundle, track_id: int, *, min_area_px: int):
                     z = depth[ys, xs] / 1000.0
                     cam = (Kinv @ np.c_[xs, ys, np.ones(len(xs))].T).T * z[:, None]
                     world = (poses[fid][:3, :3] @ cam.T).T + poses[fid][:3, 3]
-                    ext = float(np.linalg.norm(world.max(0) - world.min(0)))
-                    if ext > best_ext:
-                        best_ext_fid, best_ext = fid, ext
+                    ext_scores.append((fid, float(np.linalg.norm(world.max(0) - world.min(0)))))
             except Exception:
                 pass
     if best_area < min_area_px:
         return None
-    return best_ext_fid if best_ext_fid is not None else best_area_fid
+    scores = ext_scores if ext_scores else area_scores
+    # Top band by view score, best score first so a quality TIE keeps the most
+    # revealing view (and a quality failure degrades to the pure-extent pick).
+    ranked = sorted(scores, key=lambda s: s[1], reverse=True)
+    shortlist = [fid for fid, s in ranked if s >= SHORTLIST_FRAC * ranked[0][1]]
+    if len(shortlist) == 1:
+        return shortlist[0]
+    best_fid, best_q = shortlist[0], -1.0
+    for fid in shortlist:
+        try:
+            rgb = np.asarray(bundle.read_rgb(fid))
+            mask = np.asarray(bundle.read_mask(fid, track_id)) > 0
+            q = _crop_quality(rgb, mask)
+        except Exception:
+            continue
+        if q > best_q:
+            best_fid, best_q = fid, q
+    return best_fid
 
 
 def stage_crop(bundle, track_id: int, *, pad_frac: float = 0.12,
