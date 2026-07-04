@@ -850,7 +850,94 @@ class LocalGpuEngine(Engine):
             verts, faces = self._run_hunyuan(crop_path)
         else:
             raise NotImplementedError(f"local gen model '{self.gen_model}' not wired")
-        return self._finalize_gen_mesh(verts, faces)
+        mesh = self._finalize_gen_mesh(verts, faces)
+        if (self.gen_model in ("hunyuan3d", "hunyuan")
+                and os.environ.get("VID2SIM_HUNYUAN_PAINT", "0") == "1"):
+            mesh = self._paint_hunyuan(mesh, crop_path)
+        return mesh
+
+    def _paint_hunyuan(self, mesh, crop_path):
+        """Hunyuan3D-Paint texture stage -> the SAME object with vertex colors.
+
+        Runs the PBR texture pipeline (~21 GB VRAM — pod-only, which is why the
+        default is off) on the decimated shape mesh, then BAKES the produced UV
+        texture down to per-vertex colors: the whole downstream pipeline (clean,
+        align, GLB export, browser) speaks vertex colors, so a baked mesh flows
+        through untouched while a textured GLB would be lost at the first
+        open3d round-trip. Paint remeshes, so the painted topology REPLACES the
+        input's. Best-effort: any failure returns the untextured mesh.
+        """
+        import tempfile
+
+        import numpy as np
+        import open3d as o3d
+
+        try:
+            pipe = self._load_hunyuan_paint()
+            import trimesh
+            with tempfile.TemporaryDirectory() as td:
+                src = os.path.join(td, "shape.glb")
+                trimesh.Trimesh(np.asarray(mesh.vertices),
+                                np.asarray(mesh.triangles)).export(src)
+                # save_glb=False keeps the output a textured OBJ+MTL and skips
+                # the bpy (Blender) OBJ->GLB convert — bpy has no py3.12 wheel
+                # on the pod and is stubbed for import only.
+                out_path = pipe(mesh_path=src, image_path=str(crop_path),
+                                output_mesh_path=os.path.join(td, "painted.obj"),
+                                save_glb=False)
+                painted = trimesh.load(out_path, force="mesh")
+                colors = np.asarray(painted.visual.to_color().vertex_colors)
+            m = o3d.geometry.TriangleMesh(
+                o3d.utility.Vector3dVector(np.asarray(painted.vertices, np.float64)),
+                o3d.utility.Vector3iVector(np.ascontiguousarray(painted.faces, np.int32)))
+            m.vertex_colors = o3d.utility.Vector3dVector(
+                colors[:, :3].astype(np.float64) / 255.0)
+            m.compute_vertex_normals()
+            return m
+        except Exception as e:
+            log.warning("Hunyuan paint stage failed (%s) -> untextured mesh", e)
+            return mesh
+
+    def _load_hunyuan_paint(self):
+        """Import + build the Hunyuan3D-Paint pipeline once, caching it. The
+        repo's cfg paths are relative, so construction happens with cwd at
+        hy3dpaint (same gotcha as PatchComplete's priors/)."""
+        if getattr(self, "_hunyuan_paint", None) is not None:
+            return self._hunyuan_paint
+        import sys
+
+        home = os.environ.get("VID2SIM_HUNYUAN_HOME", "/workspace/Hunyuan3D-2.1")
+        paint_dir = os.path.join(home, "hy3dpaint")
+        for p in (home, paint_dir):
+            if os.path.isdir(p) and p not in sys.path:
+                sys.path.insert(0, p)
+        try:
+            from utils.torchvision_fix import apply_fix
+            apply_fix()
+        except Exception:
+            pass
+        # hy3dpaint's mesh_utils imports bpy (Blender) at module top-level, but
+        # bpy is only USED by the save_glb=True OBJ->GLB convert we never call
+        # (no py3.12 wheel exists). Stub it so the import succeeds.
+        if "bpy" not in sys.modules:
+            try:
+                import bpy  # noqa: F401
+            except ImportError:
+                import types
+                sys.modules["bpy"] = types.ModuleType("bpy")
+        from textureGenPipeline import (Hunyuan3DPaintConfig,
+                                        Hunyuan3DPaintPipeline)
+
+        views = int(os.environ.get("VID2SIM_PAINT_VIEWS", "6"))
+        res = int(os.environ.get("VID2SIM_PAINT_RES", "512"))
+        cwd = os.getcwd()
+        try:
+            os.chdir(paint_dir)
+            self._hunyuan_paint = Hunyuan3DPaintPipeline(
+                Hunyuan3DPaintConfig(views, res))
+        finally:
+            os.chdir(cwd)
+        return self._hunyuan_paint
 
     @staticmethod
     def _finalize_gen_mesh(verts, faces):
