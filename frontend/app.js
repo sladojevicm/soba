@@ -301,9 +301,7 @@ function statusLine() {
     `<span class="key">click</span> select · ` +
     `<span class="key">drag</span> push · ` +
     `<span class="key">space</span> drop ball · ` +
-    `<span class="key">f</span> frame all\n` +
-    `(sparse scene: only well-observed "tsdf" objects exist — generative ones\n` +
-    ` are deferred until a GPU is connected)`;
+    `<span class="key">f</span> frame all`;
 }
 
 // ---------------------------------------------------------------------------
