@@ -332,3 +332,34 @@ def test_coarse_align_unknown_class_uses_default_size():
     size = np.asarray(ab.max_bound) - np.asarray(ab.min_bound)
     # default prior 0.60 on the largest side; proportions kept (2:1:1 -> 0.6:0.3:0.3)
     assert np.allclose(size, [0.60, 0.30, 0.30], atol=1e-6)
+
+
+def test_class_dims_gate_rejects_panel_chair():
+    """A paper-thin PANEL 'chair' (0.25 m wide sheet) passed the height-only
+    gate and shipped as a floating board — the width check must catch it."""
+    assert not generative._class_dims_ok(_box(0, 0.45, 0, 0.25, 0.9, 0.05), "chair")
+    assert generative._class_dims_ok(_box(0, 0.45, 0, 0.5, 0.9, 0.5), "chair")
+
+
+def test_too_thin_rejects_l_shell_but_keeps_furniture():
+    """Drop-garbage policy: a bent L-shell 'table' (two paper-thin sheets
+    spanning a table-sized hull, enc/hull ~2%) is rejected; a real table shape
+    passes. Fixture sheets are DISJOINT (1 mm apart): o3d calls intersecting
+    components non-watertight, which would skip the gate."""
+    import open3d as o3d
+
+    shell = _box(0, 0, 0, 1.2, 0.005, 1.2) + _box(0, 0.4, 0, 0.005, 0.78, 1.2)
+    assert generative._too_thin(shell)
+    # table: 6 cm top over a fat pedestal -> comfortably above the 3% bar
+    table = _box(0, 0.7, 0, 1.2, 0.06, 0.8) + _box(0.45, 0, 0.25, 0.3, 0.69, 0.3)
+    assert not generative._too_thin(table)
+    # non-watertight -> skipped (enclosed volume is meaningless)
+    open_shell = _box(0, 0, 0, 1.0, 0.02, 1.0)
+    open_shell.triangles = o3d.utility.Vector3iVector(
+        __import__("numpy").asarray(open_shell.triangles)[:-2])
+    assert not generative._too_thin(open_shell)
+
+
+def test_accept_regen_applies_thin_shell_gate():
+    shell = _box(0, 0.2, 0, 1.2, 0.005, 1.2) + _box(0, 0.6, 0, 0.005, 0.75, 1.2)
+    assert not generative._accept_regen(shell, "dining table")

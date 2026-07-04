@@ -349,11 +349,12 @@ def _looks_shattered(mesh, min_dominant: float = 0.6) -> bool:
 
 
 def _class_dims_ok(mesh, coco_class: str | None) -> bool:
-    """Reject a generated object whose ALIGNED height is wildly outside its
-    class's physical range (config class_gates, fix R2) — e.g. a 'chair' that
-    is a 0.24 m-tall slab (a thick hallucinated mat fused with a miniature,
-    which the mat cut cannot separate). Wide tolerance (0.7x low, 1.5x high):
-    this only catches nonsense, not honest variance."""
+    """Reject a generated object whose ALIGNED dimensions are wildly outside
+    its class's physical range (config class_gates, fix R2) — e.g. a 'chair'
+    that is a 0.24 m-tall slab, or a 0.25 m-wide PANEL 'chair' (a flat sheet
+    the height gate alone let through: seen live as floating boards in the
+    office_3 desk cluster). Wide tolerance (0.7x low, 1.5x high): this only
+    catches nonsense, not honest variance."""
     try:
         from scene import lookup  # lazy: avoid import cycles at module load
         gates = lookup.load_config().get("class_gates", {})
@@ -362,11 +363,43 @@ def _class_dims_ok(mesh, coco_class: str | None) -> bool:
     g = gates.get((coco_class or "").lower(), gates.get("default"))
     if not g:
         return True
-    lo_hi = g.get("height") or g.get("diameter")
-    if not lo_hi:
-        return True
-    height = float(mesh.get_max_bound()[1] - mesh.get_min_bound()[1])
-    return 0.7 * lo_hi[0] <= height <= 1.5 * lo_hi[1]
+    ext = mesh.get_max_bound() - mesh.get_min_bound()
+    if "diameter" in g:
+        lo, hi = g["diameter"]
+        return 0.7 * lo <= float(max(ext)) <= 1.5 * hi
+    if "height" in g:
+        h = float(ext[1])
+        if not (0.7 * g["height"][0] <= h <= 1.5 * g["height"][1]):
+            return False
+    if "width" in g:
+        w = float(max(ext[0], ext[2]))
+        if not (0.7 * g["width"][0] <= w <= 1.5 * g["width"][1]):
+            return False
+    return True
+
+
+def _too_thin(mesh) -> bool:
+    """A generation that is a SHEET pretending to be an object (user policy:
+    don't create magic — drop garbage).
+
+    Measured as enclosed volume / convex-hull volume: real furniture occupies
+    >= ~4% of its hull even when spindly (worst honest office_3 chair: 4.1%),
+    while the failure mode — a bent L-shell 'table' spanning a table-sized
+    hull with paper-thin walls — measures 1-2.5%. Bar: 3%
+    (VID2SIM_GEN_MIN_SOLID overrides; 0 disables). Non-watertight meshes are
+    skipped (enclosed volume means nothing there)."""
+    bar = float(os.environ.get("VID2SIM_GEN_MIN_SOLID", "0.03"))
+    if bar <= 0:
+        return False
+    try:
+        if not mesh.is_watertight():
+            return False
+        enc = abs(mesh.get_volume())
+        hull, _ = mesh.compute_convex_hull()
+        hv = hull.get_volume()
+        return hv > 1e-9 and (enc / hv) < bar
+    except Exception:
+        return False
 
 
 def _clean_gen(mesh, max_detached: float = 0.3):
@@ -397,6 +430,10 @@ def _accept_regen(mesh, coco_class) -> bool:
         return False
     if not _class_dims_ok(mesh, coco_class):
         log.info("generated mesh rejected: implausible %s dimensions", coco_class)
+        return False
+    if _too_thin(mesh):
+        log.info("generated mesh rejected: paper-thin shell (not real %s "
+                 "geometry) — dropped per drop-garbage policy", coco_class)
         return False
     return True
 
@@ -895,6 +932,12 @@ class LocalGpuEngine(Engine):
                 o3d.utility.Vector3iVector(np.ascontiguousarray(painted.faces, np.int32)))
             m.vertex_colors = o3d.utility.Vector3dVector(
                 colors[:, :3].astype(np.float64) / 255.0)
+            # WELD: the paint remesh leaves seams unmerged — a visually solid
+            # table reads as ~600 touching "components" (22% dominant), which
+            # the client's _looks_shattered then falsely rejects. One
+            # duplicate-vertex weld reconnects it to a single component.
+            m.remove_duplicated_vertices()
+            m.remove_degenerate_triangles()
             m.compute_vertex_normals()
             return m
         except Exception as e:
