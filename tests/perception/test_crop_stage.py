@@ -160,6 +160,39 @@ def test_extent_stays_primary_over_sharpness(tmp_path):
     assert min(b.read_crop(7).shape[:2]) >= 36  # the revealing 40px frame
 
 
+def test_unoccluded_frame_beats_occluded_at_equal_extent(tmp_path):
+    """The holey-table bug: a view THROUGH other furniture has a big mask and a
+    big extent, but the occluder bites white intrusions into the crop that the
+    generative model reproduces as holes. The clean view must win."""
+    b = PerceptionBundle.create(
+        tmp_path / "bocc",
+        Manifest(session_id="t", fps=30.0, frame_count=2, source="test"),
+        Intrinsics(fx=100.0, fy=100.0, cx=32.0, cy=32.0),
+    )
+    # frame 0 (red): 30px square at 2 m, but a NEARER (0.5 m) vertical band
+    # splits the mask in two — an occluder in front (occ ~0.2, dominant 0.5).
+    # frame 1 (green): the same square fully visible. Same world extent.
+    for fid, color, occluded in ((0, (255, 0, 0), True), (1, (0, 255, 0), False)):
+        rgb = np.zeros((64, 64, 3), np.uint8)
+        mask = np.zeros((64, 64), np.uint8)
+        depth = np.zeros((64, 64), np.uint16)
+        rgb[5:35, 5:35] = color
+        mask[5:35, 5:35] = 255
+        depth[5:35, 5:35] = 2000
+        if occluded:
+            mask[5:35, 17:23] = 0        # the occluder's silhouette
+            depth[5:35, 17:23] = 500     # ...is much NEARER than the object
+        b.write_rgb(fid, rgb)
+        b.write_mask(fid, 7, mask)
+        b.write_depth_mm(fid, depth)
+    b.write_poses([np.eye(4), np.eye(4)])
+
+    assert crop_stage.stage_crop(b, 7, pad_frac=0.0, min_area_px=16) is not None
+    crop = b.read_crop(7)
+    assert (crop[:, :, 1] > 200).any()      # the clean green view won
+    assert not (crop[:, :, 0] > 200).any()  # not the occluded red one
+
+
 def test_absent_object_returns_none(tmp_path):
     b = _bundle(tmp_path)
     assert crop_stage.stage_crop(b, 999, min_area_px=16) is None  # no mask -> drop

@@ -27,6 +27,44 @@ SHORTLIST_FRAC = 0.8
 # increasingly underexposed; the quality score scales down linearly with it.
 DARK_LUM = 60.0
 
+# Depth margin (mm) for calling a pixel an OCCLUDER: it must be at least this
+# much nearer than the object's near quartile. Filters out items resting ON the
+# object (a book on a table sits at ~the same depth) while catching furniture
+# standing between the camera and the object.
+OCC_MARGIN_MM = 50.0
+
+
+def _occlusion_and_dominant(mask, depth) -> tuple[float, float]:
+    """(occluded fraction, dominant-component fraction) of one object view.
+
+    Occlusion: pixels inside the mask's convex hull that are NOT the object and
+    are NEARER than the object's near quartile (minus OCC_MARGIN_MM) are
+    occluders — furniture in front punches white intrusions into the crop that
+    mask-only metrics miss (an edge-connected bite is not a topological hole).
+    The generative model then faithfully builds those intrusions as holes
+    through the object (the holey-table bug).
+
+    Dominant: largest connected component's share of the mask — an object seen
+    only as disconnected slivers (through gaps) generates as a broken mesh.
+    """
+    import cv2
+    from scipy import ndimage
+
+    obj_depth = depth[mask & (depth > 0)]
+    if obj_depth.size == 0:
+        return 0.0, 1.0
+    pts = cv2.findNonZero(mask.astype(np.uint8))
+    hull = cv2.convexHull(pts)
+    hull_mask = np.zeros(mask.shape, np.uint8)
+    cv2.fillConvexPoly(hull_mask, hull, 1)
+    other = hull_mask.astype(bool) & ~mask & (depth > 0)
+    near = float(np.percentile(obj_depth, 25)) - OCC_MARGIN_MM
+    occ = float((depth[other] < near).sum()) / max(1.0, float(hull_mask.sum()))
+    lab, n = ndimage.label(mask)
+    dominant = (float(np.bincount(lab.ravel())[1:].max()) / float(mask.sum())
+                if n else 1.0)
+    return occ, dominant
+
 
 def _crop_quality(rgb, mask) -> float:
     """Image quality of the masked object region: sharpness x exposure sanity.
@@ -54,11 +92,14 @@ def _best_frame(bundle, track_id: int, *, min_area_px: int):
     huge mask yet is a useless grazing panel — TripoSG then builds a blob from it.
     The plan says "best picture in the whole sequence", i.e. the view that reveals
     the MOST of the object's real 3D structure. We score each frame by the 3D
-    EXTENT (world-space bounding-box diagonal) of its back-projected object points:
+    EXTENT (world-space bounding-box diagonal) of its back-projected object points
+    x (1-occlusion)^2 x dominant-component fraction (_occlusion_and_dominant):
     a front-on view spans the whole chair (seat+back+base); a foreshortened edge-on
-    view spans a thin sliver. Falls back to mask area if depth/poses are missing.
+    view spans a thin sliver; a big view THROUGH other furniture is a hole-riddled
+    mask the generative model reproduces as holes, so occluded/fragmented views
+    lose to clean ones. Falls back to mask area if depth/poses are missing.
     Among the frames within SHORTLIST_FRAC of the best view score, the sharpest /
-    best-exposed one wins (_crop_quality) — extent first, image quality second.
+    best-exposed one wins (_crop_quality) — view score first, image quality second.
 
     The min_area_px gate (drop objects too small to regenerate usefully) is kept,
     judged on the object's LARGEST mask across the sequence.
@@ -92,7 +133,9 @@ def _best_frame(bundle, track_id: int, *, min_area_px: int):
                     z = depth[ys, xs] / 1000.0
                     cam = (Kinv @ np.c_[xs, ys, np.ones(len(xs))].T).T * z[:, None]
                     world = (poses[fid][:3, :3] @ cam.T).T + poses[fid][:3, 3]
-                    ext_scores.append((fid, float(np.linalg.norm(world.max(0) - world.min(0)))))
+                    ext = float(np.linalg.norm(world.max(0) - world.min(0)))
+                    occ, dom = _occlusion_and_dominant(mask, depth)
+                    ext_scores.append((fid, ext * (1.0 - occ) ** 2 * dom))
             except Exception:
                 pass
     if best_area < min_area_px:
