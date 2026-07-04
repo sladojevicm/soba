@@ -438,6 +438,32 @@ def _accept_regen(mesh, coco_class) -> bool:
     return True
 
 
+def _align_and_accept(gen_mesh, cloud, coco_class):
+    """Align a cleaned generation and gate it; returns (mesh, alignment_method,
+    scale_method) or None.
+
+    Two sizing candidates for the SAME generated mesh: the ICP path sizes from
+    the observed cloud (best when the observation is good), but a PARTIAL cloud
+    can scale a perfectly fine generation outside its class's plausible range —
+    seen live: tier 3 lost the couch and the main table to 'implausible
+    dimensions' when fpfh_icp sized them from fragments. The mesh is not the
+    problem there, the sizing is, so the class-prior coarse alignment gets a
+    second try before the object is dropped. Only a generation that is
+    implausible under BOTH sizings is garbage (drop policy)."""
+    from reconstruction import icp_align  # lazy: it imports us back
+
+    res = icp_align.align(gen_mesh, cloud, coco_class)
+    if _accept_regen(res.mesh, coco_class):
+        return res.mesh, res.alignment_method, res.scale_method
+    if res.alignment_method == "fpfh_icp":
+        log.info("ICP-sized %s failed the class gate -> retrying with the "
+                 "class-prior size", coco_class)
+        aligned = coarse_align_to_cloud(gen_mesh, cloud, coco_class, clean=False)
+        if _accept_regen(aligned, coco_class):
+            return aligned, "coarse_aligned", "class_prior"
+    return None
+
+
 def coarse_align_to_cloud(mesh, cloud, coco_class: str | None = None,
                           clean: bool = True):
     """Scale a unit-cube GENERATED mesh to a real size, YAW-align it to the
@@ -713,12 +739,12 @@ class RunPodEngine(Engine):
             log.info("generation rejected: %.0f%% of it was detached debris",
                      detached * 100)
             return None
-        from reconstruction import icp_align  # lazy: it imports us back
-        res = icp_align.align(gen_mesh, cloud, coco_class)
-        if not _accept_regen(res.mesh, coco_class):
-            return None    # debris/absurd generation -> drop the object
-        return RegenResult(mesh=res.mesh, alignment_method=res.alignment_method,
-                           scale_method=res.scale_method)
+        got = _align_and_accept(gen_mesh, cloud, coco_class)
+        if got is None:
+            return None    # implausible under BOTH sizings -> drop the object
+        mesh, align_m, scale_m = got
+        return RegenResult(mesh=mesh, alignment_method=align_m,
+                           scale_method=scale_m)
 
 
 class LocalGpuEngine(Engine):
@@ -771,13 +797,12 @@ class LocalGpuEngine(Engine):
                 log.info("generation rejected: %.0f%% of it was detached debris",
                          detached * 100)
                 return None
-            from reconstruction import icp_align  # lazy: it imports us back
-            res = icp_align.align(gen_mesh, cloud, coco_class)
-            if not _accept_regen(res.mesh, coco_class):
-                return None    # debris/absurd generation -> drop the object
-            return RegenResult(mesh=res.mesh,
-                               alignment_method=res.alignment_method,
-                               scale_method=res.scale_method)
+            got = _align_and_accept(gen_mesh, cloud, coco_class)
+            if got is None:
+                return None    # implausible under BOTH sizings -> drop
+            mesh, align_m, scale_m = got
+            return RegenResult(mesh=mesh, alignment_method=align_m,
+                               scale_method=scale_m)
         except Exception as e:  # missing model / OOM -> drop (as with no GPU)
             log.warning("local-GPU generation unavailable (%s) -> object dropped", e)
             return None

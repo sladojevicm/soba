@@ -363,3 +363,41 @@ def test_too_thin_rejects_l_shell_but_keeps_furniture():
 def test_accept_regen_applies_thin_shell_gate():
     shell = _box(0, 0.2, 0, 1.2, 0.005, 1.2) + _box(0, 0.6, 0, 0.005, 0.75, 1.2)
     assert not generative._accept_regen(shell, "dining table")
+
+
+def test_align_and_accept_retries_class_prior_when_icp_sizing_fails(monkeypatch):
+    """A fine generation ICP-sized from a PARTIAL cloud can land outside its
+    class range (tier 3 lost the couch this way). The SAME mesh must get a
+    second chance at class-prior size before the object is dropped."""
+    import numpy as np
+    from reconstruction import icp_align
+
+    couch = _box(0, 0.4, 0, 2.0, 0.8, 0.9)   # plausible couch proportions
+    tiny = _box(0, 0.1, 0, 0.5, 0.2, 0.22)   # ICP-shrunk to fragment size
+
+    monkeypatch.setattr(
+        icp_align, "align",
+        lambda mesh, cloud, cls, **k: icp_align.AlignResult(
+            mesh=tiny, alignment_method="fpfh_icp",
+            scale_method="per_axis_median"))
+    cloud = np.random.rand(100, 3)
+    got = generative._align_and_accept(couch, cloud, "couch")
+    assert got is not None, "class-prior retry must rescue the good mesh"
+    mesh, align_m, scale_m = got
+    assert (align_m, scale_m) == ("coarse_aligned", "class_prior")
+    ext = mesh.get_max_bound() - mesh.get_min_bound()
+    assert 1.4 * 0.7 <= float(max(ext[0], ext[2]))  # plausibly couch-sized
+
+
+def test_align_and_accept_drops_when_both_sizings_fail(monkeypatch):
+    """Garbage under BOTH sizings really is garbage -> dropped (user policy)."""
+    import numpy as np
+    from reconstruction import icp_align
+
+    slab = _box(0, 0.05, 0, 1.2, 0.1, 1.2)   # a slab is no couch at any size
+    monkeypatch.setattr(
+        icp_align, "align",
+        lambda mesh, cloud, cls, **k: icp_align.AlignResult(
+            mesh=slab, alignment_method="fpfh_icp",
+            scale_method="per_axis_median"))
+    assert generative._align_and_accept(slab, np.random.rand(100, 3), "couch") is None
