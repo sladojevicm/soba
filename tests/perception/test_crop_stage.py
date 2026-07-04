@@ -193,6 +193,71 @@ def test_unoccluded_frame_beats_occluded_at_equal_extent(tmp_path):
     assert not (crop[:, :, 0] > 200).any()  # not the occluded red one
 
 
+def test_tall_view_beats_flat_at_equal_extent(tmp_path):
+    """The slab-table bug: a top-down view has a huge diagonal and no occlusion
+    but reveals no vertical structure, so the generation is a flat slab. At
+    ~equal diagonal, the view with the larger world-Y span must win."""
+    b = PerceptionBundle.create(
+        tmp_path / "bflat",
+        Manifest(session_id="t", fps=30.0, frame_count=2, source="test"),
+        Intrinsics(fx=100.0, fy=100.0, cx=32.0, cy=32.0),
+    )
+    # Same depth, ~same diagonal: frame 0 (red) = wide flat strip 60x8;
+    # frame 1 (green) = 42x42 square (bigger Y span).
+    for fid, (hgt, wid), color in ((0, (8, 60), (255, 0, 0)),
+                                   (1, (42, 42), (0, 255, 0))):
+        rgb = np.zeros((64, 64, 3), np.uint8)
+        mask = np.zeros((64, 64), np.uint8)
+        depth = np.zeros((64, 64), np.uint16)
+        rgb[2:2 + hgt, 2:2 + wid] = color
+        mask[2:2 + hgt, 2:2 + wid] = 255
+        depth[2:2 + hgt, 2:2 + wid] = 2000
+        b.write_rgb(fid, rgb)
+        b.write_mask(fid, 7, mask)
+        b.write_depth_mm(fid, depth)
+    b.write_poses([np.eye(4), np.eye(4)])
+
+    assert crop_stage.stage_crop(b, 7, pad_frac=0.0, min_area_px=16) is not None
+    crop = b.read_crop(7)
+    assert (crop[:, :, 1] > 200).any()      # the tall green view won
+    assert not (crop[:, :, 0] > 200).any()
+
+
+def test_occluder_pixels_are_inpainted_not_white(tmp_path):
+    """A chosen view that still contains an occluder bite must ship with the
+    bite INPAINTED from the surrounding object, not as a white intrusion the
+    generative model would build as a hole."""
+    b = PerceptionBundle.create(
+        tmp_path / "binp",
+        Manifest(session_id="t", fps=30.0, frame_count=1, source="test"),
+        Intrinsics(fx=100.0, fy=100.0, cx=32.0, cy=32.0),
+    )
+    rgb = np.zeros((64, 64, 3), np.uint8)
+    mask = np.zeros((64, 64), np.uint8)
+    depth = np.zeros((64, 64), np.uint16)
+    rgb[5:35, 5:35] = (0, 200, 0)
+    mask[5:35, 5:35] = 255
+    depth[5:35, 5:35] = 2000
+    mask[5:35, 17:23] = 0        # occluder bite through the object...
+    depth[5:35, 17:23] = 500     # ...much nearer than the object
+    mask[5:35, 27:31] = 0        # a genuine OPENING (floor seen through)...
+    depth[5:35, 27:31] = 5000    # ...clearly BEHIND -> must stay background
+    b.write_rgb(0, rgb)
+    b.write_mask(0, 7, mask)
+    b.write_depth_mm(0, depth)
+    b.write_poses([np.eye(4)])
+
+    assert crop_stage.stage_crop(b, 7, pad_frac=0.0, min_area_px=16) is not None
+    crop = b.read_crop(7)
+    # the bite's centre is filled from the green surround, not left white
+    band = crop[15, 12:18]  # crop coords: mask bbox starts at (5,5)
+    assert not all(int(c) >= 240 for c in band[3]), "bite left white"
+    assert band[3][1] > 100, "bite not filled from the object"
+    # the see-through opening stays white — real holes are not painted shut
+    hole = crop[15, 23:25]
+    assert all(int(c) >= 240 for c in hole[0]), "opening was painted shut"
+
+
 def test_absent_object_returns_none(tmp_path):
     b = _bundle(tmp_path)
     assert crop_stage.stage_crop(b, 999, min_area_px=16) is None  # no mask -> drop

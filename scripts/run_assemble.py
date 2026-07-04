@@ -14,6 +14,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -37,6 +38,12 @@ def _crop_path(bundle, track_id: int):
 
 
 def main() -> None:
+    # Generation-rejection reasons (debris / shattered / implausible dims) log
+    # at INFO in reconstruction.generative — surface them, else an object
+    # silently vanishes from the scene with no trace in the run output.
+    logging.basicConfig(format="%(levelname)s %(name)s: %(message)s")
+    logging.getLogger("reconstruction.generative").setLevel(logging.INFO)
+
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--bundle", required=True, type=Path)
     ap.add_argument("--tier", type=int, default=4, choices=[1, 2, 3, 4])

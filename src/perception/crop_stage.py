@@ -27,39 +27,66 @@ SHORTLIST_FRAC = 0.8
 # increasingly underexposed; the quality score scales down linearly with it.
 DARK_LUM = 60.0
 
-# Depth margin (mm) for calling a pixel an OCCLUDER: it must be at least this
-# much nearer than the object's near quartile. Filters out items resting ON the
-# object (a book on a table sits at ~the same depth) while catching furniture
-# standing between the camera and the object.
-OCC_MARGIN_MM = 50.0
+# Depth margin (mm) separating "covers the object" from "seen THROUGH the
+# object". A non-object pixel inside the silhouette hull is paintable unless it
+# is at least this much FARTHER than the object surface around it: occluding
+# furniture is nearer, items resting on it are within a few cm either way (a
+# monitor's top leans back past the tabletop), while a genuine opening (floor
+# seen between table legs) is hundreds of mm beyond.
+SEE_THROUGH_MM = 200.0
+
+
+def _occluder_mask(mask, depth) -> np.ndarray:
+    """Boolean map of pixels COVERING the object: inside the mask's convex
+    hull, not the object, and NOT clearly behind the object surface AROUND
+    them — furniture standing between the camera and the object, and items
+    resting ON it. Both punch white intrusions into the crop (an edge-connected
+    bite is not a topological hole, so mask-only metrics miss it), which the
+    generative model then faithfully builds as holes through the object (the
+    holey-table bug).
+
+    The rule is exclusion-based and LOCAL (each pixel vs its nearest object
+    pixel's depth): anything except a genuine SEE-THROUGH opening is cover. An
+    occluding chair is nearer; a cup sits ~at the tabletop's depth; a monitor's
+    visible top leans BACK past it — none of these are reliably "nearer", but
+    all sit within SEE_THROUGH_MM of the local surface. The floor seen through
+    the table legs is hundreds of mm beyond it (a real opening — must stay
+    background, not get painted shut).
+    """
+    import cv2
+    from scipy import ndimage
+
+    obj_valid = mask & (depth > 0)
+    if not obj_valid.any():
+        return np.zeros(mask.shape, bool)
+    pts = cv2.findNonZero(mask.astype(np.uint8))
+    hull = cv2.convexHull(pts)
+    hull_mask = np.zeros(mask.shape, np.uint8)
+    cv2.fillConvexPoly(hull_mask, hull, 1)
+    # each pixel's nearest object pixel -> the LOCAL object surface depth
+    _, (iy, ix) = ndimage.distance_transform_edt(~obj_valid, return_indices=True)
+    local_obj_depth = depth[iy, ix]
+    return (hull_mask.astype(bool) & ~mask & (depth > 0)
+            & (depth < local_obj_depth + SEE_THROUGH_MM))
 
 
 def _occlusion_and_dominant(mask, depth) -> tuple[float, float]:
     """(occluded fraction, dominant-component fraction) of one object view.
 
-    Occlusion: pixels inside the mask's convex hull that are NOT the object and
-    are NEARER than the object's near quartile (minus OCC_MARGIN_MM) are
-    occluders — furniture in front punches white intrusions into the crop that
-    mask-only metrics miss (an edge-connected bite is not a topological hole).
-    The generative model then faithfully builds those intrusions as holes
-    through the object (the holey-table bug).
-
-    Dominant: largest connected component's share of the mask — an object seen
-    only as disconnected slivers (through gaps) generates as a broken mesh.
+    Occlusion: _occluder_mask share of the silhouette hull. Dominant: largest
+    connected component's share of the mask — an object seen only as
+    disconnected slivers (through gaps) generates as a broken mesh.
     """
     import cv2
     from scipy import ndimage
 
-    obj_depth = depth[mask & (depth > 0)]
-    if obj_depth.size == 0:
-        return 0.0, 1.0
+    occ_px = _occluder_mask(mask, depth)
     pts = cv2.findNonZero(mask.astype(np.uint8))
-    hull = cv2.convexHull(pts)
+    if pts is None:
+        return 0.0, 1.0
     hull_mask = np.zeros(mask.shape, np.uint8)
-    cv2.fillConvexPoly(hull_mask, hull, 1)
-    other = hull_mask.astype(bool) & ~mask & (depth > 0)
-    near = float(np.percentile(obj_depth, 25)) - OCC_MARGIN_MM
-    occ = float((depth[other] < near).sum()) / max(1.0, float(hull_mask.sum()))
+    cv2.fillConvexPoly(hull_mask, cv2.convexHull(pts), 1)
+    occ = float(occ_px.sum()) / max(1.0, float(hull_mask.sum()))
     lab, n = ndimage.label(mask)
     dominant = (float(np.bincount(lab.ravel())[1:].max()) / float(mask.sum())
                 if n else 1.0)
@@ -133,14 +160,27 @@ def _best_frame(bundle, track_id: int, *, min_area_px: int):
                     z = depth[ys, xs] / 1000.0
                     cam = (Kinv @ np.c_[xs, ys, np.ones(len(xs))].T).T * z[:, None]
                     world = (poses[fid][:3, :3] @ cam.T).T + poses[fid][:3, 3]
-                    ext = float(np.linalg.norm(world.max(0) - world.min(0)))
+                    span = world.max(0) - world.min(0)
+                    ext = float(np.linalg.norm(span))
                     occ, dom = _occlusion_and_dominant(mask, depth)
-                    ext_scores.append((fid, ext * (1.0 - occ) ** 2 * dom))
+                    ext_scores.append((fid, ext * (1.0 - occ) ** 2 * dom,
+                                       float(span[1])))
             except Exception:
                 pass
     if best_area < min_area_px:
         return None
-    scores = ext_scores if ext_scores else area_scores
+    if ext_scores:
+        # Soft world-HEIGHT factor: a top-down view of a table has a huge
+        # diagonal and near-zero occlusion, but shows no legs — the generative
+        # model then builds a flat slab (which the class-dims gate rejects, so
+        # the object vanishes). Weight views by their vertical span, softened
+        # (0.4 + 0.6*ynorm) so occlusion still dominates a marginal height win.
+        max_y = max(y for _, _, y in ext_scores)
+        yfac = ((lambda y: 0.4 + 0.6 * y / max_y) if max_y > 1e-6
+                else (lambda y: 1.0))
+        scores = [(fid, s * yfac(y)) for fid, s, y in ext_scores]
+    else:
+        scores = area_scores
     # Top band by view score, best score first so a quality TIE keeps the most
     # revealing view (and a quality failure degrades to the pure-extent pick).
     ranked = sorted(scores, key=lambda s: s[1], reverse=True)
@@ -164,6 +204,11 @@ def stage_crop(bundle, track_id: int, *, pad_frac: float = 0.12,
                min_area_px: int = 1024) -> Path | None:
     """Write crops/crop_{track_id}.jpg (object on white) and return its path.
 
+    Occluder pixels (furniture between the camera and the object, identified by
+    depth) are INPAINTED from the surrounding object instead of left as white
+    bites — the generative model reads white intrusions as real holes through
+    the object. Best-effort: no depth -> plain whitening as before.
+
     Returns None when the object's biggest view is < min_area_px (or it has no
     mask) — too small to regenerate usefully, so the caller drops it.
     """
@@ -173,6 +218,18 @@ def stage_crop(bundle, track_id: int, *, pad_frac: float = 0.12,
 
     rgb = np.asarray(bundle.read_rgb(fid))                 # HxWx3, RGB
     mask = np.asarray(bundle.read_mask(fid, track_id)) > 0
+
+    # Drop tiny disconnected mask scraps (<15% of the largest component): a
+    # sliver of the object peeking past an occluder becomes a floating blob in
+    # the crop, which the generative model builds as detached debris. Sizeable
+    # secondary parts stay — they carry real structure.
+    from scipy import ndimage
+    lab, n = ndimage.label(mask)
+    if n > 1:
+        sizes = np.bincount(lab.ravel())[1:]
+        keep_labels = np.flatnonzero(sizes >= 0.15 * sizes.max()) + 1
+        mask = np.isin(lab, keep_labels)
+
     ys, xs = np.where(mask)
     y0, y1, x0, x1 = int(ys.min()), int(ys.max()), int(xs.min()), int(xs.max())
 
@@ -186,6 +243,15 @@ def stage_crop(bundle, track_id: int, *, pad_frac: float = 0.12,
     crop = rgb[y0:y1 + 1, x0:x1 + 1].copy()
     keep = mask[y0:y1 + 1, x0:x1 + 1]
     crop[~keep] = 255                                      # white background
+    try:
+        depth = np.asarray(bundle.read_depth_mm(fid)).astype(np.float64)
+        occ = _occluder_mask(mask, depth)[y0:y1 + 1, x0:x1 + 1]
+        if occ.any():
+            import cv2
+            crop = cv2.inpaint(crop, occ.astype(np.uint8),
+                               inpaintRadius=5, flags=cv2.INPAINT_TELEA)
+    except Exception:
+        pass  # no depth / cv2 hiccup -> ship the whitened crop unchanged
     bundle.write_crop(track_id, crop)
     return bundle.crop_path(track_id)
 
