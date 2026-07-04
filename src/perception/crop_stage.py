@@ -250,9 +250,18 @@ def stage_crop(bundle, track_id: int, *, pad_frac: float = 0.12,
             import cv2
             crop = cv2.inpaint(crop, occ.astype(np.uint8),
                                inpaintRadius=5, flags=cv2.INPAINT_TELEA)
+            keep = keep | occ  # painted cover pixels ARE the object now
     except Exception:
         pass  # no depth / cv2 hiccup -> ship the whitened crop unchanged
-    bundle.write_crop(track_id, crop)
+
+    # RGBA: our GROUND-TRUTH mask rides along as the alpha channel, so the
+    # image-to-3D models skip their own background removal. That removal is
+    # what erased a WHITE tabletop as "background" and left TripoSG faithfully
+    # generating the wooden rim as a bent shell — the exact segmentation is
+    # known here; the generator must never re-guess it.
+    alpha = np.where(keep, 255, 0).astype(np.uint8)
+    rgba = np.dstack([crop, alpha])
+    bundle.write_crop(track_id, rgba)
     return bundle.crop_path(track_id)
 
 

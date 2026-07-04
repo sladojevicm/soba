@@ -267,3 +267,41 @@ def test_too_small_returns_none(tmp_path):
     b = _bundle(tmp_path)
     # both views are < a huge threshold -> not worth regenerating
     assert crop_stage.stage_crop(b, 7, min_area_px=10_000) is None
+
+
+def test_crop_carries_ground_truth_mask_as_alpha(tmp_path):
+    """The staged crop is RGBA: alpha = our mask (+ inpainted cover), so
+    image-to-3D models must never re-guess the segmentation — TripoSG's own
+    background remover erased a WHITE tabletop as 'background' and the model
+    faithfully generated the leftover rim as a bent shell."""
+    from perception.bundle import _imread
+
+    b = PerceptionBundle.create(
+        tmp_path / "balpha",
+        Manifest(session_id="t", fps=30.0, frame_count=1, source="test"),
+        Intrinsics(fx=100.0, fy=100.0, cx=32.0, cy=32.0),
+    )
+    rgb = np.zeros((64, 64, 3), np.uint8)
+    mask = np.zeros((64, 64), np.uint8)
+    depth = np.zeros((64, 64), np.uint16)
+    rgb[5:35, 5:35] = (250, 250, 250)     # a WHITE object on white background
+    mask[5:35, 5:35] = 255
+    depth[5:35, 5:35] = 2000
+    mask[5:35, 17:23] = 0                 # occluder bite (nearer)
+    depth[5:35, 17:23] = 500
+    mask[5:35, 27:31] = 0                 # genuine opening (farther)
+    depth[5:35, 27:31] = 5000
+    b.write_rgb(0, rgb)
+    b.write_mask(0, 7, mask)
+    b.write_depth_mm(0, depth)
+    b.write_poses([np.eye(4)])
+
+    p = crop_stage.stage_crop(b, 7, pad_frac=0.1, min_area_px=16)
+    assert p is not None and p.suffix == ".png"
+    img = _imread(p, unchanged=True)
+    assert img.shape[2] == 4, "crop must be RGBA"
+    a = img[:, :, 3]
+    assert a[0, 0] == 0                       # padded corner = background
+    assert a[15, 8] == 255                    # object body = opaque
+    assert a[15, 15] == 255                   # inpainted occluder = object
+    assert a[15, 26] == 0                     # see-through opening = background

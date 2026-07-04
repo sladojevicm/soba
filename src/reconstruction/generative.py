@@ -1113,9 +1113,13 @@ class LocalGpuEngine(Engine):
         from PIL import Image
 
         pipe, rembg = self._load_hunyuan()
-        img = Image.open(str(crop_path)).convert("RGB")
-        if rembg is not None:
-            img = rembg(img)  # -> RGBA with background stripped
+        img = Image.open(str(crop_path))
+        if img.mode == "RGBA" and img.getextrema()[3][0] < 255:
+            pass  # crop carries OUR ground-truth mask as alpha — never re-guess
+        else:
+            img = img.convert("RGB")
+            if rembg is not None:
+                img = rembg(img)  # -> RGBA with background stripped
         steps = int(os.environ.get("VID2SIM_HUNYUAN_STEPS", "30"))
         seed = int(os.environ.get("VID2SIM_HUNYUAN_SEED", "42"))
         with torch.no_grad():
