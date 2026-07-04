@@ -87,3 +87,20 @@ Hunyuan3D 2.1 ready. Point the pipeline at it, then run a tier-3/4 build:
 Tiers 3-4 default to Hunyuan3D automatically (fix K1). Tunables:
 VID2SIM_HUNYUAN_STEPS (default 30), _SEED (42), _MODEL (tencent/Hunyuan3D-2mini for 8 GB).
 EOF
+
+# --- hy3dpaint fixups (found live on the 3090 pod, 2026-07-04) --------------
+# 1. mesh painter compile needs python3-dev; 2. pymeshlab needs libOpenGL;
+# 3. diffusers must be told to trust Hunyuan's own custom pipeline code;
+# 4. paint runtime deps not in the shape list.
+if [ "${SETUP_HUNYUAN_PAINT:-0}" = "1" ]; then
+  apt-get install -y -qq python3-dev libopengl0 libegl1 libgl1 || true
+  python3 -m pip install -q pybind11 xatlas realesrgan open3d || true
+  ( cd "$HUNYUAN_HOME/hy3dpaint/custom_rasterizer" && python3 -m pip install -q --no-build-isolation . )
+  ( cd "$HUNYUAN_HOME/hy3dpaint/DifferentiableRenderer" && bash compile_mesh_painter.sh )
+  mkdir -p "$HUNYUAN_HOME/hy3dpaint/ckpt"
+  [ -f "$HUNYUAN_HOME/hy3dpaint/ckpt/RealESRGAN_x4plus.pth" ] || \
+    wget -q -O "$HUNYUAN_HOME/hy3dpaint/ckpt/RealESRGAN_x4plus.pth" \
+      https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth
+  sed -i "s/custom_pipeline=custom_pipeline, *$/custom_pipeline=custom_pipeline, trust_remote_code=True,/" \
+    "$HUNYUAN_HOME/hy3dpaint/utils/multiview_utils.py" || true
+fi
