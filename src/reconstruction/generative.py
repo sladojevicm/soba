@@ -540,14 +540,17 @@ class RunPodEngine(Engine):
         completion_endpoint: str | None = None,
         gen_model: str = "triposg",
         completion_model: str = "pointr",
-        timeout_s: float = 600.0,
+        timeout_s: float | None = None,
     ):
         self.api_key = api_key
         self.gen_endpoint = gen_endpoint
         self.completion_endpoint = completion_endpoint
         self.gen_model = gen_model
         self.completion_model = completion_model
-        self.timeout_s = timeout_s
+        # shape ~2.5 min + paint ~2 min per object, plus cold model loads on
+        # the first request — 600 s is tight there; env-tunable for paint runs
+        self.timeout_s = float(timeout_s if timeout_s is not None
+                               else os.environ.get("VID2SIM_RUNPOD_TIMEOUT", "900"))
 
     # --- transport (generic RunPod serverless runsync) ------------------
     def _runsync(self, endpoint: str, payload: dict) -> dict:
@@ -930,11 +933,17 @@ class LocalGpuEngine(Engine):
 
         views = int(os.environ.get("VID2SIM_PAINT_VIEWS", "6"))
         res = int(os.environ.get("VID2SIM_PAINT_RES", "512"))
+        conf = Hunyuan3DPaintConfig(views, res)
+        # the repo's defaults mix two bases (cfg is repo-root-relative, the
+        # RealESRGAN ckpt is hy3dpaint-relative) — pin both absolutely
+        conf.multiview_cfg_path = os.path.join(paint_dir, "cfgs",
+                                               "hunyuan-paint-pbr.yaml")
+        conf.realesrgan_ckpt_path = os.path.join(paint_dir, "ckpt",
+                                                 "RealESRGAN_x4plus.pth")
         cwd = os.getcwd()
         try:
-            os.chdir(paint_dir)
-            self._hunyuan_paint = Hunyuan3DPaintPipeline(
-                Hunyuan3DPaintConfig(views, res))
+            os.chdir(paint_dir)  # any remaining relative refs
+            self._hunyuan_paint = Hunyuan3DPaintPipeline(conf)
         finally:
             os.chdir(cwd)
         return self._hunyuan_paint
