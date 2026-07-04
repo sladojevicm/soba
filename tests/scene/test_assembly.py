@@ -137,6 +137,22 @@ def test_assemble_produces_schema_valid_scene(tmp_path):
     assert by_id["chair_00"]["class"] == "chair"
 
 
+def test_assemble_box_collider_tier1(tmp_path):
+    """Tier 1 (collider="box"): AABB half_extents, no CoACD, schema-valid."""
+    objs = [_box_object(3, "chair", (-1.0, 0.0, 0.5))]
+    scene = assembler.assemble(objs, [np.eye(4)], tmp_path / "scene",
+                               collider="box")
+    schema.validate(scene)
+    (o,) = scene["objects"]
+    col = o["collider"]
+    assert col["shape"] == "box" and "hull_paths" not in col
+    hx, hy, hz = col["half_extents"]
+    # source mesh is 0.5 x 0.8 x 0.5; repair keeps the AABB (loose bounds)
+    assert 0.2 < hx < 0.3 and 0.35 < hy < 0.45 and 0.2 < hz < 0.3
+    # no hull GLBs written for a box collider
+    assert not list((tmp_path / "scene" / "objects" / o["id"] / "hulls").glob("*"))
+
+
 def test_assemble_caps_at_12_objects(tmp_path):
     objs = [_box_object(i, "chair", (i * 0.6, 0.0, 0.0)) for i in range(15)]
     scene = assembler.assemble(objs, [np.eye(4)], tmp_path / "scene")

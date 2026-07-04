@@ -39,7 +39,7 @@ def _crop_path(bundle, track_id: int):
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--bundle", required=True, type=Path)
-    ap.add_argument("--tier", type=int, default=4, choices=[2, 3, 4])
+    ap.add_argument("--tier", type=int, default=4, choices=[1, 2, 3, 4])
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--force-strategy", choices=["tsdf", "completion", "generative"],
                     default=None,
@@ -71,7 +71,11 @@ def main() -> None:
     poses = b.read_poses()
     K = b.intrinsics.matrix()
     params = cf.tier_params(args.tier)
-    voxel = params["voxel_size_m"]
+    # Tier 1 has no TSDF/gate block: no voxel size is configured, so the cloud
+    # accumulation (still needed to size/place the generated meshes) uses the
+    # standard 5 mm gate-cloud voxel; every object routes to "generative".
+    tier1 = not params["tsdf"]
+    voxel = params["voxel_size_m"] or 0.005
 
     classes = {}
     for fid in b.iter_frame_ids():
@@ -105,10 +109,18 @@ def main() -> None:
             cloud, keep = observed_cloud.accumulate_object_cloud(
                 frames, K, voxel_size=voxel, return_keep=True)
             cams = np.array([poses[fids[i]][:3, 3] for i in keep]).reshape(-1, 3)
-            res = cf.gate_object(cloud, cams, args.tier) if len(cloud) >= 4 else None
+            res = (cf.gate_object(cloud, cams, args.tier)
+                   if not tier1 and len(cloud) >= 4 else None)
             if use_cache:
                 gate_cache.store(args.bundle, tid, ckey,
                                  cloud=cloud, cams=cams, metrics=res)
+        if tier1:  # no gate: everything generative (still needs a usable cloud)
+            if len(cloud) < 4:
+                continue
+            strat = args.force_strategy or cf.GENERATIVE
+            print(f"  {classes.get(tid,'obj'):13} #{tid:<3} (tier 1: no gate) -> {strat}")
+            routed[tid] = (strat, cloud)
+            continue
         if res is None:  # cloud too small to gate (cached too, so reruns skip fast)
             continue
         strat = args.force_strategy or res["strategy"]
@@ -170,15 +182,20 @@ def main() -> None:
         return
 
     cfg = lookup.load_config()
-    tier_coacd = cfg["tiers"][args.tier].get("coacd", {"threshold": 0.05, "max_parts": 16})
+    tier_cfg = cfg["tiers"][args.tier]
+    tier_coacd = tier_cfg.get("coacd", {"threshold": 0.05, "max_parts": 16})
     scene = assembler.assemble(inputs, poses, args.out, tier_coacd=tier_coacd,
-                               engine=engine, smooth_iters=args.smooth_iters)
+                               engine=engine, smooth_iters=args.smooth_iters,
+                               collider=tier_cfg.get("collider", "hulls"))
 
     print(f"\nscene.json written -> {args.out}/scene.json   ground.y={scene['ground']['y']:.3f}")
     for o in scene["objects"]:
         t = o["transform"]["translation"]
+        col = o["collider"]
+        col_desc = (f"hulls={len(col['hull_paths'])}" if col["shape"] == "hulls"
+                    else f"box={col['half_extents']}")
         print(f"  {o['id']:16} mass={o['physics']['mass_kg']:7.2f} kg  "
-              f"mat={o['material_class']:8} hulls={len(o['collider']['hull_paths'])}  "
+              f"mat={o['material_class']:8} {col_desc}  "
               f"pos=({t[0]:.2f},{t[1]:.2f},{t[2]:.2f})")
 
 

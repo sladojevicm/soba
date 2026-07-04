@@ -177,7 +177,8 @@ def _tsdf_watertight_finalize(mesh):
 
 def _assemble_object(obj: ObjectInput, oid: int, ground_y: float, out_dir: Path,
                      phys: vlm.Physics, tier_coacd: dict, decimate_to: int,
-                     config_path: str, engine=None, smooth_iters: int = 0) -> dict:
+                     config_path: str, engine=None, smooth_iters: int = 0,
+                     collider: str = "hulls") -> dict:
     import open3d as o3d
 
     oid_str = f"{slug(obj.coco_class)}_{oid:02d}"
@@ -252,14 +253,27 @@ def _assemble_object(obj: ObjectInput, oid: int, ground_y: float, out_dir: Path,
         import open3d as _o3d
         _o3d.io.write_triangle_mesh(str(obj_dir / "mesh.ply"), final_mesh)
 
-    parts = decomp.decompose(
-        final_mesh, threshold=float(tier_coacd.get("threshold", 0.05)),
-        max_parts=int(tier_coacd.get("max_parts", 16)),
-    )
-    hull_route_paths = []
-    for i, part in enumerate(parts):
-        exporter_gltf.write_glb(part, obj_dir / "hulls" / f"{oid_str}_{i}.glb")
-        hull_route_paths.append(f"hulls/{oid_str}_{i}.glb")
+    if collider == "box":
+        # Tier 1 (fix Z-F): AABB half_extents of the final recentred mesh — no
+        # CoACD. The schema forbids hull_paths on a box collider.
+        fa = final_mesh.get_axis_aligned_bounding_box()
+        ext = np.asarray(fa.max_bound) - np.asarray(fa.min_bound)
+        collider_entry = {"shape": "box",
+                          "half_extents": [round(float(e) / 2.0, 4) for e in ext]}
+    else:
+        parts = decomp.decompose(
+            final_mesh, threshold=float(tier_coacd.get("threshold", 0.05)),
+            max_parts=int(tier_coacd.get("max_parts", 16)),
+        )
+        hull_route_paths = []
+        for i, part in enumerate(parts):
+            exporter_gltf.write_glb(part, obj_dir / "hulls" / f"{oid_str}_{i}.glb")
+            hull_route_paths.append(f"hulls/{oid_str}_{i}.glb")
+        collider_entry = {
+            "shape": "hulls",
+            "convex_decomposition": True,
+            "hull_paths": hull_route_paths,
+        }
     mass_kg = mass.mass_kg(vol, phys.material, obj.coco_class, config_path=config_path)
 
     return {
@@ -271,11 +285,7 @@ def _assemble_object(obj: ObjectInput, oid: int, ground_y: float, out_dir: Path,
             "rotation_quat": [0.0, 0.0, 0.0, 1.0],
             "scale": 1.0,
         },
-        "collider": {
-            "shape": "hulls",
-            "convex_decomposition": True,
-            "hull_paths": hull_route_paths,
-        },
+        "collider": collider_entry,
         "physics": {
             "mass_kg": round(mass_kg, 4),
             "friction": phys.friction,
@@ -313,13 +323,17 @@ def _source(obj: ObjectInput, phys: vlm.Physics) -> dict:
 def assemble(objects: list[ObjectInput], poses: list[np.ndarray], out_dir: Path | str,
              *, tier_coacd: dict | None = None, decimate_to: int = 20000,
              vlm_backend=None, engine=None, smooth_iters: int = RENDER_SMOOTH_ITERS,
-             config_path: str = str(lookup._DEFAULT_CONFIG)) -> dict:
+             config_path: str = str(lookup._DEFAULT_CONFIG),
+             collider: str = "hulls") -> dict:
     """Build + validate + write scene.json for the given objects.
 
     `engine` is the completion/generative backend (generative.Engine). It is
     consulted only for objects with strategy "completion" (to fill gaps);
     defaults to the local Poisson repair when None. Returns the scene dict. Caps
     at the 12 best-observed objects (Contract 3 / Z8) by observed point count.
+
+    `collider` is the tier's collider type: "hulls" (CoACD, default) or "box"
+    (Tier 1: AABB half_extents, no decomposition).
 
     `smooth_iters` Taubin-smooths the RENDER mesh only (cosmetic); 0 disables it.
     The collider/mass geometry is never smoothed, so fusion's exact observed
@@ -343,7 +357,8 @@ def assemble(objects: list[ObjectInput], poses: list[np.ndarray], out_dir: Path 
 
     entries = [
         _assemble_object(o, oid, g_y, out_dir, ph, tier_coacd, decimate_to,
-                         config_path, engine=engine, smooth_iters=smooth_iters)
+                         config_path, engine=engine, smooth_iters=smooth_iters,
+                         collider=collider)
         for oid, (o, ph) in enumerate(zip(objects, phys_list))
     ]
 
