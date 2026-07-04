@@ -276,7 +276,11 @@ def _assemble_object(obj: ObjectInput, oid: int, ground_y: float, out_dir: Path,
         }
     mass_kg = mass.mass_kg(vol, phys.material, obj.coco_class, config_path=config_path)
 
+    fa = final_mesh.get_axis_aligned_bounding_box()
+    fhalf = ((np.asarray(fa.max_bound) - np.asarray(fa.min_bound)) / 2.0).tolist()
+
     return {
+        "_half_extents": fhalf,  # internal: consumed by the de-overlap pass
         "id": oid_str,
         "class": obj.coco_class,
         "mesh": f"meshes/{oid_str}.glb",
@@ -295,6 +299,54 @@ def _assemble_object(obj: ObjectInput, oid: int, ground_y: float, out_dir: Path,
         "material_class": phys.material,
         "source": _source(obj, phys),
     }
+
+
+def deoverlap(entries: list[dict], *, tol: float = 0.05, max_shift: float = 0.5,
+              iters: int = 60) -> int:
+    """Separate interpenetrating objects on the ground plane (fix: the desk
+    cluster renders as furniture clipping through furniture).
+
+    Objects are placed at their OBSERVED positions with generated/prior sizes,
+    so footprints overlap. For each overlapping pair (XZ AABBs, minus `tol` —
+    a chair tucked at a desk legitimately grazes it), the LIGHTER object is
+    pushed along the axis of least overlap. Displacement per object is capped
+    at `max_shift` so nothing teleports; residual overlap is accepted rather
+    than rearranging the room. Mutates entry translations; returns the number
+    of moves. Needs the assembler's internal _half_extents on each entry.
+    """
+    import numpy as np
+
+    moved = {e["id"]: 0.0 for e in entries}
+    n_moves = 0
+    for _ in range(iters):
+        clean = True
+        for i in range(len(entries)):
+            for j in range(i + 1, len(entries)):
+                a, b = entries[i], entries[j]
+                ta, tb = a["transform"]["translation"], b["transform"]["translation"]
+                ha, hb = a["_half_extents"], b["_half_extents"]
+                ox = (ha[0] + hb[0]) - abs(ta[0] - tb[0]) - tol
+                oz = (ha[2] + hb[2]) - abs(ta[2] - tb[2]) - tol
+                if ox <= 0 or oz <= 0:
+                    continue
+                # lighter object moves, along the axis of least overlap; when
+                # its budget is spent the residual overlap is ACCEPTED — never
+                # start shoving the anchor (a desk must not dodge its chair)
+                m = a if a["physics"]["mass_kg"] <= b["physics"]["mass_kg"] else b
+                other = b if m is a else a
+                if moved[m["id"]] >= max_shift - 1e-9:
+                    continue
+                axis = 0 if ox <= oz else 2
+                amt = min((ox if axis == 0 else oz), max_shift - moved[m["id"]])
+                sign = np.sign(m["transform"]["translation"][axis]
+                               - other["transform"]["translation"][axis]) or 1.0
+                m["transform"]["translation"][axis] += float(sign * amt)
+                moved[m["id"]] += amt
+                n_moves += 1
+                clean = False
+        if clean:
+            break
+    return n_moves
 
 
 def _source(obj: ObjectInput, phys: vlm.Physics) -> dict:
@@ -369,6 +421,14 @@ def assemble(objects: list[ObjectInput], poses: list[np.ndarray], out_dir: Path 
                          collider=collider)
         for oid, (o, ph) in enumerate(zip(objects, phys_list))
     ]
+
+    # placement de-overlap (VID2SIM_DEOVERLAP=0 disables), then strip the
+    # internal half-extents field before schema validation
+    import os as _os
+    if _os.environ.get("VID2SIM_DEOVERLAP", "1") != "0":
+        deoverlap(entries)
+    for e in entries:
+        e.pop("_half_extents", None)
 
     scene = {
         "version": "2.0",

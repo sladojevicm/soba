@@ -72,6 +72,11 @@ def main() -> None:
     ap.add_argument("--gate-only", action="store_true",
                     help="stop after the Step-5 routing printout (fast gate "
                          "iteration / cache warm-up; no fusion or assembly)")
+    ap.add_argument("--reroll", type=int, nargs="*", default=[],
+                    help="track ids whose generation gets a FRESH seed (base + "
+                         "1000 + tid) — re-roll a visibly wrong generation "
+                         "without touching the good ones (their cached "
+                         "generations are reused)")
     args = ap.parse_args()
 
     b = PerceptionBundle.open(args.bundle)
@@ -147,17 +152,55 @@ def main() -> None:
 
     inputs = []
 
-    # Bottom band: regenerate from the crop. The LocalEngine declines (no GPU) so
-    # these are DROPPED for now; a RunPodEngine returns a regenerated+aligned mesh.
+    # Bottom band: regenerate from the crop. Accepted generations are CACHED in
+    # <bundle>/.gen_cache keyed on (track, model, seed, crop hash) so a rebuild
+    # reuses them (assembly-only reruns take ~2 min, and a good couch is never
+    # re-gambled); rejects are cached as markers for the same reason. --reroll
+    # gives listed tracks a fresh per-track seed, which changes their cache key.
+    import hashlib
+    import json as _json
+    import os as _os
+
+    import open3d as _o3d
+
+    gen_cache = args.bundle / ".gen_cache"
+    gen_cache.mkdir(exist_ok=True)
+    base_seed = int(_os.environ.get("VID2SIM_TRIPOSG_SEED",
+                                    _os.environ.get("VID2SIM_HUNYUAN_SEED", "42")))
     n_dropped = 0
     for tid in gen_tids:
         _strat, cloud = routed[tid]
         crop = _crop_path(b, tid)
-        r = engine.regenerate(cloud=cloud, crop_path=crop,
-                              coco_class=classes.get(tid, "obj"))
-        if r is None:
-            n_dropped += 1
-            continue
+        seed = base_seed + 1000 + tid if tid in args.reroll else base_seed
+        chash = (hashlib.md5(crop.read_bytes()).hexdigest()[:10]
+                 if crop is not None else "nocrop")
+        key = gen_cache / f"gen_{tid:03d}_{gen_model}_{seed}_{chash}"
+        ply, meta = key.with_suffix(".ply"), key.with_suffix(".json")
+
+        if meta.exists():
+            m = _json.loads(meta.read_text())
+            if m.get("rejected"):
+                n_dropped += 1
+                continue
+            mesh = _o3d.io.read_triangle_mesh(str(ply))
+            mesh.compute_vertex_normals()
+            r = generative.RegenResult(mesh=mesh,
+                                       alignment_method=m["alignment_method"],
+                                       scale_method=m["scale_method"])
+            print(f"  #{tid} generation reused from cache ({ply.name})")
+        else:
+            for var in ("VID2SIM_TRIPOSG_SEED", "VID2SIM_HUNYUAN_SEED"):
+                _os.environ[var] = str(seed)
+            r = engine.regenerate(cloud=cloud, crop_path=crop,
+                                  coco_class=classes.get(tid, "obj"))
+            if r is None:
+                meta.write_text(_json.dumps({"rejected": True}))
+                n_dropped += 1
+                continue
+            _o3d.io.write_triangle_mesh(str(ply), r.mesh)
+            meta.write_text(_json.dumps({
+                "rejected": False, "alignment_method": r.alignment_method,
+                "scale_method": r.scale_method}))
         inputs.append(assembler.ObjectInput(
             track_id=tid, coco_class=classes.get(tid, "obj"), mesh=r.mesh,
             cloud=cloud, strategy="generative", crop_path=crop,

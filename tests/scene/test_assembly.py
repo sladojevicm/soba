@@ -163,3 +163,36 @@ def test_vlm_falls_back_to_lookup_without_backend():
     out = vlm.infer(["chair", "couch"])
     assert [p.origin for p in out] == ["lookup", "lookup"]
     assert out[0].material == "wood" and out[1].material == "fabric"
+
+
+def _entry(oid, x, z, hx, hz, mass_kg):
+    return {"id": oid, "_half_extents": [hx, 0.4, hz], "physics": {"mass_kg": mass_kg},
+            "transform": {"translation": [x, 0.0, z]}}
+
+
+def test_deoverlap_pushes_lighter_object_apart():
+    heavy = _entry("desk", 0.0, 0.0, 0.8, 0.5, 40.0)
+    light = _entry("chair", 0.3, 0.1, 0.4, 0.4, 5.0)   # deep inside the desk
+    n = assembler.deoverlap([heavy, light], max_shift=1.0)
+    assert n > 0
+    assert heavy["transform"]["translation"] == [0.0, 0.0, 0.0]  # anchor stays
+    dx = abs(light["transform"]["translation"][0] - 0.0)
+    dz = abs(light["transform"]["translation"][2] - 0.0)
+    # separated on at least one axis (to within the 5 cm tuck tolerance)
+    assert dx >= 0.8 + 0.4 - 0.05 - 1e-6 or dz >= 0.5 + 0.4 - 0.05 - 1e-6
+
+
+def test_deoverlap_leaves_separated_and_tucked_objects_alone():
+    a = _entry("a", 0.0, 0.0, 0.5, 0.5, 10.0)
+    b = _entry("b", 2.0, 0.0, 0.5, 0.5, 10.0)          # clearly apart
+    c = _entry("c", 0.0, 0.97, 0.5, 0.5, 1.0)          # grazing within tol
+    assert assembler.deoverlap([a, b, c]) == 0
+    assert c["transform"]["translation"] == [0.0, 0.0, 0.97]
+
+
+def test_deoverlap_caps_displacement():
+    heavy = _entry("desk", 0.0, 0.0, 2.0, 2.0, 40.0)
+    light = _entry("chair", 0.0, 0.0, 2.0, 2.0, 5.0)   # hopeless full overlap
+    assembler.deoverlap([heavy, light], max_shift=0.5)
+    t = light["transform"]["translation"]
+    assert abs(t[0]) + abs(t[2]) <= 0.5 + 1e-6          # nothing teleports
