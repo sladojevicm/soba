@@ -64,11 +64,11 @@ def test_make_estimator_types():
     assert isinstance(slam.make_estimator(4), slam.OrbSlam3Estimator)
 
 
-def test_unbuilt_estimators_raise():
-    with pytest.raises(NotImplementedError):
-        slam.Mast3rEstimator().estimate(None)
-    with pytest.raises(NotImplementedError):
-        slam.OrbSlam3Estimator().estimate(None)
+def test_mast3r_empty_bundle_returns_no_poses():
+    import types
+
+    b = types.SimpleNamespace(iter_frame_ids=lambda: iter([]))
+    assert slam.Mast3rEstimator().estimate(b) == []
 
 
 def test_compose_recovers_known_world_poses():
@@ -116,3 +116,46 @@ def test_rgbd_odometry_does_not_invert_relative(monkeypatch):
 
     poses = slam.RgbdOdometry().estimate(bundle)
     assert [round(p[0, 3], 3) for p in poses] == [0.0, 0.1, 0.2]
+
+
+# --- MASt3R support functions (pure math, no model) -------------------------
+def test_interpolate_poses_fills_between_anchors():
+    from scipy.spatial.transform import Rotation
+
+    T0 = np.eye(4)
+    T1 = np.eye(4)
+    T1[:3, :3] = Rotation.from_euler("y", 90, degrees=True).as_matrix()
+    T1[:3, 3] = [1.0, 0.0, 0.0]
+    out = slam.interpolate_poses([0, 1, 2, 3, 4], [0, 4], np.array([T0, T1]))
+    assert len(out) == 5
+    # midpoint: half the translation, half the rotation
+    assert out[2][:3, 3] == pytest.approx([0.5, 0, 0], abs=1e-9)
+    ang = Rotation.from_matrix(out[2][:3, :3]).as_euler("xyz", degrees=True)[1]
+    assert ang == pytest.approx(45.0, abs=1e-6)
+    # anchors reproduced exactly
+    assert out[0] == pytest.approx(T0)
+    assert out[4] == pytest.approx(T1, abs=1e-9)
+
+
+def test_interpolate_poses_clamps_outside_anchor_range():
+    T = np.eye(4); T[:3, 3] = [2, 0, 0]
+    out = slam.interpolate_poses([0, 5, 10], [5], np.array([T]))
+    for p in out:
+        assert p[:3, 3] == pytest.approx([2, 0, 0])
+
+
+def test_solve_metric_scale_recovers_ratio():
+    rng = np.random.default_rng(1)
+    preds = [rng.uniform(0.5, 3.0, (48, 64)) for _ in range(4)]
+    sensors = [p * 2.5 for p in preds]                    # sensor = 2.5x pred
+    sensors[0][:10] = 0.0                                 # invalid px ignored
+    assert slam.solve_metric_scale(preds, sensors) == pytest.approx(2.5, rel=1e-6)
+    assert slam.solve_metric_scale([], []) == 1.0         # degenerate -> 1.0
+
+
+def test_tier4_falls_back_to_mast3r(monkeypatch):
+    called = {}
+    monkeypatch.setattr(slam.Mast3rEstimator, "estimate",
+                        lambda self, b: called.setdefault("ok", [np.eye(4)]))
+    out = slam.OrbSlam3Estimator().estimate(bundle=None)
+    assert called["ok"] is out
