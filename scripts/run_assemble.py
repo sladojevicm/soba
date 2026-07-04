@@ -152,14 +152,15 @@ def main() -> None:
     n_dropped = 0
     for tid in gen_tids:
         _strat, cloud = routed[tid]
-        r = engine.regenerate(cloud=cloud, crop_path=_crop_path(b, tid),
+        crop = _crop_path(b, tid)
+        r = engine.regenerate(cloud=cloud, crop_path=crop,
                               coco_class=classes.get(tid, "obj"))
         if r is None:
             n_dropped += 1
             continue
         inputs.append(assembler.ObjectInput(
             track_id=tid, coco_class=classes.get(tid, "obj"), mesh=r.mesh,
-            cloud=cloud, strategy="generative",
+            cloud=cloud, strategy="generative", crop_path=crop,
             alignment_method=r.alignment_method, scale_method=r.scale_method))
     if n_dropped:
         print(f"  {n_dropped} generative object(s) dropped — "

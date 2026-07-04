@@ -352,8 +352,16 @@ def assemble(objects: list[ObjectInput], poses: list[np.ndarray], out_dir: Path 
     objects = sorted(objects, key=lambda o: o.track_id)
 
     g_y = ground.ground_y([o.cloud for o in objects], config_path=config_path)
+
+    def _longest_dim(m):
+        ext = (np.asarray(m.get_axis_aligned_bounding_box().max_bound)
+               - np.asarray(m.get_axis_aligned_bounding_box().min_bound))
+        return float(np.max(ext))
+
     phys_list = vlm.infer([o.coco_class for o in objects],
-                          backend=vlm_backend, config_path=config_path)
+                          backend=vlm_backend, config_path=config_path,
+                          crops=[o.crop_path for o in objects],
+                          dims_m=[_longest_dim(o.mesh) for o in objects])
 
     entries = [
         _assemble_object(o, oid, g_y, out_dir, ph, tier_coacd, decimate_to,
