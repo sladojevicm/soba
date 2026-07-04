@@ -673,11 +673,12 @@ class RunPodEngine(Engine):
             log.info("generation rejected: %.0f%% of it was detached debris",
                      detached * 100)
             return None
-        aligned = coarse_align_to_cloud(gen_mesh, cloud, coco_class, clean=False)
-        if not _accept_regen(aligned, coco_class):
+        from reconstruction import icp_align  # lazy: it imports us back
+        res = icp_align.align(gen_mesh, cloud, coco_class)
+        if not _accept_regen(res.mesh, coco_class):
             return None    # debris/absurd generation -> drop the object
-        return RegenResult(mesh=aligned, alignment_method="coarse_aligned",
-                           scale_method="class_prior")
+        return RegenResult(mesh=res.mesh, alignment_method=res.alignment_method,
+                           scale_method=res.scale_method)
 
 
 class LocalGpuEngine(Engine):
@@ -730,11 +731,13 @@ class LocalGpuEngine(Engine):
                 log.info("generation rejected: %.0f%% of it was detached debris",
                          detached * 100)
                 return None
-            aligned = coarse_align_to_cloud(gen_mesh, cloud, coco_class, clean=False)
-            if not _accept_regen(aligned, coco_class):
+            from reconstruction import icp_align  # lazy: it imports us back
+            res = icp_align.align(gen_mesh, cloud, coco_class)
+            if not _accept_regen(res.mesh, coco_class):
                 return None    # debris/absurd generation -> drop the object
-            return RegenResult(mesh=aligned, alignment_method="coarse_aligned",
-                               scale_method="class_prior")
+            return RegenResult(mesh=res.mesh,
+                               alignment_method=res.alignment_method,
+                               scale_method=res.scale_method)
         except Exception as e:  # missing model / OOM -> drop (as with no GPU)
             log.warning("local-GPU generation unavailable (%s) -> object dropped", e)
             return None
