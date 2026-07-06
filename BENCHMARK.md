@@ -355,7 +355,9 @@ Each of the 8 vMAP Replica rooms is rebuilt from its **custom-trajectory `_v2` b
 
 **Matching** pairs a shipped object to a GT instance of the same COCO class when their centroids are within 0.75 m (or world-AABB IoU ≥ 0.1), solved per class with the Hungarian algorithm. GT classes the detector never maps (tv, potted plant, clock, …) are **out of scope** and excluded from the score.
 
-_Tiers 2–4 are pending builds (tier 2 = local TripoSG + gate/completion + CoACD colliders; tiers 3–4 = Hunyuan3D on the RunPod pod)._
+_All four tiers are measured. Tier 2 = TripoSG + gate/completion + CoACD hulls; tiers 3–4 = Hunyuan3D 2.1 (+ paint) with PatchComplete completion, built 2026-07-06 on a RunPod RTX 3090. Tiers 1–2 were built from the original `_v2` bundles on the previous machine; tiers 3–4 from bundles re-rendered with the same `render_replica.py` parameters (the renderer is deterministic given the GT mesh, but treat sub-point cross-tier deltas with that caveat)._
+
+_**Tier 3 vs tier 4, measured finding:** tier 3 beats tier 2 in every office (cleaner Hunyuan geometry → higher F@5cm) but loses both cluttered `room_*` rooms by shipping MORE, worse-observed objects whose generated proportions drag the per-object means down (room_0: recall 0.39→0.56 but dim-err 0.23→0.64). Tier 4 tracks 0.5–2.6 points **below** tier 3 on this score in 6 of 7 non-empty rooms: its finer TSDF voxel (2 mm) and finer colliders (32 hulls) buy physics fidelity, which this surface-accuracy score does not measure — past tier 3, the extra compute is not visible in geometry numbers._
 
 ### office_0
 
@@ -363,8 +365,8 @@ _Tiers 2–4 are pending builds (tier 2 = local TripoSG + gate/completion + CoAC
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | 1 | 4 | 4/6 | 0.67 | 1.00 | 12.7 | 0.30 | 0.25 | **61.9** |
 | 2 | 5 | 5/6 | 0.83 | 1.00 | 5.9 | 0.58 | 0.12 | **78.4** |
-| 3 | — | — | — | — | — | — | — | *pending* |
-| 4 | — | — | — | — | — | — | — | *pending* |
+| 3 | 5 | 5/6 | 0.83 | 1.00 | 5.6 | 0.60 | 0.13 | **79.4** |
+| 4 | 5 | 5/6 | 0.83 | 1.00 | 6.1 | 0.56 | 0.11 | **77.8** |
 
 ### office_1
 
@@ -372,8 +374,8 @@ _Tiers 2–4 are pending builds (tier 2 = local TripoSG + gate/completion + CoAC
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | 1 | 2 | 2/4 | 0.50 | 1.00 | 10.5 | 0.49 | 0.16 | **60.9** |
 | 2 | 3 | 2/4 | 0.50 | 0.67 | 3.8 | 0.76 | 0.06 | **62.4** |
-| 3 | — | — | — | — | — | — | — | *pending* |
-| 4 | — | — | — | — | — | — | — | *pending* |
+| 3 | 4 | 3/4 | 0.75 | 0.75 | 11.8 | 0.50 | 0.36 | **66.6** |
+| 4 | 4 | 3/4 | 0.75 | 0.75 | 12.1 | 0.48 | 0.35 | **66.0** |
 
 ### office_2
 
@@ -381,8 +383,8 @@ _Tiers 2–4 are pending builds (tier 2 = local TripoSG + gate/completion + CoAC
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | 1 | 8 | 8/14 | 0.57 | 1.00 | 11.6 | 0.40 | 0.36 | **60.8** |
 | 2 | 10 | 10/14 | 0.71 | 1.00 | 8.5 | 0.61 | 0.30 | **74.4** |
-| 3 | — | — | — | — | — | — | — | *pending* |
-| 4 | — | — | — | — | — | — | — | *pending* |
+| 3 | 10 | 10/14 | 0.71 | 1.00 | 7.8 | 0.69 | 0.28 | **77.0** |
+| 4 | 10 | 10/14 | 0.71 | 1.00 | 8.2 | 0.64 | 0.27 | **75.3** |
 
 ### office_3
 
@@ -390,8 +392,8 @@ _Tiers 2–4 are pending builds (tier 2 = local TripoSG + gate/completion + CoAC
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | 1 | 11 | 11/17 | 0.65 | 1.00 | 9.6 | 0.39 | 0.76 | **63.9** |
 | 2 | 12 | 12/17 | 0.71 | 1.00 | 5.0 | 0.67 | 0.46 | **75.9** |
-| 3 | — | — | — | — | — | — | — | *pending* |
-| 4 | — | — | — | — | — | — | — | *pending* |
+| 3 | 12 | 12/17 | 0.71 | 1.00 | 4.9 | 0.67 | 0.47 | **76.0** |
+| 4 | 12 | 12/17 | 0.71 | 1.00 | 5.4 | 0.59 | 0.45 | **73.4** |
 
 ### office_4
 
@@ -399,8 +401,8 @@ _Tiers 2–4 are pending builds (tier 2 = local TripoSG + gate/completion + CoAC
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | 1 | 9 | 9/11 | 0.82 | 1.00 | 8.9 | 0.38 | 0.24 | **71.4** |
 | 2 | 10 | 10/11 | 0.91 | 1.00 | 7.6 | 0.56 | 0.19 | **81.2** |
-| 3 | — | — | — | — | — | — | — | *pending* |
-| 4 | — | — | — | — | — | — | — | *pending* |
+| 3 | 10 | 10/11 | 0.91 | 1.00 | 6.7 | 0.61 | 0.26 | **83.1** |
+| 4 | 9 | 9/11 | 0.82 | 1.00 | 6.9 | 0.59 | 0.26 | **78.2** |
 
 ### room_0
 
@@ -408,8 +410,8 @@ _Tiers 2–4 are pending builds (tier 2 = local TripoSG + gate/completion + CoAC
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | 1 | 5 | 5/18 | 0.28 | 1.00 | 8.2 | 0.44 | 0.18 | **49.1** |
 | 2 | 7 | 7/18 | 0.39 | 1.00 | 4.4 | 0.76 | 0.23 | **64.7** |
-| 3 | — | — | — | — | — | — | — | *pending* |
-| 4 | — | — | — | — | — | — | — | *pending* |
+| 3 | 11 | 10/18 | 0.56 | 0.91 | 11.7 | 0.45 | 0.64 | **59.9** |
+| 4 | 11 | 10/18 | 0.56 | 0.91 | 11.0 | 0.49 | 0.60 | **61.2** |
 
 ### room_1
 
@@ -420,7 +422,7 @@ _Tiers 2–4 are pending builds (tier 2 = local TripoSG + gate/completion + CoAC
 | 3 | — | — | — | — | — | — | — | *pending* |
 | 4 | — | — | — | — | — | — | — | *pending* |
 
-_Tier-1 produced an **empty scene**: room_1 is a walkthrough-only corridor whose only 3 in-scope tracks are books, none of which yields a usable crop, so all were dropped (0 shipped, precision/recall N/A). No orbit-size furniture exists to reconstruct._
+_All four tiers produce an **empty scene**: room_1 is a walkthrough-only corridor whose only 3 in-scope tracks are books, none of which yields a usable crop, so all were dropped (0 shipped, precision/recall N/A). No orbit-size furniture exists to reconstruct._
 
 ### room_2
 
@@ -428,8 +430,8 @@ _Tier-1 produced an **empty scene**: room_1 is a walkthrough-only corridor whose
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | 1 | 8 | 8/10 | 0.80 | 1.00 | 7.9 | 0.46 | 0.17 | **73.3** |
 | 2 | 9 | 9/10 | 0.90 | 1.00 | 3.9 | 0.82 | 0.08 | **89.4** |
-| 3 | — | — | — | — | — | — | — | *pending* |
-| 4 | — | — | — | — | — | — | — | *pending* |
+| 3 | 10 | 9/10 | 0.90 | 0.90 | 5.0 | 0.78 | 0.11 | **85.9** |
+| 4 | 10 | 9/10 | 0.90 | 0.90 | 2.6 | 0.87 | 0.06 | **88.9** |
 
 <!-- SECTION3:END -->
 

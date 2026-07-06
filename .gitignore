@@ -50,3 +50,6 @@ Thumbs.db
 # generated meshes + analysis artifacts
 out/
 scratchpad/
+
+# stray trajectory dumps from eval runs
+*.tum

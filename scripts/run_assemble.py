@@ -309,6 +309,9 @@ def main() -> None:
               f"mat={o['material_class']:8} {col_desc}  "
               f"pos=({t[0]:.2f},{t[1]:.2f},{t[2]:.2f})")
 
+    if not args.no_eval:
+        run_eval_hook(args.bundle, args.out)
+
 
 if __name__ == "__main__":
     main()
