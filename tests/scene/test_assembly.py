@@ -196,3 +196,15 @@ def test_deoverlap_caps_displacement():
     assembler.deoverlap([heavy, light], max_shift=0.5)
     t = light["transform"]["translation"]
     assert abs(t[0]) + abs(t[2]) <= 0.5 + 1e-6          # nothing teleports
+
+
+def test_mass_fill_fraction_overrides_class_solidity():
+    # 1 m^3 metal "bowl": class default solidity 0.5 -> 3900 kg; the VLM's
+    # per-object fill_fraction 0.03 -> 234 kg (the BENCHMARK bowl fix).
+    heavy = mass.mass_kg(1.0, "metal", "bowl")
+    light = mass.mass_kg(1.0, "metal", "bowl", fill_fraction=0.03)
+    assert abs(heavy - 7800 * 0.5) < 1e-6
+    assert abs(light - 7800 * 0.03) < 1e-6
+    # None -> unchanged legacy behaviour; silly values clamp to [0.005, 1]
+    assert mass.mass_kg(1.0, "metal", "bowl", fill_fraction=None) == heavy
+    assert mass.mass_kg(1.0, "metal", "bowl", fill_fraction=99.0) == pytest.approx(7800.0)

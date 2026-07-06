@@ -37,6 +37,62 @@ def _crop_path(bundle, track_id: int):
     return crop_stage.ensure_crop(bundle, track_id)
 
 
+def run_eval_hook(bundle: Path, out: Path, *,
+                  gt_root: Path | None = None,
+                  traj_root: Path | None = None,
+                  evaluator: Path | None = None) -> bool:
+    """Post-assembly ground-truth evaluation (writes <out>/eval.json).
+
+    Strictly NON-FATAL: any missing precondition (unrecognised room name, no
+    GT semantic assets downloaded yet, no scene.json) or evaluator failure
+    logs ONE line and returns False — a build must never fail because the
+    ground truth isn't there. Runs scripts/evaluate_scene.py in a subprocess
+    so evaluator crashes cannot take the build down with them.
+    """
+    import re
+    import subprocess
+    import sys as _sys
+
+    try:
+        data_root = Path.home() / "projects/vid2sim/data/replica"
+        gt_root = gt_root or data_root / "scenes"
+        traj_root = traj_root or data_root / "gt_traj"
+        evaluator = evaluator or Path(__file__).resolve().parent / "evaluate_scene.py"
+
+        m = re.search(r"(office_\d+|room_\d+)", Path(bundle).name)
+        if not m:
+            print(f"eval: skipped (bundle '{Path(bundle).name}' is not a "
+                  "recognised Replica room)")
+            return False
+        room = m.group(1)
+        if not (Path(out) / "scene.json").is_file():
+            print("eval: skipped (no scene.json was written)")
+            return False
+        gt_scene = gt_root / room
+        has_gt = gt_scene.is_dir() and any(gt_scene.rglob("mesh_semantic.ply"))
+        if not has_gt:
+            print(f"eval: skipped (no GT semantics under {gt_scene})")
+            return False
+
+        cmd = [_sys.executable, str(evaluator),
+               "--scene", str(out), "--room", room, "--bundle", str(bundle),
+               "--gt-scene", str(gt_scene)]
+        traj = traj_root / f"{room}_traj_w_c.txt"
+        if traj.is_file():
+            cmd += ["--gt-traj", str(traj)]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        if r.returncode != 0:
+            tail = (r.stderr or r.stdout or "").strip().splitlines()
+            print(f"eval: FAILED (non-fatal): {tail[-1] if tail else 'no output'}")
+            return False
+        for line in r.stdout.strip().splitlines():
+            print(f"eval: {line}")
+        return True
+    except Exception as exc:  # never let evaluation break a build
+        print(f"eval: FAILED (non-fatal): {exc}")
+        return False
+
+
 def main() -> None:
     # Generation-rejection reasons (debris / shattered / implausible dims) log
     # at INFO in reconstruction.generative — surface them, else an object
@@ -72,6 +128,10 @@ def main() -> None:
     ap.add_argument("--gate-only", action="store_true",
                     help="stop after the Step-5 routing printout (fast gate "
                          "iteration / cache warm-up; no fusion or assembly)")
+    ap.add_argument("--no-eval", action="store_true",
+                    help="skip the post-assembly ground-truth evaluation hook "
+                         "(it self-skips anyway when no GT assets exist for "
+                         "the bundle's room)")
     ap.add_argument("--reroll", type=int, nargs="*", default=[],
                     help="track ids whose generation gets a FRESH seed (base + "
                          "1000 + tid) — re-roll a visibly wrong generation "

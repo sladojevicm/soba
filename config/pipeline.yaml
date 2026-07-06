@@ -123,9 +123,9 @@ tiers:
     # PROVISIONAL/uncalibrated — set near walk-around quality, so on room-scan data
     # nothing clears them and the survivors route to "completion" (correct: the
     # best object we have is ~0.75 completeness / 121deg, i.e. partial, not "keep").
-    gate: { angular_deg: 112, completeness: 0.48, keep_angular_deg: 160, keep_completeness: 0.85 }  # complete bar RAISED 2026-07-02 (user: prefer image-to-3D; completion only for truly well-observed)
+    gate: { angular_deg: 90, completeness: 0.35, keep_angular_deg: 160, keep_completeness: 0.85 }  # complete bar LOWERED 2026-07-05 (user: real geometry first, image-to-3D as LAST resort; photogrammetry rule-of-thumb ~90deg minimum coverage)
     generative_model: triposg      # BOTTOM band: image-to-3D (crop -> object)
-    completion_model: pointr        # MIDDLE band: learned geometry shape-completion (GPU)
+    completion_model: patchcomplete # MIDDLE band: learned geometry shape-completion (local GPU); matches make_engine() default (was stale 'pointr')
     physics: claude
     collider: hulls
     coacd: { threshold: 0.07, max_parts: 8 }
@@ -134,20 +134,20 @@ tiers:
     pose_method: mast3r
     tsdf: true
     voxel_size_m: 0.003
-    gate: { angular_deg: 105, completeness: 0.45, keep_angular_deg: 155, keep_completeness: 0.85 }  # complete bar RAISED 2026-07-02 (user: prefer image-to-3D; completion only for truly well-observed)
+    gate: { angular_deg: 90, completeness: 0.35, keep_angular_deg: 155, keep_completeness: 0.85 }  # complete bar LOWERED 2026-07-05 (user: real geometry first, image-to-3D as LAST resort)
     generative_model: hunyuan3d    # BOTTOM band: image-to-3D (crop -> object)
-    completion_model: pointr        # MIDDLE band: learned geometry shape-completion (GPU)
+    completion_model: patchcomplete # MIDDLE band: learned geometry shape-completion (local GPU); matches make_engine() default (was stale 'pointr')
     physics: claude
     collider: hulls
     coacd: { threshold: 0.05, max_parts: 16 }
   4:
     name: maximum
-    pose_method: orbslam3
+    pose_method: mast3r            # ORB-SLAM3 dropped by decision 2026-07-05 (was never integrated; loop closure unjustified unless MASt3R drifts)
     tsdf: true
     voxel_size_m: 0.002
-    gate: { angular_deg: 100, completeness: 0.42, keep_angular_deg: 150, keep_completeness: 0.85 }  # complete bar RAISED 2026-07-02 (user: prefer image-to-3D; completion only for truly well-observed)
+    gate: { angular_deg: 90, completeness: 0.35, keep_angular_deg: 150, keep_completeness: 0.85 }  # complete bar LOWERED 2026-07-05 (user: real geometry first, image-to-3D as LAST resort)
     generative_model: hunyuan3d    # BOTTOM band: image-to-3D (crop -> object)
-    completion_model: pointr        # MIDDLE band: learned geometry shape-completion (GPU)
+    completion_model: patchcomplete # MIDDLE band: learned geometry shape-completion (local GPU); matches make_engine() default (was stale 'pointr')
     physics: claude
     collider: hulls
     coacd: { threshold: 0.03, max_parts: 32 }

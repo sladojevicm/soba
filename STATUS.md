@@ -4,7 +4,102 @@ _Last updated: 2026-07-02. This is a working handoff so a fresh session can resu
 without re-deriving everything. The authoritative design is `PLAN_FINAL_FINAL.txt`
 (currently at `~/projects/vid2sim/PLAN_FINAL_FINAL.txt`, version 14)._
 
-## ⬆️ LATEST (2026-07-05): tier-1+2 across rooms 1-4, gen cache, de-overlap, drop policy
+## ⬆️ LATEST (2026-07-06): TIER-1 + TIER-2 ROOM ACCURACY DONE (all 8 rooms) — BENCHMARK §3 written
+241 tests pass. This commit bundles all prior uncommitted work + the room-accuracy runs.
+- **Tier 1 AND tier 2 built for all 8 `_v2` rooms**, GT-evaluated (`scripts/evaluate_scene.py`),
+  browser-verified (`scripts/verify_browser.js`, all pass), and served. Ports: tier 1 :8001–8008,
+  tier 2 :8011–8018 (room_1 is empty in both — walkthrough corridor, only uncroppable books).
+- **BENCHMARK.md §3 "Replica room accuracy"** now written (between `<!-- SECTION3 -->` markers):
+  one table per room, a row per tier. Regenerate with `scratchpad/write_section3.py` (reads each
+  `out/scene_<room>_t<tier>/eval.json`). Pose is EXCLUDED from the score for `_v2` (they consume
+  exact GT poses → ATE 0 by construction; passing the ORIGINAL dataset traj gives a bogus ~115 cm,
+  so run evaluate_scene with `--gt-traj /nonexistent` to force pose n/a and renormalise the score
+  to 0.444·recall + 0.222·precision + 0.333·F@5cm).
+- **Result: tier 2 beat tier 1 in every non-empty room.** Mean score 63.0 → 75.2 (+12.2), mean
+  F@5cm 0.41 → 0.68. Precision 1.00 everywhere (drop-garbage shipped zero hallucinations, both tiers).
+  Driver of the gain: on the `_v2` orbit trajectories most objects route to COMPLETION (real geometry),
+  NOT generative — the opposite of the old room-scan bundles. This is the coverage-gated-tier story.
+- **Local tier build recipe (4060):** `scratchpad/tier_build.sh <room> <tier> <port>` needs
+  `VID2SIM_TRIPOSG_HOME=~/projects/vid2sim/TripoSG VID2SIM_TRIPOSG_FLASH=0` (diso/nvcc not built →
+  marching cubes) + `VID2SIM_PATCHCOMPLETE_HOME=~/projects/vid2sim/PatchComplete`. Never run two GPU
+  builds at once. `scratchpad/tier{1,2}_all.sh` are the sequential drivers.
+- **Disk reclaimed:** deleted SDFusion (17 GB) + PoinTr (1.3 GB) + caches → root 93% → 74% (25 GB free).
+- **Open:** tiers 3–4 need the pod (Hunyuan3D, stopped); commit; then paper (ERK) consumes BENCHMARK §3.
+
+## ⬆️ EARLIER (2026-07-05, part 3): custom trajectories DONE (8 rooms), fill_fraction physics fix, full GT downloaded
+241 tests pass. EVERYTHING UNCOMMITTED (offer the user a commit early). Disk 93% — biggest reclaim
+is SDFusion 17 GB (unused by pipeline; user approval still pending).
+- **Custom camera trajectories COMPLETE for all 8 rooms** (`scripts/render_replica.py`,
+  CPU raycast renderer from Replica semantic meshes; frame-match gate vs original
+  bundles passes at 0.0 mm median depth error). Two hard-won fixes IN the script:
+  (1) `_apply_budget` — uniform subsample on EVERY plan() return path so
+  `--frames 200` yields exactly 200 (planner floors otherwise blow it up 8-16x;
+  filled the disk once); (2) `Renderer.inside()` — ray up must hit ceiling AND ray
+  down must hit floor, enforced at all 4 acceptance points (clearance alone is
+  LARGE outside the room → cameras escaped through windows/doorways; user caught it).
+  Outputs: `bundles/<room>_v2/` (200 fr, GT poses, GT-derived objects.json — pipeline-ready)
+  and inspection videos `previews/200_frames/<room>.mp4` (all 8). `previews/2000_frames/`
+  has long office_0/office_4 versions; the OTHER SIX 2000-frame renders run ONLY on
+  explicit user command (his instruction). room_1 is walkthrough-only (no orbit-size furniture).
+- **Replica GT fully on disk**: `data/replica/scenes/<room>/habitat/mesh_semantic.ply`
+  + semantic.json for ALL 8 rooms (the "killed" download had finished detached).
+  Room-accuracy eval vs GT is the LAST missing benchmark column: `scripts/evaluate_scene.py`
+  + `config/replica_eval_class_map.yaml` + frontend GT panel + `/eval.json` route +
+  run_assemble hook (`--no-eval` opt-out) are all built+tested but NEVER RUN — no
+  eval.json exists anywhere yet. (Check whether the server empty-scene schema fix
+  from BENCHMARK's finding actually landed in src/server.py — the agent doing it was killed.)
+- **Physics fill_fraction fix IMPLEMENTED in production** (vlm.py Physics.fill_fraction,
+  vlm_claude schema+prompt+parse, mass.mass_kg(fill_fraction=), assembler passes it;
+  tier 1/lookup byte-identical). Measured via agent-preview (306 objects, YCB+ABO,
+  results in BENCHMARK.md): furniture within-2x 29%→43%, catastrophic (>10x) errors
+  9→1 (YCB) / 57→33 (ABO); residual = surface-vs-bulk density (full containers, foam).
+  ⚠️ Claude columns are AGENT-PREVIEW (Claude Code opus agents on production inputs);
+  canonical rerun = `scripts/benchmark_physics.py --dataset ycb|abo` once the user
+  provides ANTHROPIC_API_KEY (he doesn't have Console billing yet — don't push).
+- **TUM pose benchmark COMPLETE per tier** (BENCHMARK.md §1): tier-1 odometry
+  reproduced exactly (2.15/4.74/26.4 cm), tiers 2-4 MASt3R measured on GPU
+  (1.85/8.78/7.56 cm, scale 1.0008-1.075, 24-anchor cap). ORB-SLAM3 DROPPED
+  PERMANENTLY (user decision, evidence-backed): POSE_METHODS[4]="mast3r",
+  OrbSlam3Estimator deleted, config+tests updated. Never propose re-adding it.
+- **Tier-2 t2b rebuilds (new 90/0.35 gates)**: office_1 (:8031, 2 obj), office_2
+  (:8032, 8 obj) done+served; office_3_t2b is a KILLED PARTIAL (delete before rebuild);
+  office_4 not started. NOTE: the _v2 custom-trajectory bundles may supersede these —
+  ask the user whether future builds should use <room>_v2 (200 fr, ideal coverage)
+  instead of bundles_dense (2000 fr, bad coverage).
+- **Open queue (user-driven)**: (1) user inspects the 8 videos; (2) on his command:
+  six 2000-frame renders into previews/2000_frames/; (3) run pipeline on _v2 bundles
+  and/or backfill eval.json for existing scenes → "Section 3: room accuracy" in
+  BENCHMARK.md + website panels; (4) canonical Claude physics run when API key exists;
+  (5) commit everything; (6) paper (ERK, ~/Downloads/erkLaTeX) consumes BENCHMARK.md.
+
+## ⬆️ EARLIER (2026-07-05, part 2): gates 90/0.35, ORB-SLAM3 dropped, MASt3R benchmarked, BENCHMARK.md
+238 tests pass. Working tree carries in-progress agent work (eval/renderer/frontend) — see below.
+- **Routing thresholds LOWERED to 90°/0.35 (all tiers)** — user: real geometry
+  first, image-to-3D last resort. test_confidence updated. Tier-2 rebuilds with
+  the new gate: office_1_t2b (:8031, 2 obj — no routing change, coverage 26–42°),
+  office_2_t2b (:8032, 8 obj); office_3/4_t2b NOT built (office_3_t2b dir is a
+  KILLED PARTIAL — delete before rebuilding). Old sites untouched (:8001-:8024).
+- **ORB-SLAM3 permanently dropped (user decision)**: POSE_METHODS[4]="mast3r",
+  OrbSlam3Estimator deleted, config tier-4 pose_method=mast3r, tests locked.
+  Justified by measurement (below): MASt3R 7.6 cm on the hardest TUM sequence.
+- **BENCHMARK.md (repo root, committed base from user's WSL machine + new GPU
+  section)**: TUM pose per tier now COMPLETE — tier-1 odometry (2.15/4.74/26.4 cm,
+  reproduced here exactly) vs tiers 2–4 MASt3R (1.85/8.78/7.56 cm; scale
+  1.0008–1.075; 24-anchor cap). MASt3R 3.5× better on fast motion, loses only on
+  oscillating fr1/xyz (interpolation between anchors — RPE column shows it).
+  Runner: scripts/bench_tum_pose.py + src/reconstruction/traj_eval.py (tested).
+  YCB/ABO physics = lookup backend measured (WSL); **Claude column still missing**.
+- **Uncommitted agent work in tree** (from stopped agents, all tests green):
+  evaluate_scene.py + replica_eval_class_map.yaml + eval hook in run_assemble
+  (--no-eval; quiet-skips w/o GT), frontend GT panel, server /eval.json route +
+  empty-scene schema fix pending, render_replica.py (custom trajectories; user
+  wants --frames default cut to 200), fetch_replica_gt_traj.py (GT trajs in
+  data/replica/gt_traj). Replica semantic-mesh download INCOMPLETE (room_0/1/2
+  only; offices never arrived). TUM data: f1xyz/f1desk/f2xyz bundles + poses per
+  tier cached in data/tum (fr2 raw frames deleted, groundtruth.txt kept).
+- Disk ~97% full — biggest reclaim: SDFusion 17 GB (unused; user approval pending).
+
+## ⬆️ EARLIER (2026-07-05): tier-1+2 across rooms 1-4, gen cache, de-overlap, drop policy
 Ports: room3 t1 :8001 / t2 :8002 / t3(stale) :8003; rooms office_1/2/4 t1
 :8011/:8012/:8014, t2 :8021/:8022/:8024. Walkthrough mp4s (what the camera saw):
 ~/projects/vid2sim/data/replica/previews/. All builds headless-verified.

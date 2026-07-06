@@ -114,6 +114,17 @@ def create_app(
             return Response("hull not found", status_code=404)
         return FileResponse(path, media_type=GLB_MEDIA_TYPE)
 
+    async def eval_json(request):
+        # Ground-truth evaluation report (scripts/evaluate_scene.py). Scenes
+        # without one are the NORMAL case, so answer 200 with a "not available"
+        # marker instead of a 404 — the browser logs every 404 response as a
+        # console error, which would fail the headless zero-console-errors
+        # check on perfectly healthy scenes.
+        p = scene_dir / "eval.json"
+        if not p.is_file():
+            return JSONResponse({"available": False})
+        return FileResponse(p, media_type="application/json")
+
     async def events(request):
         async def gen():
             scene = _read_scene() or {}
@@ -141,6 +152,7 @@ def create_app(
     routes = [
         Route("/", index),
         Route("/scene.json", scene_json),
+        Route("/eval.json", eval_json),
         Route("/meshes/{id}.glb", mesh),
         Route("/hulls/{stem}.glb", hull),
         Route("/events", events),

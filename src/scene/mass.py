@@ -188,9 +188,20 @@ def mass_kg(
     material: str,
     coco_class: str,
     *,
+    fill_fraction: float | None = None,
     config_path: str = str(lookup._DEFAULT_CONFIG),
 ) -> float:
-    """vol * density[material] * solidity[class]. Always > 0 (clamped tiny)."""
+    """vol * density[material] * solidity. Always > 0 (clamped tiny).
+
+    solidity = the VLM's per-object ``fill_fraction`` when provided (tiers
+    2-4: the model sees hollow vs solid construction in the image), else the
+    per-CLASS table constant (tier 1 / lookup fallback). The class constant
+    cannot represent construction — a wire bed frame fills ~1% of its bounds,
+    not the default 50% (BENCHMARK.md, physics stage).
+    """
     rho = lookup.density(material, config_path)
-    sol = lookup.solidity(coco_class, config_path)
+    if fill_fraction is not None:
+        sol = min(max(float(fill_fraction), 0.005), 1.0)
+    else:
+        sol = lookup.solidity(coco_class, config_path)
     return max(volume * rho * sol, 1e-3)

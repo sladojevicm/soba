@@ -23,7 +23,11 @@ import numpy as np
 
 from perception.bundle import PerceptionBundle
 
-POSE_METHODS = {1: "odometry", 2: "mast3r", 3: "mast3r", 4: "orbslam3"}
+# Tier 4 uses MASt3R by DECISION (user, 2026-07-05): ORB-SLAM3 will not be
+# integrated — its loop closure was only ever justified if MASt3R drifted,
+# and the heavy C++ build (Pangolin/DBoW2/g2o, no Python bindings) isn't
+# worth it. The old plan's "Phase 14" is closed.
+POSE_METHODS = {1: "odometry", 2: "mast3r", 3: "mast3r", 4: "mast3r"}
 
 
 def method_for_tier(tier: int) -> str:
@@ -279,31 +283,10 @@ class Mast3rEstimator:
         return interpolate_poses(all_fids, sampled, anchors)
 
 
-class OrbSlam3Estimator:
-    """Tier 4. Visual-inertial SLAM, loop closure + bundle adjustment.
-
-    SPARSE (feature-based): poses + a sparse landmark map, NOT a dense cloud
-    (fix S1). It is a heavy C++ build (Pangolin/DBoW2/g2o) that the plan defers
-    to Phase 14 *only if MASt3R drifts*. Until that build exists, Tier 4
-    honestly falls back to MASt3R — logged, not silent."""
-
-    def estimate(self, bundle: PerceptionBundle) -> list[np.ndarray]:
-        try:
-            import orbslam3  # noqa: F401  (python binding, if ever installed)
-        except ImportError:
-            import logging
-            logging.getLogger(__name__).warning(
-                "ORB-SLAM3 binding not installed -> Tier 4 poses via MASt3R "
-                "(the plan builds ORB-SLAM3 only if MASt3R drift demands it)")
-            return Mast3rEstimator().estimate(bundle)
-        raise NotImplementedError("orbslam3 binding integration (Phase 14)")
-
-
 def make_estimator(tier: int) -> PoseEstimator:
     return {
         "odometry": RgbdOdometry,
         "mast3r": Mast3rEstimator,
-        "orbslam3": OrbSlam3Estimator,
     }[method_for_tier(tier)]()
 
 

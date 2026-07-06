@@ -274,7 +274,9 @@ def _assemble_object(obj: ObjectInput, oid: int, ground_y: float, out_dir: Path,
             "convex_decomposition": True,
             "hull_paths": hull_route_paths,
         }
-    mass_kg = mass.mass_kg(vol, phys.material, obj.coco_class, config_path=config_path)
+    mass_kg = mass.mass_kg(vol, phys.material, obj.coco_class,
+                           fill_fraction=getattr(phys, "fill_fraction", None),
+                           config_path=config_path)
 
     fa = final_mesh.get_axis_aligned_bounding_box()
     fhalf = ((np.asarray(fa.max_bound) - np.asarray(fa.min_bound)) / 2.0).tolist()

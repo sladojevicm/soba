@@ -21,7 +21,7 @@ def test_method_for_tier():
     assert slam.method_for_tier(1) == "odometry"
     assert slam.method_for_tier(2) == "mast3r"
     assert slam.method_for_tier(3) == "mast3r"
-    assert slam.method_for_tier(4) == "orbslam3"
+    assert slam.method_for_tier(4) == "mast3r"
     with pytest.raises(ValueError):
         slam.method_for_tier(9)
 
@@ -61,7 +61,7 @@ def test_compose_poses_rejects_bad_shape():
 def test_make_estimator_types():
     assert isinstance(slam.make_estimator(1), slam.RgbdOdometry)
     assert isinstance(slam.make_estimator(2), slam.Mast3rEstimator)
-    assert isinstance(slam.make_estimator(4), slam.OrbSlam3Estimator)
+    assert isinstance(slam.make_estimator(4), slam.Mast3rEstimator)
 
 
 def test_mast3r_empty_bundle_returns_no_poses():
@@ -153,9 +153,8 @@ def test_solve_metric_scale_recovers_ratio():
     assert slam.solve_metric_scale([], []) == 1.0         # degenerate -> 1.0
 
 
-def test_tier4_falls_back_to_mast3r(monkeypatch):
-    called = {}
-    monkeypatch.setattr(slam.Mast3rEstimator, "estimate",
-                        lambda self, b: called.setdefault("ok", [np.eye(4)]))
-    out = slam.OrbSlam3Estimator().estimate(bundle=None)
-    assert called["ok"] is out
+def test_tier4_uses_mast3r_by_decision():
+    # ORB-SLAM3 was dropped (2026-07-05): tier 4's pose method IS MASt3R.
+    assert slam.method_for_tier(4) == "mast3r"
+    assert isinstance(slam.make_estimator(4), slam.Mast3rEstimator)
+    assert not hasattr(slam, "OrbSlam3Estimator")

@@ -30,8 +30,13 @@ SYSTEM_PROMPT = (
     "You receive images of real objects with a green bounding box, a centroid "
     "dot, and a red ruler showing the object's real-world longest dimension. "
     "For each object, estimate its surface material and physics properties. "
-    "friction is 0.0-2.0; restitution is 0.0-1.0. Return estimates for ALL "
-    "objects, in the order shown. Keep each 'reasoning' to ONE short clause."
+    "friction is 0.0-2.0; restitution is 0.0-1.0. fill_fraction (0.0-1.0) is "
+    "the fraction of the object's overall volume that is solid material, "
+    "judged from its visible construction: a solid block ~1.0, packed/full "
+    "containers ~0.7-1.0, upholstered furniture ~0.3-0.6, hollow shells and "
+    "empty containers ~0.03-0.15, thin frames (wire racks, bed frames, tube "
+    "chairs) ~0.01-0.05. Return estimates for ALL objects, in the order "
+    "shown. Keep each 'reasoning' to ONE short clause."
 )
 
 MATERIALS = ["wood", "metal", "plastic", "rubber", "glass",
@@ -48,12 +53,13 @@ _SCHEMA = {
                 "type": "object",
                 "additionalProperties": False,
                 "required": ["material", "friction", "restitution",
-                             "is_rigid", "reasoning"],
+                             "is_rigid", "fill_fraction", "reasoning"],
                 "properties": {
                     "material": {"type": "string", "enum": MATERIALS},
                     "friction": {"type": "number"},
                     "restitution": {"type": "number"},
                     "is_rigid": {"type": "boolean"},
+                    "fill_fraction": {"type": "number"},
                     "reasoning": {"type": "string"},
                 },
             },
@@ -146,6 +152,8 @@ class ClaudeBackend:
                 is_rigid=bool(est["is_rigid"]),
                 origin="vlm",
                 reasoning=str(est.get("reasoning", ""))[:300],
+                fill_fraction=_clamp(est["fill_fraction"], 0.005, 1.0)
+                if est.get("fill_fraction") is not None else None,
             ))
         return out
 

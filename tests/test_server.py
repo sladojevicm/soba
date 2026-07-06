@@ -138,6 +138,26 @@ def test_events_replays_object_added_per_object(scene_dir):
     assert got_ids == want_ids
 
 
+def test_eval_json_marker_when_missing(tmp_path):
+    # No eval.json -> 200 with an explicit "not available" marker (NOT a 404:
+    # the browser logs every 404 response as a console error, which would fail
+    # headless verification on perfectly healthy un-evaluated scenes).
+    app = create_app(scene_dir=tmp_path, frontend_dir=tmp_path)
+    r = TestClient(app).get("/eval.json")
+    assert r.status_code == 200
+    assert r.json() == {"available": False}
+
+
+def test_eval_json_served_when_present(tmp_path):
+    report = {"schema": 1, "room": "office_9", "score": {"value": 87.5}}
+    (tmp_path / "eval.json").write_text(json.dumps(report))
+    app = create_app(scene_dir=tmp_path, frontend_dir=tmp_path)
+    r = TestClient(app).get("/eval.json")
+    assert r.status_code == 200
+    assert "application/json" in r.headers["content-type"]
+    assert r.json() == report
+
+
 def test_empty_scene_dir_is_partial_safe(tmp_path):
     # No scene.json on disk -> server returns an empty-but-valid scene.
     app = create_app(scene_dir=tmp_path, frontend_dir=tmp_path)

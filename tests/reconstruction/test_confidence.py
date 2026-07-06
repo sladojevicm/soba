@@ -164,15 +164,15 @@ def test_gate_object_three_way_reads_keep_bars(monkeypatch):
 def test_tier_params_reads_pipeline_yaml():
     p = cf.tier_params(2)
     assert p["tsdf"] is True
-    # recalibrated 2026-06-27 against real Replica distributions (was 150/0.65)
-    assert p["angular_deg"] == 112   # raised 2026-07-02 (user: image-to-3D first)
-    assert p["completeness"] == 0.48
+    # lowered 2026-07-05 (user: real geometry first, image-to-3D last resort)
+    assert p["angular_deg"] == 90
+    assert p["completeness"] == 0.35
     assert p["voxel_size_m"] == 0.004
 
 
 def test_tier_params_exposes_keep_bars():
     p = cf.tier_params(4)
-    assert p["angular_deg"] == 100 and p["completeness"] == 0.42  # raised 2026-07-02
+    assert p["angular_deg"] == 90 and p["completeness"] == 0.35  # lowered 2026-07-05
     assert p["keep_angular_deg"] == 150 and p["keep_completeness"] == 0.85
 
 

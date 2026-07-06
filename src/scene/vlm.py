@@ -26,6 +26,13 @@ class Physics:
     is_rigid: bool
     origin: str            # "vlm" or "lookup"
     reasoning: str = ""
+    # Fraction of the object's enclosed volume that is actually solid material
+    # (thin metal bowl ~0.03, solid wood block ~1.0). Estimated per object by
+    # the VLM from the image; None from the lookup backend -> mass falls back
+    # to the per-CLASS solidity table. Motivated by YCB/ABO (BENCHMARK.md):
+    # class constants turned correctly-perceived hollow objects into 28-510x
+    # mass overshoots.
+    fill_fraction: float | None = None
 
 
 def from_lookup(coco_class: str, *, config_path: str = str(lookup._DEFAULT_CONFIG)) -> Physics:

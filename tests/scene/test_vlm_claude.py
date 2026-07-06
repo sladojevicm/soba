@@ -137,3 +137,20 @@ def test_make_backend_reads_config_model(monkeypatch):
     assert be.max_tokens == 4096
     monkeypatch.setenv("VID2SIM_VLM_MODEL", "claude-haiku-4-5")
     assert vlm_claude.make_backend().model == "claude-haiku-4-5"
+
+
+def test_fill_fraction_parsed_clamped_and_optional():
+    est_full = _est("metal"); est_full["fill_fraction"] = 0.03      # thin bowl
+    est_wild = _est("wood"); est_wild["fill_fraction"] = 7.0        # clamp to 1
+    est_none = _est("plastic")                                      # absent -> None
+    be = _backend([_resp(objects=[est_full, est_wild, est_none])])
+    out = be(["bowl", "dining table", "bottle"])
+    assert out[0].fill_fraction == 0.03
+    assert out[1].fill_fraction == 1.0
+    assert out[2].fill_fraction is None
+
+
+def test_schema_requires_fill_fraction():
+    item = vlm_claude._SCHEMA["properties"]["objects"]["items"]
+    assert "fill_fraction" in item["required"]
+    assert "fill_fraction" in item["properties"]

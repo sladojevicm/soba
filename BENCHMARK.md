@@ -59,8 +59,62 @@ Reading: frame-to-frame odometry is accurate on slow/moderate motion (2–5 cm,
 in line with the 3.66 cm previously recorded in STATUS.md for a differently
 built fr1/xyz bundle) and **drifts badly on fast handheld motion** (26 cm on
 fr1/desk) — there is no loop closure and nothing corrects accumulated error.
-This is exactly the failure mode the plan's tier 2–4 pose methods
-(MASt3R / ORB-SLAM3, currently stubs) are specified to fix.
+This is exactly the failure mode the tier 2–4 pose method (MASt3R) is
+specified to fix — measured below on the GPU machine.
+
+### Stage B — Reconstruction (pose, Tiers 2–4: MASt3R, GPU)
+
+_Measured 2026-07-05 on the GPU machine (RTX 4060 8 GB, CUDA), same three
+sequences, same bundles-and-protocol as the tier-1 rows above (nearest-
+timestamp ≤20 ms, SE(3) Kabsch; fr2/xyz capped at the first 1500 associated
+pairs). Cross-machine protocol check: tier-1 odometry re-run here reproduces
+the table above exactly (2.15 / 4.74 / 26.37 cm). MASt3R runs with the 8 GB
+anchor cap `VID2SIM_MAST3R_MAX_IMAGES=24` — 24 anchor frames globally aligned
+(dust3r), metric scale solved against sensor depth, all in-between poses
+SE(3)-interpolated._
+
+**Tier 4 = tiers 2–3 by decision.** ORB-SLAM3 was dropped permanently on
+2026-07-05 (user decision): its loop closure was only justified if MASt3R
+drifted, and the numbers below show it doesn't meaningfully — 7.6 cm on the
+hardest sequence. `POSE_METHODS[4]` is now `"mast3r"`; the fallback stub was
+deleted. A tier-4 run on fr1/xyz produced byte-identical results to tier 2,
+as expected for the shared method.
+
+| Sequence | Tier 1 (odometry) | **Tiers 2–4 (MASt3R)** | MASt3R Sim(3) scale | RPE 1 s: T1 → T2–4 |
+|---|---|---|---|---|
+| fr2/xyz (slow, smooth) | 2.15 cm | **1.85 cm** | 1.020 | 0.89 → 1.70 cm/s |
+| fr1/xyz (moderate, oscillating) | **4.74 cm** | 8.78 cm | 1.075 | 2.25 → 14.1 cm/s |
+| fr1/desk (fast sweep) | 26.37 cm | **7.56 cm** | **1.0008** | 6.67 → 9.83 cm/s |
+
+Reading, per regime:
+
+* **Fast handheld motion (the realistic capture case): MASt3R is 3.5× better**
+  (26.4 → 7.56 cm). Global alignment bounds the error that kills incremental
+  odometry; this is the measured justification for tiers 2–4 — and for NOT
+  building ORB-SLAM3.
+* **Slow motion: MASt3R still edges odometry** (1.85 vs 2.15 cm).
+* **The one regime MASt3R loses: high-frequency oscillation** (fr1/xyz,
+  8.78 vs 4.74 cm). Cause is visible in the RPE column: with only 24 anchors
+  over 798 frames, SE(3) interpolation smooths straight through the rapid
+  back-and-forth between anchors (14.1 cm/s local error vs odometry's 2.25).
+  More VRAM (a higher anchor cap) directly attacks this; room-scan footage
+  does not oscillate like fr1/xyz, so the walkthrough use case sits closer
+  to the desk/fr2 rows.
+* **Metric scale is genuinely solved**: Sim(3)-recovered scale 1.0008–1.075
+  (0.08–7.5 % error), i.e. `solve_metric_scale` against sensor depth works —
+  the pipeline's claim of metric poses holds without any GT scale input.
+* **Runtime inverts the tiers' cost intuition**: MASt3R is ~120 s per
+  sequence regardless of length (fixed 24 anchors), while CPU odometry scales
+  with frames (~0.9 s/frame: 720 s on fr1/xyz, 1362 s on fr2/xyz-1500).
+
+Reproduce:
+
+```
+PYTHONPATH=src VID2SIM_MAST3R_MAX_IMAGES=24 python scripts/bench_tum_pose.py \
+    --seq  ~/projects/vid2sim/data/tum/rgbd_dataset_freiburg1_desk \
+    --bundle ~/projects/vid2sim/data/tum/bundle_f1desk \
+    --tiers 1 2 --max-frames 10000 --json results.json
+```
 
 TSDF / mesh-completion / ICP accuracy: **N/A on TUM** — no GT geometry to
 score against (mesh quality is exercised on Replica in STATUS.md, and the
@@ -192,6 +246,202 @@ solidity 0.35 is low for solid-wood retail tables).
 4. **CoACD is fully reliable but has a long tail on CPU**: 86/87 meshes
    decomposed, but thin/concave meshes (mug, scissors, wire-frame furniture)
    take 6–9 min at tier-2 settings — worth a face-count guard before decomp.
+
+### Physics stage — Claude VLM (tiers 2–4), AGENT-PREVIEW ⚠️
+
+_Measured 2026-07-05 on the GPU machine. ⚠️ **Preview methodology**: the
+production inputs were reproduced exactly — `vlm_claude.annotate_crop`
+annotated PNGs (green box + red metric ruler), the production system prompt,
+the production JSON schema, production batching (12 objects/call, array-order
+matching, enum/clamp guards) — but answered by **Claude Code Opus agents**
+instead of the raw API (`ANTHROPIC_API_KEY` not yet provisioned). Same model
+family as `config vlm.model` (claude-opus-4-8), different serving surface.
+Replace with `scripts/benchmark_physics.py --dataset {ycb,abo}` once a key
+exists; treat these numbers as indicative, not canonical._
+
+_This experiment uses the **image+dims input path** (GT longest dimension on
+the ruler, GT shape volume for mass) — the runner fetched its own samples
+(YCB n=56 with photos from the official checklist PDF; ABO n=250 with catalog
+photos). Numbers are NOT comparable to the mesh-based tables above (different
+volume model, no hull clamp, different samples); compare only against the
+**lookup column measured on the same objects**, below._
+
+| | YCB (n=56) | | ABO (n=250) | |
+|---|---|---|---|---|
+| | **lookup (T1)** | **Claude (T2–4)** | **lookup (T1)** | **Claude (T2–4)** |
+| Mass: median abs. rel. error | **0.57** | 0.95 | 2.46 | **1.95** |
+| Mass: within 2× | **50 %** | 32 % | 29 % | **33 %** |
+| Mass: median ratio (pred/true) | **0.99×** | 1.71× | 3.46× | **2.95×** |
+| Material accuracy | — (n/a) | **98 %** (n=47) | — | **65 %** (n=240) |
+
+**The headline finding: perception is essentially solved; the mass MODEL is
+the bottleneck.** On YCB the VLM identified the surface material almost
+perfectly (46/47; the one miss was a painted wood block called plastic) —
+yet its mass numbers are *worse* than lookup's. The per-object data shows
+why: `mass = volume × density(material) × solidity(class)` cannot represent
+hollow or thin-walled construction, and correct materials *expose* that
+flaw while lookup's wrong-but-light `unknown` (density 1000) accidentally
+compensates. Measured examples:
+
+* metal bowl, correctly identified → 7800 kg/m³ × default solidity 0.5 →
+  **27.9× over** (a bowl is a thin shell, not 50 % solid metal);
+* plastic storage box, correct → **30.9× over** (hollow);
+* metal bed frames on ABO, correct material → **430–510× over** (a frame is
+  ~1 % of its bounding volume, not 50 %).
+
+**ABO's 65 % material accuracy is an undercount — the GT is dirty.** The
+largest mismatch cluster is "Amazon Brand – **Stone** & Beam" items whose
+listed material parsed as *stone* while the VLM (correctly, from the photo)
+said *fabric* — brand-name contamination in the catalog field, not a
+perception error.
+
+**Actionable (the single highest-leverage physics fix):** extend the VLM
+schema with a construction estimate (solid / hollow / thin-walled-frame, or
+a numeric fill fraction) and use it in place of the class-solidity constant.
+The VLM demonstrably *sees* what things are made of; it was never asked how
+much of the bounding volume is actually material. That one schema field
+attacks the entire 28×–510× overshoot tail.
+
+### `fill_fraction` ablation — the fix, implemented and re-measured ⚠️ agent-preview
+
+_Implemented 2026-07-05 in production code: `Physics.fill_fraction`
+(src/scene/vlm.py), schema + prompt (vlm_claude.py), `mass_kg(...,
+fill_fraction=)` override with the class-solidity table as fallback
+(mass.py, assembler.py) — tier 1 / lookup behaviour is byte-identical; only
+tiers 2–4 gain the new term. All 306 objects re-judged with the extended
+schema (same agent-preview transport as above)._
+
+| mass accuracy | lookup (T1) | Claude v1 (class solidity) | **Claude v2 (fill_fraction)** |
+|---|---|---|---|
+| **ABO** within 2× | 29 % | 33 % | **43 %** |
+| **ABO** median abs. rel. err | 2.46 | 1.95 | **1.30** |
+| **ABO** median ratio | 3.46× | 2.95× | **2.30×** |
+| **YCB** within 2× | **50 %** | 32 % | 38 % |
+| **YCB** median abs. rel. err | **0.57** | 0.95 | 1.22 |
+| **YCB** outside 10× band | — | 9/56 | **1/56** |
+| **ABO** outside 10× band | — | 57/250 | **33/250** |
+
+**The catastrophic tail is fixed.** The VLM estimates construction well:
+storage box 30.9× → 4.9× (fill 0.08), metal bowl 27.9× → 5.6× (0.10),
+baseball 0.05× → 0.55× (0.95 — it correctly reversed direction), metal bed
+frames 430–540× → 35–43× (0.04). On furniture — the product's actual
+domain — every aggregate metric now clearly beats both the lookup table and
+the class-solidity Claude run.
+
+**The residual error has a new, sharper diagnosis: surface material ≠ bulk
+material.** The worst v2 cases are *full containers and foam*: a tuna can
+(fill 0.9 — correct! it IS full) is priced at metal's 7800 kg/m³, but it's a
+thin steel shell full of fish at ~1000 kg/m³ → 7.7× over. A foam brick reads
+as rubber (1200) but is ~50 kg/m³ foam. Metal tube furniture at fill 0.10 is
+still 70–150× over because true effective fill of a wire frame is ~0.01 and
+the model anchors on the prompt's suggested range. The formula's remaining
+assumption — density(surface material) applies to the whole filled volume —
+is now the bottleneck. The obvious next rung (not yet built): ask the VLM
+for an **effective density** or the mass itself, making the tables advisory.
+On YCB (mostly full products, contents-dominated masses) this residual keeps
+Claude v2 below the lookup table on medians, even though its worst-case
+behaviour is now far better (1 vs 9 objects outside the 10× band).
+
+---
+
+<!-- SECTION3:START -->
+## 3. Replica — room reconstruction accuracy (per tier, vs Habitat ground truth)
+
+Each of the 8 vMAP Replica rooms is rebuilt from its **custom-trajectory `_v2` bundle** (200 frames, exact ground-truth camera poses, ground-truth instance masks) and compared to the Habitat GT semantic mesh (`mesh_semantic.ply` + `info_semantic.json`) by `scripts/evaluate_scene.py`, which writes `out/scene_<room>_t<tier>/eval.json`. One table per room; one row per tier (1 *fast* → 4 *maximum*).
+
+**Columns.** *Objects* = meshes the pipeline shipped · *Matched / in-scope GT* = how many shipped objects were paired with a real GT instance, out of the GT instances whose class is in the pipeline's COCO scope · *Recall* = matched ÷ in-scope GT · *Precision* = matched ÷ shipped (an unmatched shipped object is a false positive) · *mean Chamfer* = average symmetric surface distance of matched meshes, cm (lower better) · *mean F@5cm* = fraction of surface within 5 cm of GT, averaged over matched meshes (higher better) · *mean dim-err* = mean per-axis bounding-box size error · *Score* = the 0–100 below.
+
+**Score.** `score = 100 · (0.40·recall + 0.20·precision + 0.30·F@5cm + 0.10·pose)`. **Pose is excluded here**: the Replica builds consume the dataset's exact GT camera poses (no SLAM runs), so trajectory error is 0 by construction and identical across tiers — the per-tier pose numbers live in §1 (TUM). With pose dropped, the remaining weights renormalise to **0.444·recall + 0.222·precision + 0.333·F@5cm**.
+
+**Matching** pairs a shipped object to a GT instance of the same COCO class when their centroids are within 0.75 m (or world-AABB IoU ≥ 0.1), solved per class with the Hungarian algorithm. GT classes the detector never maps (tv, potted plant, clock, …) are **out of scope** and excluded from the score.
+
+_Tiers 2–4 are pending builds (tier 2 = local TripoSG + gate/completion + CoACD colliders; tiers 3–4 = Hunyuan3D on the RunPod pod)._
+
+### office_0
+
+| Tier | Objects | Matched / in-scope GT | Recall | Precision | mean Chamfer (cm) | mean F@5cm | mean dim-err | Score /100 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 4 | 4/6 | 0.67 | 1.00 | 12.7 | 0.30 | 0.25 | **61.9** |
+| 2 | 5 | 5/6 | 0.83 | 1.00 | 5.9 | 0.58 | 0.12 | **78.4** |
+| 3 | — | — | — | — | — | — | — | *pending* |
+| 4 | — | — | — | — | — | — | — | *pending* |
+
+### office_1
+
+| Tier | Objects | Matched / in-scope GT | Recall | Precision | mean Chamfer (cm) | mean F@5cm | mean dim-err | Score /100 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 2 | 2/4 | 0.50 | 1.00 | 10.5 | 0.49 | 0.16 | **60.9** |
+| 2 | 3 | 2/4 | 0.50 | 0.67 | 3.8 | 0.76 | 0.06 | **62.4** |
+| 3 | — | — | — | — | — | — | — | *pending* |
+| 4 | — | — | — | — | — | — | — | *pending* |
+
+### office_2
+
+| Tier | Objects | Matched / in-scope GT | Recall | Precision | mean Chamfer (cm) | mean F@5cm | mean dim-err | Score /100 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 8 | 8/14 | 0.57 | 1.00 | 11.6 | 0.40 | 0.36 | **60.8** |
+| 2 | 10 | 10/14 | 0.71 | 1.00 | 8.5 | 0.61 | 0.30 | **74.4** |
+| 3 | — | — | — | — | — | — | — | *pending* |
+| 4 | — | — | — | — | — | — | — | *pending* |
+
+### office_3
+
+| Tier | Objects | Matched / in-scope GT | Recall | Precision | mean Chamfer (cm) | mean F@5cm | mean dim-err | Score /100 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 11 | 11/17 | 0.65 | 1.00 | 9.6 | 0.39 | 0.76 | **63.9** |
+| 2 | 12 | 12/17 | 0.71 | 1.00 | 5.0 | 0.67 | 0.46 | **75.9** |
+| 3 | — | — | — | — | — | — | — | *pending* |
+| 4 | — | — | — | — | — | — | — | *pending* |
+
+### office_4
+
+| Tier | Objects | Matched / in-scope GT | Recall | Precision | mean Chamfer (cm) | mean F@5cm | mean dim-err | Score /100 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 9 | 9/11 | 0.82 | 1.00 | 8.9 | 0.38 | 0.24 | **71.4** |
+| 2 | 10 | 10/11 | 0.91 | 1.00 | 7.6 | 0.56 | 0.19 | **81.2** |
+| 3 | — | — | — | — | — | — | — | *pending* |
+| 4 | — | — | — | — | — | — | — | *pending* |
+
+### room_0
+
+| Tier | Objects | Matched / in-scope GT | Recall | Precision | mean Chamfer (cm) | mean F@5cm | mean dim-err | Score /100 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 5 | 5/18 | 0.28 | 1.00 | 8.2 | 0.44 | 0.18 | **49.1** |
+| 2 | 7 | 7/18 | 0.39 | 1.00 | 4.4 | 0.76 | 0.23 | **64.7** |
+| 3 | — | — | — | — | — | — | — | *pending* |
+| 4 | — | — | — | — | — | — | — | *pending* |
+
+### room_1
+
+| Tier | Objects | Matched / in-scope GT | Recall | Precision | mean Chamfer (cm) | mean F@5cm | mean dim-err | Score /100 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | — | — | — | — | — | — | — | *pending* |
+| 2 | — | — | — | — | — | — | — | *pending* |
+| 3 | — | — | — | — | — | — | — | *pending* |
+| 4 | — | — | — | — | — | — | — | *pending* |
+
+_Tier-1 produced an **empty scene**: room_1 is a walkthrough-only corridor whose only 3 in-scope tracks are books, none of which yields a usable crop, so all were dropped (0 shipped, precision/recall N/A). No orbit-size furniture exists to reconstruct._
+
+### room_2
+
+| Tier | Objects | Matched / in-scope GT | Recall | Precision | mean Chamfer (cm) | mean F@5cm | mean dim-err | Score /100 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 8 | 8/10 | 0.80 | 1.00 | 7.9 | 0.46 | 0.17 | **73.3** |
+| 2 | 9 | 9/10 | 0.90 | 1.00 | 3.9 | 0.82 | 0.08 | **89.4** |
+| 3 | — | — | — | — | — | — | — | *pending* |
+| 4 | — | — | — | — | — | — | — | *pending* |
+
+<!-- SECTION3:END -->
+
+
+
+
+
+
+
+
+
+
 
 ---
 
