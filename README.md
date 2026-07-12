@@ -7,7 +7,7 @@
 📄 **Headed to ERK 2026 · Portorož 🌊🇸🇮** — same pipeline, now with numbers instead of vibes.
 
 **The grown-up rewrite of the [original VID2SIM](https://github.com/Vector-Space-Moggers/vid2sim)** 🏆
-*(1st place, DragonHack 2026 — Epilog Clean Code challenge — built in 24 h, including a nightclub pause 🪩)*
+*(winner of the Epilog Clean Code challenge at DragonHack 2026 — built in 24 h, including a nightclub pause 🪩)*
 
 [![ERK](https://img.shields.io/badge/ERK-2026%20Portoro%C5%BE-blue?style=for-the-badge)](https://erk.fe.uni-lj.si)
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org)
