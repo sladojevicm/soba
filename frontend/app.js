@@ -10,7 +10,9 @@
 //   * gravity + ground.y come FROM scene.json (fix Z-J / K4), not hardcoded.
 //   * each object_added SSE event triggers a re-GET of /scene.json and a lookup
 //     by id (fix Z-C); the event carries only the id.
-//   * the camera starts from scene.json camera_pose when present (fix W5).
+//   * the camera starts from scene.json camera_pose when present (fix W5); the
+//     view then frames the bbox of ALL objects (auto until the user interacts,
+//     "f" to re-frame any time) so a full room never looks like one lone object.
 
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
@@ -74,8 +76,13 @@ const bodyMeshes = [];            // selectable THREE meshes (for raycasting)
 const meshToEntry = new Map();    // THREE.Object3D -> scene.json object entry
 const loadedIds = new Set();      // ids already added
 const tempBalls = [];             // {body, mesh, dieAt}
-let sceneCentroid = new THREE.Vector3();
-let centroidN = 0;
+let hasCameraPose = false;        // scene.json camera_pose wins initial placement (W5)
+let userInteracted = false;       // stop auto-framing once the user touches the camera
+
+// Debug handle for headless verification (scripts/verify_browser.js). Additive
+// and harmless: getters read live Rapier state, nothing in the viewer uses it.
+const dbg = { objects: [], framedAll: false, screenPos: null };
+window.__vid2sim = dbg;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -110,6 +117,80 @@ function enableShadows(obj) {
 }
 
 // ---------------------------------------------------------------------------
+// Camera framing (DEBT A): frame the WHOLE ROOM, not one object.
+// ---------------------------------------------------------------------------
+function sceneBounds() {
+  if (!bodyMeshes.length) return null;
+  scene.updateMatrixWorld(true); // objects may not have rendered yet
+  const box = new THREE.Box3();
+  for (const m of bodyMeshes) box.expandByObject(m);
+  return box.isEmpty() ? null : box;
+}
+
+// Fit the bbox of ALL loaded meshes into the view: OrbitControls target at the
+// bbox centre, camera along a pleasant 35°-elevation diagonal, distance chosen
+// so the bounding sphere fits the narrower FOV axis with ~15% margin.
+function frameAll() {
+  const box = sceneBounds();
+  if (!box) return;
+  const center = box.getCenter(new THREE.Vector3());
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  const vFov = THREE.MathUtils.degToRad(camera.fov);
+  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+  const fov = Math.min(vFov, hFov);
+  const dist = Math.max(0.5, (sphere.radius * 1.15) / Math.sin(fov / 2));
+  const elev = THREE.MathUtils.degToRad(35);
+  const azim = THREE.MathUtils.degToRad(45);
+  const dir = new THREE.Vector3(
+    Math.cos(elev) * Math.sin(azim),
+    Math.sin(elev),
+    Math.cos(elev) * Math.cos(azim)
+  );
+  camera.position.copy(center).addScaledVector(dir, dist);
+  controls.target.copy(center);
+  controls.update();
+  dbg.framedAll = true;
+}
+
+// Called after each object loads. Auto-frame only until the user first touches
+// the camera (don't fight the user). When scene.json has a camera_pose it wins
+// the INITIAL camera position (fix W5) — then we only aim the controls target
+// at the whole scene; "f" re-frames fully at any time.
+function maybeAutoFrame() {
+  if (userInteracted) return;
+  if (hasCameraPose) {
+    const box = sceneBounds();
+    if (box) { controls.target.copy(box.getCenter(new THREE.Vector3())); controls.update(); }
+  } else {
+    frameAll();
+  }
+}
+
+// Floating text label (canvas-texture sprite) that always faces the camera.
+function makeLabel(text, hex) {
+  const fs = 52, pad = 22;
+  const c = document.createElement("canvas");
+  const ctx = c.getContext("2d");
+  ctx.font = `bold ${fs}px sans-serif`;
+  c.width = Math.ceil(ctx.measureText(text).width) + pad * 2;
+  c.height = fs + pad;
+  ctx.font = `bold ${fs}px sans-serif`;
+  ctx.fillStyle = "rgba(18,20,26,0.88)";
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.fillStyle = "#" + ("000000" + (hex >>> 0).toString(16)).slice(-6);
+  ctx.fillRect(0, c.height - 8, c.width, 8); // color underline = model color
+  ctx.fillStyle = "#fff";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, pad, (c.height - 8) / 2 + 2);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: new THREE.CanvasTexture(c), depthTest: false, transparent: true,
+  }));
+  const s = 0.0045;
+  sprite.scale.set(c.width * s, c.height * s, 1);
+  return sprite;
+}
+
+// ---------------------------------------------------------------------------
 // Object loading (one object_added event)
 // ---------------------------------------------------------------------------
 async function addObject(id, sceneJson) {
@@ -125,6 +206,22 @@ async function addObject(id, sceneJson) {
   // 1. Render mesh (do NOT collapse to one mesh — that strips PBR materials).
   const gltf = await gltfLoader.loadAsync(`/meshes/${id}.glb`);
   const obj3d = gltf.scene;
+  // Render DOUBLE-SIDED: these are TSDF / marching-cubes / completion meshes whose
+  // triangle winding isn't perfectly consistent (e.g. Taubin smoothing can flip
+  // normals on thin features), so single-sided (default) culls the back-facing
+  // ones and they read as SEE-THROUGH HOLES. DoubleSide renders both faces -> the
+  // surface looks solid regardless of winding. Also apply the optional per-object
+  // comparison color.
+  const hasColor = entry.color !== undefined && entry.color !== null;
+  obj3d.traverse((o) => {
+    if (!o.isMesh) return;
+    if (hasColor) {
+      o.material = new THREE.MeshStandardMaterial({
+        color: entry.color, roughness: 0.55, metalness: 0.0,
+      });
+    }
+    if (o.material) o.material.side = THREE.DoubleSide;
+  });
   enableShadows(obj3d);
   obj3d.position.set(tx, ty, tz);
   obj3d.quaternion.set(q[0], q[1], q[2], q[3]);
@@ -132,15 +229,23 @@ async function addObject(id, sceneJson) {
   bodyMeshes.push(obj3d);
   meshToEntry.set(obj3d, entry);
 
-  // running centroid so OrbitControls looks at the objects
-  sceneCentroid.add(new THREE.Vector3(tx, ty, tz));
-  centroidN += 1;
-  controls.target.copy(sceneCentroid.clone().multiplyScalar(1 / centroidN));
+  // floating label above the object (model · object), color-underlined
+  if (entry.label) {
+    const hy = entry.collider?.half_extents?.[1] ?? 0.5;
+    const label = makeLabel(entry.label, entry.color ?? 0xffffff);
+    label.position.set(tx, ty + hy + 0.45, tz);
+    scene.add(label);
+  }
 
-  // 5. Rigid body — mass set ON THE DESC, BEFORE createRigidBody (fix P1/D5).
-  // is_rigid means "non-deforming", not "immovable": every object is dynamic.
+  // 5. Rigid body. Objects start FIXED (static) so a reconstructed room LOADS
+  // STABLE — the meshes are placed at their observed positions and are often
+  // sized by a class prior, so several can overlap; if they were all dynamic on
+  // load, Rapier ejects the interpenetrations and the whole scene EXPLODES. Each
+  // body becomes dynamic on demand when you click it (see setupInteraction), so
+  // you can still push it / drop the ball on it. Mass is set on the desc (fix
+  // P1/D5) and applies once the body turns dynamic.
   const phys = entry.physics;
-  const desc = RAPIER.RigidBodyDesc.dynamic()
+  const desc = RAPIER.RigidBodyDesc.fixed()
     .setTranslation(tx, ty, tz)
     .setRotation({ x: q[0], y: q[1], z: q[2], w: q[3] })
     .setAdditionalMass(phys.mass_kg);
@@ -171,6 +276,22 @@ async function addObject(id, sceneJson) {
   }
 
   syncMap.set(body, obj3d);
+
+  // Verification handle entry: getters read LIVE Rapier state so a headless
+  // checker sees exactly what the physics world holds (mass regression guard).
+  dbg.objects.push({
+    id,
+    get massKg() { return body.mass(); },
+    get bodyType() {
+      const t = body.bodyType();
+      return t === RAPIER.RigidBodyType.Dynamic ? "dynamic"
+        : t === RAPIER.RigidBodyType.Fixed ? "fixed" : "kinematic";
+    },
+    get position() { const p = body.translation(); return [p.x, p.y, p.z]; },
+  });
+
+  // Re-frame the camera as objects stream in (until the user interacts).
+  maybeAutoFrame();
   log(statusLine());
 }
 
@@ -179,9 +300,82 @@ function statusLine() {
     `objects: ${loadedIds.size}\n` +
     `<span class="key">click</span> select · ` +
     `<span class="key">drag</span> push · ` +
-    `<span class="key">space</span> drop ball\n` +
-    `(sparse scene: only well-observed "tsdf" objects exist — generative ones\n` +
-    ` are deferred until a GPU is connected)`;
+    `<span class="key">space</span> drop ball · ` +
+    `<span class="key">f</span> frame all`;
+}
+
+// ---------------------------------------------------------------------------
+// Ground-truth eval panel (ADDITIVE): shown only when the server has an
+// eval.json for this scene (scripts/evaluate_scene.py). Scenes without one
+// get {"available": false} (or, on an older server build, a 404) and render
+// exactly as before — the panel is never injected and nothing throws.
+// ---------------------------------------------------------------------------
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+async function loadEvalPanel() {
+  let ev = null;
+  try {
+    const r = await fetch("/eval.json", { cache: "no-store" });
+    if (!r.ok) return;
+    ev = await r.json();
+  } catch { return; }
+  // a real report always carries a score block; the "not available" marker
+  // ({available:false}) and any malformed payload are silently ignored.
+  if (!ev || !ev.score || typeof ev.score.value !== "number") return;
+
+  const det = ev.detection || {};
+  const geo = ev.geometry || {};
+  const pose = ev.pose || {};
+  const cls = (v) => (v >= 0.5 ? "good" : v >= 0.25 ? "fair" : "poor");
+  const pct = (v) => (v == null ? "–" : Math.round(v * 100) + "%");
+
+  const panel = document.createElement("details");
+  panel.id = "evalPanel";
+  const s = ev.score.value;
+  panel.innerHTML = `
+    <summary>ground truth: <span class="score ${cls(s / 100)}">${s.toFixed(0)}/100</span>
+      <span class="dim">(${esc(ev.room ?? "")})</span></summary>
+    <div class="body"></div>`;
+
+  const rows = [];
+  if (det.available) {
+    rows.push(`objects: <b>${det.matched}</b> matched of <b>${det.gt_in_scope}</b> GT ` +
+      `(shipped ${det.shipped})`);
+    rows.push(`recall ${pct(det.recall)} · precision ${pct(det.precision)}` +
+      (geo.mean_fscore_5cm != null ? ` · mean F@5cm ${pct(geo.mean_fscore_5cm)}` : ""));
+    if (det.gt_out_of_scope) {
+      rows.push(`<span class="dim">${det.gt_out_of_scope} GT objects outside ` +
+        `pipeline scope (tv/plant/…)</span>`);
+    }
+  }
+  rows.push(pose.available
+    ? `ATE RMSE ${(pose.ate_rmse_m * 100).toFixed(2)} cm` +
+      (pose.source === "dataset_ground_truth"
+        ? ` <span class="dim">(pipeline used GT poses)</span>` : "")
+    : `<span class="dim">pose eval n/a</span>`);
+
+  let objTable = "";
+  const objs = ev.objects || [];
+  if (objs.length) {
+    const tr = objs.map((o) => {
+      const f = o.fscore_5cm;
+      const fTxt = f == null ? "–" :
+        `<span class="${cls(f)}">${f.toFixed(2)}</span>`;
+      return `<tr><td>${esc(o.id)}</td><td>${fTxt}</td>` +
+        `<td class="${o.matched ? cls(f ?? 0) : "poor"}">${esc(o.verdict ?? "")}</td></tr>`;
+    }).join("");
+    objTable = `<table><tr><th>object</th><th>F@5cm</th><th>verdict</th></tr>${tr}</table>`;
+  }
+  let missed = "";
+  if ((ev.missed_gt || []).length) {
+    missed = `<div class="dim" style="margin-top:4px">missed GT: ` +
+      esc(ev.missed_gt.map((m) => m.class).join(", ")) + `</div>`;
+  }
+
+  panel.querySelector(".body").innerHTML =
+    rows.map((r) => `<div>${r}</div>`).join("") + objTable + missed;
+  document.body.appendChild(panel);
 }
 
 // ---------------------------------------------------------------------------
@@ -193,10 +387,12 @@ async function boot() {
 
   const sceneJson = await getScene();
 
-  // Camera from capture pose when present (fix W5); OrbitControls then recenters
-  // on the objects so the start view always frames the scene.
+  // Camera from capture pose when present (fix W5); the controls target is then
+  // aimed at the bbox of ALL objects (maybeAutoFrame) so the start view frames
+  // the whole room. Without a camera_pose we auto-frame fully (frameAll).
   const cp = sceneJson.camera_pose;
-  if (cp && cp.translation) {
+  hasCameraPose = !!(cp && cp.translation);
+  if (hasCameraPose) {
     camera.position.set(cp.translation[0], cp.translation[1], cp.translation[2]);
   }
 
@@ -250,6 +446,9 @@ async function boot() {
   log(statusLine());
   setupInteraction();
   animate();
+
+  // fire-and-forget: the eval panel never blocks or breaks the viewer
+  loadEvalPanel().catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -295,6 +494,22 @@ function highlight(object3d, on) {
 function setupInteraction() {
   const dom = renderer.domElement;
 
+  // Any camera interaction (orbit/zoom/pan start, or a click on the canvas)
+  // stops the streaming auto-frame from fighting the user.
+  controls.addEventListener("start", () => { userInteracted = true; });
+  dom.addEventListener("pointerdown", () => { userInteracted = true; });
+
+  // Screen-space centre of an object (pixels) — lets the headless verifier
+  // click objects through the REAL pointer path instead of poking Rapier.
+  dbg.screenPos = (id) => {
+    for (const [mesh, entry] of meshToEntry) {
+      if (entry.id !== id) continue;
+      const p = mesh.position.clone().project(camera);
+      return [(p.x + 1) / 2 * window.innerWidth, (1 - p.y) / 2 * window.innerHeight];
+    }
+    return null;
+  };
+
   dom.addEventListener("pointerdown", (e) => {
     setNdc(e);
     raycaster.setFromCamera(ndc, camera);
@@ -304,6 +519,11 @@ function setupInteraction() {
       const root = rootOf(hits[0].object);
       const body = root && bodyFor(root);
       if (body) {
+        // wake the object into physics on first touch: fixed -> dynamic so it can
+        // be pushed / fall. Only the clicked object moves, so no chain explosion.
+        if (body.bodyType() !== RAPIER.RigidBodyType.Dynamic) {
+          body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
+        }
         selected = { body, mesh: root };
         highlight(root, true);
         // set up a drag plane through the hit point, facing the camera
@@ -340,6 +560,7 @@ function setupInteraction() {
 
   window.addEventListener("keydown", (e) => {
     if (e.code === "Space") { e.preventDefault(); spawnBall(); }
+    if (e.code === "KeyF") frameAll(); // re-frame ALL objects on demand
   });
 }
 

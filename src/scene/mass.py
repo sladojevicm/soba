@@ -112,6 +112,62 @@ def volume_m3(mesh) -> tuple[float, bool]:
     return vol, watertight
 
 
+def hull_volume(mesh) -> float:
+    """Convex-hull volume — a SOLID bounding proxy for objects whose true enclosed
+    volume is an unreliable measure of "how much stuff is there".
+
+    Historically this was the mass volume for ALL generated meshes (decimation used
+    to flip watertightness, so the enclosed volume flip-flopped 600x on identical
+    chairs); cleanup now guarantees watertight generations, so generated meshes use
+    generative_volume() and the hull remains only the non-watertight fallback —
+    the hull of a table fills all the air under the top and overshoots mass ~4x.
+    Returns 0.0 on any failure."""
+    if len(mesh.vertices) == 0:
+        return 0.0
+    try:
+        hull, _ = mesh.compute_convex_hull()
+        return _signed_volume(hull)
+    except Exception:
+        return 0.0
+
+
+def generative_volume(mesh, *, config_path: str = str(lookup._DEFAULT_CONFIG)) -> tuple[float, bool]:
+    """Mass volume for a GENERATED (image-to-3D) mesh. Returns (volume_m3,
+    used_enclosed).
+
+    Cleanup now guarantees a generated mesh is a watertight single component,
+    so its ENCLOSED volume is trustworthy again — the convex hull (the previous
+    rule, from the era when decimation flip-flopped watertightness) fills every
+    concavity and overshoots mass badly: a dining table's hull includes all the
+    air under the top (206 kg tables, 50 kg chairs).
+
+    Generation STYLE still swings enclosed/hull ~20x on identical furniture —
+    Hunyuan renders one chair as a thin shell (enclosed ~3% of hull, mass
+    under-reported) and one table as a solid blob (~63%, over-reported) —
+    while real furniture occupies a roughly constant fraction of its hull. So
+    the enclosed volume is CLAMPED into the [min_hull_ratio, max_hull_ratio]
+    band of the hull volume (config: generative_mass) before mass_kg applies
+    the class solidity. A mesh with no sane enclosed volume (not watertight
+    and signed-tetrahedron volume outside (0, hull]) keeps the hull fallback.
+    """
+    if len(mesh.vertices) == 0:
+        return 0.0, False
+    hull_v = hull_volume(mesh)
+    if hull_v <= 0.0:
+        return 0.0, False
+    enc = _signed_volume(mesh)
+    # Sanity: a meaningful enclosed volume is positive and can't exceed the hull
+    # (tolerance for float noise). is_watertight() alone is too strict — a small
+    # seam left by decimation barely perturbs the signed-tetrahedron sum.
+    sane = 0.0 < enc <= hull_v * 1.001
+    if not (sane or mesh.is_watertight()):
+        return hull_v, False
+    cfg = lookup.load_config(config_path).get("generative_mass", {}) or {}
+    lo = float(cfg.get("min_hull_ratio", 0.15))
+    hi = float(cfg.get("max_hull_ratio", 0.35))
+    return float(min(max(enc, lo * hull_v), hi * hull_v)), True
+
+
 def closed_mesh_volume(mesh) -> float:
     """Volume of an ALREADY-finalized mesh (e.g. a completion engine's output) —
     no further repair. Signed-tetrahedron volume, bounded above by the convex
@@ -132,9 +188,20 @@ def mass_kg(
     material: str,
     coco_class: str,
     *,
+    fill_fraction: float | None = None,
     config_path: str = str(lookup._DEFAULT_CONFIG),
 ) -> float:
-    """vol * density[material] * solidity[class]. Always > 0 (clamped tiny)."""
+    """vol * density[material] * solidity. Always > 0 (clamped tiny).
+
+    solidity = the VLM's per-object ``fill_fraction`` when provided (tiers
+    2-4: the model sees hollow vs solid construction in the image), else the
+    per-CLASS table constant (tier 1 / lookup fallback). The class constant
+    cannot represent construction — a wire bed frame fills ~1% of its bounds,
+    not the default 50% (BENCHMARK.md, physics stage).
+    """
     rho = lookup.density(material, config_path)
-    sol = lookup.solidity(coco_class, config_path)
+    if fill_fraction is not None:
+        sol = min(max(float(fill_fraction), 0.005), 1.0)
+    else:
+        sol = lookup.solidity(coco_class, config_path)
     return max(volume * rho * sol, 1e-3)

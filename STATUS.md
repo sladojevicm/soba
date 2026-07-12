@@ -1,8 +1,514 @@
 # vid2sim-v2 — Build Status & Handoff
 
-_Last updated: 2026-06-28. This is a working handoff so a fresh session can resume
+_Last updated: 2026-07-02. This is a working handoff so a fresh session can resume
 without re-deriving everything. The authoritative design is `PLAN_FINAL_FINAL.txt`
 (currently at `~/projects/vid2sim/PLAN_FINAL_FINAL.txt`, version 14)._
+
+## ⬆️ LATEST (2026-07-06): TIER-1 + TIER-2 ROOM ACCURACY DONE (all 8 rooms) — BENCHMARK §3 written
+241 tests pass. This commit bundles all prior uncommitted work + the room-accuracy runs.
+- **Tier 1 AND tier 2 built for all 8 `_v2` rooms**, GT-evaluated (`scripts/evaluate_scene.py`),
+  browser-verified (`scripts/verify_browser.js`, all pass), and served. Ports: tier 1 :8001–8008,
+  tier 2 :8011–8018 (room_1 is empty in both — walkthrough corridor, only uncroppable books).
+- **BENCHMARK.md §3 "Replica room accuracy"** now written (between `<!-- SECTION3 -->` markers):
+  one table per room, a row per tier. Regenerate with `scratchpad/write_section3.py` (reads each
+  `out/scene_<room>_t<tier>/eval.json`). Pose is EXCLUDED from the score for `_v2` (they consume
+  exact GT poses → ATE 0 by construction; passing the ORIGINAL dataset traj gives a bogus ~115 cm,
+  so run evaluate_scene with `--gt-traj /nonexistent` to force pose n/a and renormalise the score
+  to 0.444·recall + 0.222·precision + 0.333·F@5cm).
+- **Result: tier 2 beat tier 1 in every non-empty room.** Mean score 63.0 → 75.2 (+12.2), mean
+  F@5cm 0.41 → 0.68. Precision 1.00 everywhere (drop-garbage shipped zero hallucinations, both tiers).
+  Driver of the gain: on the `_v2` orbit trajectories most objects route to COMPLETION (real geometry),
+  NOT generative — the opposite of the old room-scan bundles. This is the coverage-gated-tier story.
+- **Local tier build recipe (4060):** `scratchpad/tier_build.sh <room> <tier> <port>` needs
+  `VID2SIM_TRIPOSG_HOME=~/projects/vid2sim/TripoSG VID2SIM_TRIPOSG_FLASH=0` (diso/nvcc not built →
+  marching cubes) + `VID2SIM_PATCHCOMPLETE_HOME=~/projects/vid2sim/PatchComplete`. Never run two GPU
+  builds at once. `scratchpad/tier{1,2}_all.sh` are the sequential drivers.
+- **Disk reclaimed:** deleted SDFusion (17 GB) + PoinTr (1.3 GB) + caches → root 93% → 74% (25 GB free).
+- **Open:** tiers 3–4 need the pod (Hunyuan3D, stopped); commit; then paper (ERK) consumes BENCHMARK §3.
+
+## ⬆️ EARLIER (2026-07-05, part 3): custom trajectories DONE (8 rooms), fill_fraction physics fix, full GT downloaded
+241 tests pass. EVERYTHING UNCOMMITTED (offer the user a commit early). Disk 93% — biggest reclaim
+is SDFusion 17 GB (unused by pipeline; user approval still pending).
+- **Custom camera trajectories COMPLETE for all 8 rooms** (`scripts/render_replica.py`,
+  CPU raycast renderer from Replica semantic meshes; frame-match gate vs original
+  bundles passes at 0.0 mm median depth error). Two hard-won fixes IN the script:
+  (1) `_apply_budget` — uniform subsample on EVERY plan() return path so
+  `--frames 200` yields exactly 200 (planner floors otherwise blow it up 8-16x;
+  filled the disk once); (2) `Renderer.inside()` — ray up must hit ceiling AND ray
+  down must hit floor, enforced at all 4 acceptance points (clearance alone is
+  LARGE outside the room → cameras escaped through windows/doorways; user caught it).
+  Outputs: `bundles/<room>_v2/` (200 fr, GT poses, GT-derived objects.json — pipeline-ready)
+  and inspection videos `previews/200_frames/<room>.mp4` (all 8). `previews/2000_frames/`
+  has long office_0/office_4 versions; the OTHER SIX 2000-frame renders run ONLY on
+  explicit user command (his instruction). room_1 is walkthrough-only (no orbit-size furniture).
+- **Replica GT fully on disk**: `data/replica/scenes/<room>/habitat/mesh_semantic.ply`
+  + semantic.json for ALL 8 rooms (the "killed" download had finished detached).
+  Room-accuracy eval vs GT is the LAST missing benchmark column: `scripts/evaluate_scene.py`
+  + `config/replica_eval_class_map.yaml` + frontend GT panel + `/eval.json` route +
+  run_assemble hook (`--no-eval` opt-out) are all built+tested but NEVER RUN — no
+  eval.json exists anywhere yet. (Check whether the server empty-scene schema fix
+  from BENCHMARK's finding actually landed in src/server.py — the agent doing it was killed.)
+- **Physics fill_fraction fix IMPLEMENTED in production** (vlm.py Physics.fill_fraction,
+  vlm_claude schema+prompt+parse, mass.mass_kg(fill_fraction=), assembler passes it;
+  tier 1/lookup byte-identical). Measured via agent-preview (306 objects, YCB+ABO,
+  results in BENCHMARK.md): furniture within-2x 29%→43%, catastrophic (>10x) errors
+  9→1 (YCB) / 57→33 (ABO); residual = surface-vs-bulk density (full containers, foam).
+  ⚠️ Claude columns are AGENT-PREVIEW (Claude Code opus agents on production inputs);
+  canonical rerun = `scripts/benchmark_physics.py --dataset ycb|abo` once the user
+  provides ANTHROPIC_API_KEY (he doesn't have Console billing yet — don't push).
+- **TUM pose benchmark COMPLETE per tier** (BENCHMARK.md §1): tier-1 odometry
+  reproduced exactly (2.15/4.74/26.4 cm), tiers 2-4 MASt3R measured on GPU
+  (1.85/8.78/7.56 cm, scale 1.0008-1.075, 24-anchor cap). ORB-SLAM3 DROPPED
+  PERMANENTLY (user decision, evidence-backed): POSE_METHODS[4]="mast3r",
+  OrbSlam3Estimator deleted, config+tests updated. Never propose re-adding it.
+- **Tier-2 t2b rebuilds (new 90/0.35 gates)**: office_1 (:8031, 2 obj), office_2
+  (:8032, 8 obj) done+served; office_3_t2b is a KILLED PARTIAL (delete before rebuild);
+  office_4 not started. NOTE: the _v2 custom-trajectory bundles may supersede these —
+  ask the user whether future builds should use <room>_v2 (200 fr, ideal coverage)
+  instead of bundles_dense (2000 fr, bad coverage).
+- **Open queue (user-driven)**: (1) user inspects the 8 videos; (2) on his command:
+  six 2000-frame renders into previews/2000_frames/; (3) run pipeline on _v2 bundles
+  and/or backfill eval.json for existing scenes → "Section 3: room accuracy" in
+  BENCHMARK.md + website panels; (4) canonical Claude physics run when API key exists;
+  (5) commit everything; (6) paper (ERK, ~/Downloads/erkLaTeX) consumes BENCHMARK.md.
+
+## ⬆️ EARLIER (2026-07-05, part 2): gates 90/0.35, ORB-SLAM3 dropped, MASt3R benchmarked, BENCHMARK.md
+238 tests pass. Working tree carries in-progress agent work (eval/renderer/frontend) — see below.
+- **Routing thresholds LOWERED to 90°/0.35 (all tiers)** — user: real geometry
+  first, image-to-3D last resort. test_confidence updated. Tier-2 rebuilds with
+  the new gate: office_1_t2b (:8031, 2 obj — no routing change, coverage 26–42°),
+  office_2_t2b (:8032, 8 obj); office_3/4_t2b NOT built (office_3_t2b dir is a
+  KILLED PARTIAL — delete before rebuilding). Old sites untouched (:8001-:8024).
+- **ORB-SLAM3 permanently dropped (user decision)**: POSE_METHODS[4]="mast3r",
+  OrbSlam3Estimator deleted, config tier-4 pose_method=mast3r, tests locked.
+  Justified by measurement (below): MASt3R 7.6 cm on the hardest TUM sequence.
+- **BENCHMARK.md (repo root, committed base from user's WSL machine + new GPU
+  section)**: TUM pose per tier now COMPLETE — tier-1 odometry (2.15/4.74/26.4 cm,
+  reproduced here exactly) vs tiers 2–4 MASt3R (1.85/8.78/7.56 cm; scale
+  1.0008–1.075; 24-anchor cap). MASt3R 3.5× better on fast motion, loses only on
+  oscillating fr1/xyz (interpolation between anchors — RPE column shows it).
+  Runner: scripts/bench_tum_pose.py + src/reconstruction/traj_eval.py (tested).
+  YCB/ABO physics = lookup backend measured (WSL); **Claude column still missing**.
+- **Uncommitted agent work in tree** (from stopped agents, all tests green):
+  evaluate_scene.py + replica_eval_class_map.yaml + eval hook in run_assemble
+  (--no-eval; quiet-skips w/o GT), frontend GT panel, server /eval.json route +
+  empty-scene schema fix pending, render_replica.py (custom trajectories; user
+  wants --frames default cut to 200), fetch_replica_gt_traj.py (GT trajs in
+  data/replica/gt_traj). Replica semantic-mesh download INCOMPLETE (room_0/1/2
+  only; offices never arrived). TUM data: f1xyz/f1desk/f2xyz bundles + poses per
+  tier cached in data/tum (fr2 raw frames deleted, groundtruth.txt kept).
+- Disk ~97% full — biggest reclaim: SDFusion 17 GB (unused; user approval pending).
+
+## ⬆️ EARLIER (2026-07-05): tier-1+2 across rooms 1-4, gen cache, de-overlap, drop policy
+Ports: room3 t1 :8001 / t2 :8002 / t3(stale) :8003; rooms office_1/2/4 t1
+:8011/:8012/:8014, t2 :8021/:8022/:8024. Walkthrough mp4s (what the camera saw):
+~/projects/vid2sim/data/replica/previews/. All builds headless-verified.
+- Dense bundles now exist for office_1/2/4 (+office_3). Gen cache
+  (<bundle>/.gen_cache) + --reroll make per-object regeneration ~3 min and
+  rebuilds assembly-only; tier 2 reused tier 1's generations byte-identical.
+- Drop-garbage policy live (user-directed): thin-shell + width gates; class
+  gates recalibrated for COCO umbrella classes (coffee tables ARE
+  "dining table"); alpha-mask crops stop generators re-segmenting (the
+  white-tabletop eraser bug); sizing retry before drop; placement de-overlap.
+- Known limit demonstrated by office_1 (2 objects) and office_4 (panel/ring
+  "chairs"): distant/edge-on glimpses generate confident junk that passes
+  ARITHMETIC gates. Agreed next candidates, NOT built: input-side minimum
+  revealed-structure bar (drop before generating) and output-side CLIP
+  class-resemblance gate; watertight gate parked on user request.
+
+## ⬆️ LATEST SESSION (2026-07-04): tier 1 wired, Steps 3/7/8 REAL, textures, drop-garbage
+All committed on `fix/phase3-pose-and-eval`. 210 tests pass. Room-3 (office_3)
+four-tier build + websites :8001-:8004 (serve.py per tier).
+- **Tier 1 runnable** (`--tier 1`): no gate, everything generative, BOX colliders
+  (AABB half_extents, no CoACD) — assembler `collider="box"` path, frontend already had it.
+- **Crop quality overhaul** (`crop_stage`): occlusion-aware best-frame scoring
+  (depth-based cover detection), soft world-height factor (top-down views generate
+  slabs), Telea INPAINTING of occluder pixels (cover = hull pixels NOT clearly
+  behind the local surface; genuine see-through openings stay), tiny mask scraps
+  dropped. Fixed the holey-table + floating-fragment artifacts the user flagged.
+- **Step 8 LIVE (`scene/vlm_claude.py`)**: batched Claude physics call
+  (output_config.format), annotated crops w/ metric ruler, refusal/max_tokens
+  guards, clamps. Activates on ANTHROPIC_API_KEY; lookup fallback otherwise.
+- **Phase 8 (`reconstruction/icp_align.py`)**: FPFH rotation-first + per-axis
+  metric scale (<30%-coverage axes dropped) + point-to-plane refine + quality
+  gates (incl. Z-H support-height). Wired into both regenerate() paths; on
+  room-scan slivers the gates correctly refuse -> class-prior coarse fallback
+  (honest provenance fpfh_icp/coarse_aligned).
+- **Step 3 MASt3R REAL (`slam.py`)**: metric ckpt, swin pairs, dust3r global
+  alignment, metric-scale solve vs sensor (M1), SE(3) interpolation. TUM fr1/xyz
+  ATE 4.55 cm (24-anchor cap on 8 GB; odometry baseline 3.66 cm). Tier 4 falls
+  back to MASt3R with a log (ORB-SLAM3 stays Phase-14-only-if-needed).
+- **Hunyuan TEXTURE stage works on the pod** (VID2SIM_HUNYUAN_PAINT=1): paint ->
+  bake UV texture to VERTEX COLORS -> flows through the whole pipeline; browser
+  shows a purple fabric couch. Pod fixes recorded in setup_hunyuan3d.sh
+  (python3-dev, trust_remote_code, xatlas/pytorch_lightning/realesrgan, bpy stub,
+  cfg paths pinned absolute). **CRITICAL pod fix: model caches moved to
+  /workspace/cache with symlinks from /root/.cache — container disk was 91% full
+  and weights now SURVIVE pod stops.** Paint remesh leaves seams unwelded ->
+  weld in _paint_hunyuan (else _looks_shattered falsely rejects ~600-component
+  meshes — cost tier 3 its couch+tables once).
+- **DROP-GARBAGE POLICY (user directive: "don't create magic")**: _too_thin
+  (enc/hull < 3% = bent-sheet 'furniture'; real worst-case chair 4.1%) and
+  _class_dims_ok now checks WIDTH (panel 'chairs' out). Expect fewer, better
+  objects. Bottles: #94 never croppable, #92 blob rejected by dims — honest drops.
+- **Scenes**: t1/t2 local TripoSG; t3/t4 pod Hunyuan+paint (11 objects each,
+  couch+main table+bottle back, textured). Pod: slow_tomato_gull now at
+  root@213.192.2.110 -p 40066 (STOP IT when done — bills hourly); handler via
+  /workspace/start_handler.sh + local tunnel `ssh -N -L 8777:127.0.0.1:8777`;
+  engine env: RUNPOD_API_KEY=dummy RUNPOD_GEN_ENDPOINT_ID=dummy
+  VID2SIM_RUNPOD_URL=http://127.0.0.1:8777/runsync VID2SIM_RUNPOD_TIMEOUT=1200.
+- **GOTCHA: do NOT run two GPU builds concurrently on the 4060** — T2 TripoSG
+  died to OOM against T3's local PatchComplete; rerun solo.
+- **Open**: user reviews the 4 room-3 sites, then the other 7 rooms (need dense
+  re-streams); de-overlap pass (objects interpenetrate in the desk cluster);
+  TUM end-to-end; CLI (Phase 12); serverless deploy; capture.py.
+
+## ⬆️ LATEST SESSION (2026-07-02, part 6): viewer debts (framing, headless verification)
+Two viewer debts paid, one commit each; JS only (src/ untouched), 184 tests pass.
+- **Camera frames the WHOLE ROOM** (`frontend/app.js`): the old running-centroid
+  target made users think the scene was missing. Now the view fits the bbox of
+  ALL loaded meshes (35°-elevation diagonal, bounding-sphere fit vs. the
+  narrower FOV axis, 15% margin). `camera_pose` still wins the INITIAL position
+  (W5) — then only the OrbitControls target is aimed at the bbox centre;
+  without a camera_pose the view fully auto-fits. Re-frames as objects stream
+  in over SSE ONLY until the first user interaction (controls `start` /
+  canvas pointerdown); **`f`** re-frames on demand any time.
+- **Headless verification harness** (`scripts/verify_browser.js`, run recipe in
+  `frontend/README.md`): spawns serve.py on a free port, drives headless Chrome
+  (puppeteer via `NODE_PATH` — install it OUTSIDE the repo; swiftshader GL).
+  Asserts: zero page errors; object count == scene.json; every LIVE Rapier body
+  mass == `physics.mass_kg` (regression guard for the founding desc-mass fix);
+  bodies load FIXED and wake on a REAL click (`__vid2sim.screenPos` + mouse);
+  no NaN / |p|>50 m after ~3 s of sim; `f`-framing sets `framedAll`; screenshot.
+  Exit 0 iff all pass. `window.__vid2sim` debug handle in app.js is additive
+  (live getters into Rapier), unused by the viewer itself.
+  `NODE_PATH=<pptr>/node_modules node scripts/verify_browser.js --scene out/scene_chairs`
+- **Verified**: `out/scene_chairs` (6/6) and `out/scene_office_3_hy4` (11/11)
+  — all 8 checks PASS on both; masses match within float32 (e.g. dining_table_02
+  71.8074, bottle_08 0.1072); max |p| after click+3 s ≈ 4.1 m; screenshots show
+  every object in frame. Only real defect found: `/favicon.ico` 404 console
+  error on every load → inline `data:,` favicon in `index.html`.
+- **Open (ranked)**: TUM real-sensor end-to-end; MASt3R; Phase-12 CLI.
+
+## ⬆️ EARLIER (2026-07-02, part 5): quality debts (masses, crop scoring, gate cache)
+Three ranked debts from part 4 paid, one commit each; 184 tests pass. CPU-only
+(pod stopped) — verified against the on-disk scenes, no regeneration.
+- **Generated masses fixed** (`mass.generative_volume`, config `generative_mass`):
+  the hull rule (1dde0fa) predated the cleanup's watertight guarantee; a table's
+  hull fills the air under the top. Now: ENCLOSED signed-tet volume when sane,
+  clamped into a hull-ratio band [0.15, 0.35] (generation style swings enc/hull
+  3%–63% on identical furniture; real furniture is a ~constant hull fraction),
+  hull only as non-watertight fallback. Generative band ONLY; tsdf/completion
+  untouched. Recomputed from on-disk glbs (scene.jsons refreshed in place):
+  dining tables 205.8→71.8 kg / 101.7→15.2 kg, full-size chairs 28-55→4.5-8.1 kg,
+  couch 82→28.7 kg, small chairs 5.4/19.4→0.8/2.9 kg (genuinely small objects).
+- **Crop best-frame now quality-aware** (`crop_stage`): world extent stays the
+  primary signal; among the top ~20% band the sharpest / best-exposed frame wins
+  (Laplacian variance over the mask × dark-luminance damping). Sharp sliver
+  still loses; no-poses mask-area fallback keeps the same two-stage rule.
+- **Step-5 gate cache** (`reconstruction/gate_cache.py`): per (bundle, track,
+  params) npz under `<bundle>/.gate_cache/` holding cloud+cams+metrics; params
+  (tier bars, voxel, stride, motion filter, frame_count) are hashed into the
+  filename so any change auto-invalidates. run_assemble gained `--no-gate-cache`
+  and `--gate-only`. Proof (small office_3, tier 4, stride 4): cold 212.9 s →
+  warm 5.3 s (**40x**), routing printout byte-identical; cache 57 MB / 14 objects.
+- **Open (ranked)**: TUM real-sensor end-to-end; MASt3R; Phase-12 CLI.
+
+## ⬆️ EARLIER (2026-07-02, part 4): generation-artifact defenses, user-tuned gate
+Iterated with the user LOOKING AT the browser scenes; pod now STOPPED.
+- **Gate re-tuned per user preference (image-to-3D FIRST):** complete bar
+  RAISED to T2 112/0.48, T3 105/0.45, T4 100/0.42 — completion is reserved
+  for truly well-observed objects (only chair#25 qualifies on office_3);
+  everything else generates. (An earlier same-day widening was my misread of
+  the user's intent — reverted.)
+- **Hunyuan artifact defenses in `generative.py`** (each found by LOOKING at
+  real output, all test-pinned, 175 pass):
+  1. **Display-mat cut** (plane-RANSAC, orientation-free): Hunyuan reads the
+     object-on-white crop as a product shot and adds a base mat; the uniform
+     class-prior scale then shrinks the object to a miniature on a platform.
+     >50% of samples on one plane + rest footprint <50% of it -> cut the mat
+     (tables/couches never match). Runs BEFORE scaling.
+  2. **Detached-fragment drop by CONNECTIVITY, not size** — a 17%-area armrest
+     floating 65 cm away passed a <15% size rule; now ANY component >3% extent
+     from the dominant component's SURFACE (raycast distance — vertex distance
+     lies on sparse meshes) is dropped; touching parts of any size stay (legs).
+  3. **Broken-generation rejection**: >30% detached (_clean_gen), no dominant
+     component (_looks_shattered), or implausible class height (_class_dims_ok,
+     e.g. a 0.24 m slab "chair") -> the OBJECT IS DROPPED, not shipped.
+     VID2SIM_GEN_STRICT=0 / VID2SIM_GEN_CLEAN=0 disable.
+- **`run_assemble --tracks`** = fast subset iteration (chairs-only rebuild
+  ~13 min at gate-stride 20). Scenes: `out/scene_chairs` (6 single-component
+  full-size chairs; 3 broken generations rejected), `out/scene_tables`,
+  `out/scene_office_3_hy4` (full room). Serve any with scripts/serve.py.
+- **Not-a-bug**: "things on the table tops" = REAL tabletop items faithfully
+  generated from the crop (Replica's GT table mask includes them; the TSDF
+  has the same bumps). Accepted by the user... pending.
+- **Open (ranked)**: generated masses (solid-volume overshoot: 206 kg table —
+  solidity recalibration for generated meshes); crop quality for weak views;
+  gate caching; TUM real-sensor end-to-end; MASt3R; Phase-12 CLI.
+
+## ⬆️ EARLIER (2026-07-02, part 3): RUNPOD POD LIVE — Hunyuan3D generative band REAL
+User provided a RunPod pod (RTX 3090 24 GB, `slow_tomato_gull`, SSH
+`root@213.192.2.110 -p 40028`; **REMIND USER TO STOP IT when done — bills
+hourly**). First-ever live run of the plan's cloud-GPU generative band:
+- **Hunyuan3D 2.1 installed on the pod** via `deploy/runpod/setup_hunyuan3d.sh`
+  (first real execution; it works — one missing dep `timm` found+added). Weights
+  (14 GB) in `/root/.cache` (NOT /workspace → gone if pod is REPLACED; script
+  restores in ~5 min). Pod pip needs `PIP_BREAK_SYSTEM_PACKAGES=1` (PEP 668).
+  Code shipped by `git archive HEAD | ssh ... tar -x` into /workspace/vid2sim-v2.
+- **The serverless handler runs on the pod as a plain HTTP server**
+  (`python3 generative_handler.py --rp_serve_api --rp_api_port 8777`, log
+  /workspace/handler.log) and the local pipeline drives it through an SSH
+  tunnel via the new **`VID2SIM_RUNPOD_URL`** override — the REAL
+  RunPodEngine transport (`_build_input`/`_decode_mesh`) validated live:
+  watertight chair mesh back on first post-timm attempt. No serverless
+  deployment needed for a pod; for real serverless later just set
+  RUNPOD_API_KEY + RUNPOD_GEN_ENDPOINT_ID and unset VID2SIM_RUNPOD_URL.
+- **`SplitEngine` added** (make_engine composes it: RunPod gen endpoint set,
+  no completion endpoint, local CUDA present) → generative band on the pod,
+  completion band stays local PatchComplete instead of degrading to Poisson.
+- **RunPodEngine contract fix:** regenerate() now DECLINES (None) on a missing
+  crop instead of raising — a raise killed a full 35-min tier-4 assembly at the
+  first uncroppable object (chair#9). Test pins it. 166 tests pass.
+- **Scenes from the dense (2000-frame) bundle, tier 4, gate-stride 10:**
+  - `out/scene_office_3_dense` — local: 3 fused (PatchComplete+fusion+seal) +
+    9 TripoSG, 12 objects (12-cap), **server smoke-tested: schema-valid, 12/12
+    meshes+hulls fetchable**. Generative masses still rough (125 kg table).
+  - `out/scene_office_3_hy` — same but generative band = **Hunyuan3D 2.1 on
+    the pod** (~40 min wall; 9 generated + 3 fused = 12 objects, 1 uncroppable
+    chair declined gracefully). Schema-valid, 12/12 meshes served. Masses far
+    saner than TripoSG's (chairs 2-20 kg vs 0.4-39 kg; tables still ~100 kg
+    high → solidity recalibration is future work). Serve either scene with
+    `scripts/serve.py --scene out/scene_office_3_hy`.
+- Gate scores on dense data ≈ identical to 100-frame (chair#25 120.8°/0.758 vs
+  121°/0.74) — coverage really is trajectory-bound; `--gate-stride` validated.
+
+## ⬆️ EARLIER (2026-07-02, part 2): dense rebuild AUDITED, YOLO+SAM2 REAL
+All committed + pushed on `fix/phase3-pose-and-eval` (through `1ae544a`).
+- **Dense office_3 bundle built**: ALL 2000 frames (stride 1) at
+  `~/projects/vid2sim/data/replica/bundles_dense/office_3` (1.2 GB). The old
+  100-frame bundle stays at `bundles/office_3`. Disk was 96% full — deleted the
+  superseded room_0 artifacts (demo zip + extracted/ + bundle_room0, ~9 GB
+  reclaimed, STATUS said deletable; `bundles/room_0` is the replacement).
+- **Data-loss audit (scripts/audit_data_loss.py) ANSWERED the June-28 questions:**
+  (1) the depth gate [400,8000]mm loses ZERO pixels on Replica — exonerated;
+  (2) the Open3D default weight threshold (~3 obs/voxel) cost 2-10% of TSDF
+  vertices on 100 frames (table worst = the thin legs) and the dense rebuild
+  FIXES it: w3/w1 goes to ~1.00 on all four audited objects (couch/table/
+  chair25/chair9), table +14% vertices; (3) density buys OBSERVATIONS per
+  voxel, not coverage — unique 5mm cells only +14-39%, dims unchanged, the
+  ≤123° room-scan ceiling stands. JSON: out/audit_dense{,_tsdf}.json.
+- **YOLO detection EXISTS now (`src/perception/detect.py`)**: ultralytics
+  YOLO-seg (yolo11s-seg) + the plan's Step-1 IoU tracker (class-gated greedy
+  match >0.4, retire after 5) as a `detector` callable for
+  `TUMReader.to_bundle`. Injectable infer seam, 7 unit tests, RGB→BGR flip is
+  load-bearing (ultralytics assumes BGR numpy input).
+- **Real SAM2 RAN for the first time** (Phase-4 validation): fr1/xyz, 16 stable
+  tracks (keyboard/tv/book/chair/cup/mouse) refined over 100 frames, ~1.5 fps
+  on the 4060 (4.4 GB VRAM), crops staged. Two latent bugs found+fixed by the
+  real run: Sam2VideoPredictor needs **bf16 autocast** (dtype crash without),
+  and refine_masks gained a `track_ids` filter (YOLO 1-frame flicker tracks —
+  32 of 48! — would each cost a SAM2 video pass). Driver script:
+  `scripts/run_tum_detect.py` (weights: ~/projects/vid2sim/models/
+  sam2.1_hiera_large.pt; yolo auto-downloads). Bundle:
+  `data/tum/bundle_f1xyz_yolo`.
+- **run_assemble gained `--gate-stride N`** (gate scores every Nth frame;
+  TSDF still fuses all) — the dense bundle's gate is otherwise ~20x the
+  100-frame cost (it re-reads depth per object). Default 1 = old behaviour.
+- **Dense reassembly**: `out/scene_office_3_dense` (tier 2, gate-stride 10) —
+  see the scene section / next-session note for the result.
+- **Next**: TUM pipeline continuation (poses on bundle_f1xyz_yolo → cloud →
+  gate → assemble = first REAL-SENSOR end-to-end scene); gate caching; CLI
+  (Phase 12); icp_align.py (Phase 8).
+
+## ⬆️ EARLIER (2026-07-02, part 1): full-project sanity check, red test FIXED
+- **Test suite: 156 pass, 0 fail** (was 154+1 red). The red
+  `tests/perception/test_crop_stage.py` was the TEST's fault, not the code:
+  it drew a FULL-SQUARE mask then asserted the tight crop's corners are
+  whitened background — but a square's bbox corners are INSIDE the mask.
+  Fixed the fixture to a diamond mask (corners really are background,
+  JPEG-tolerant ≥240 check) and ADDED a test for the uncommitted `_best_frame`
+  rework (with depth+poses it picks the frame with the largest back-projected
+  WORLD extent — the revealing view — not the biggest mask; falls back to mask
+  area without poses).
+- **Uncommitted WIP reviewed (coherent, tests green, still UNCOMMITTED):**
+  Hunyuan3D generative band (tier-selected model T1-2 TripoSG / T3-4 Hunyuan3D,
+  fix K1; `make_engine(tier=)`), `deploy/runpod/generative_handler.py`
+  serverless worker (one endpoint, modes regenerate+complete, contract pinned
+  by `test_generative_handler.py`), yaw-ICP + full FPFH registration in
+  `coarse_align_to_cloud` (two pose candidates scored by cloud→mesh RMSD),
+  crop-stage 3D-extent best-frame, frontend legend removal. Worth committing.
+- **NOT DONE (still open from the 2026-06-28 top-priority list): the office_3
+  bundle is STILL 100/2000 frames (stride 20)** — `scene_office_3_full` means
+  "full room" (all 12 objects), NOT full frames. The stride-1 re-stream +
+  per-object data-loss audit (weight threshold, voxel sizes) never ran.
+- Pipeline gap list vs the plan re-derived this session — see "Pipeline
+  progress" table + "Remaining build phases" below (unchanged conclusions:
+  icp_align.py, real SAM2/YOLO, MASt3R/ORB-SLAM3, live VLM call, CLI/tiers,
+  integration pass, capture.py all missing; gate caching + generative crop
+  quality + mass sanity still open).
+
+## ⬆️ EARLIER (2026-07-01): Options A+D shipped, TripoSG LOCAL, full room
+Big session. All on branch `fix/phase3-pose-and-eval` (mine + collaborator commits,
+latest `e9c6295`). Memory to read FIRST: `fusion-option-a`, `geometric-repair-option-d`,
+`triposg-local-and-verify` (NEW), plus the older completion memories.
+
+**BUILT + SHIPPED this session:**
+- **Option D** (`src/scene/geometric_repair.py`): pymeshfix watertight collider for the
+  dense band. Wired to the "tsdf" keep band.
+- **Option A = FUSION** (`src/reconstruction/fusion.py`): keep real observed geometry,
+  graft ONLY the unobserved part. Wired: `tsdf.fuse(return_grids=True)` → assembler
+  `_fuse_and_seal` (fusion→D-seal) for the "completion" band. Key params (all validated):
+  grid-based `keep_largest_interior` (o3d MESH cluster is pathologically slow — use
+  ndimage.label on the GRID), adaptive `denoise_sigma` (noisy objects >150 interior blobs
+  get global-smoothed → solid closed body), `pad` (marching-cubes closes the surface),
+  per-class `max_fill_dist_m` (`assembler.FILL_DIST_BY_CLASS`: table 0.06 kills the
+  under-table blob, couch/default 0.25 keeps it solid), `max_voxels` cap (couch@2mm OOMs).
+- **PatchComplete = in-engine completion source** (`src/reconstruction/patchcomplete_completion.py`,
+  loaded in-process; `make_engine()` default `completion_model=patchcomplete`).
+- **TripoSG image-to-3D RUNS LOCALLY** on the 8 GB RTX 4060 (the generative band now
+  REGENERATES poorly-observed objects instead of dropping them). Install at
+  `~/projects/vid2sim/TripoSG` (weights present). See `triposg-local-and-verify` memory.
+- **Render fixes** (all verified in a REAL browser via headless Chrome, NOT Open3D which
+  is culling-blind): frontend `DoubleSide`; `exporter_gltf` decimate-BEFORE-smooth +
+  discard watertight-breaking Taubin; `smooth_taubin` weld-only (collaborator); server
+  `no-store` headers (browser was caching stale meshes → "it's the same every time").
+- **Physics**: frontend objects start FIXED, turn dynamic on click (fixes the load
+  EXPLOSION from overlapping class-prior-sized objects). Collaborator: drop-to-ground,
+  class-prior sizing, generative mass by hull volume.
+
+**SCENES + SERVERS (live now, may need restart):**
+- `out/scene_office_3_full` — MIXED (tier 4): 3 fused (couch/table/chair) + 9 TripoSG. Served :8001.
+- `out/scene_generated` — ALL 12 TripoSG (tier 2, `--force-strategy generative`). Served :8002.
+
+**OPEN / NEXT:** (1) Poorly-observed generative objects are BAD (torn/blobby) — DATA limit
+(bad crops from a center-of-room scan); options: filter them out, improve crops
+(brighten/pick-sharpest), or accept. (2) Gate is SLOW + recomputed every run (uncache) —
+cache it. (3) Generative masses still high (blobby volume). (4) Browser default camera
+centers on ONE object → should auto-frame the room. (5) 1 red test
+`tests/perception/test_crop_stage.py` = collaborator WIP, NOT ours.
+
+## ⬆️ EARLIER (2026-06-30 eve): holey-couch FIXED; scene served
+- **office_3 couch rendered holey/broken; root-caused + FIXED.** Cause: the couch's
+  real TSDF is very noisy (6969 components vs chair's 254), it fills the fusion grid to
+  the edge so marching cubes left OPEN boundaries (holes) pymeshfix couldn't seal, and
+  PatchComplete's couch completion is garbage (1.83m tall, L-sectional is OOD). FIX in
+  `fusion.fuse_completion`: `pad=4` (empty border → marching cubes closes the surface) +
+  `keep_largest=True` (`largest_component`, drops noise blobs). Rebuilt office_3 →
+  `out/scene_office_3_full` (couch/table/chair), VISUALLY VERIFIED via offscreen render
+  (`scratchpad/render_check.py`, Open3D EGL): couch now a SOLID recognizable L-couch (no
+  holes), chair still crisp. Seat stays a bit rough = honest noisy-scan, not a bug;
+  global field-smoothing was tried but hung repeatedly (abandoned). Memory `fusion-option-a`.
+- **SERVED:** `scripts/serve.py --scene out/scene_office_3_full` on :8000.
+- **Render-verify trick:** GLB isn't o3d-readable → assembler dumps PLY with
+  `VID2SIM_DUMP_PLY=1`; render one PLY/process (~20s EGL init).
+- **⚠️ 1 PRE-EXISTING TEST RED (not mine):** `tests/perception/test_crop_stage.py` from a
+  collaborator's TripoSG crop-staging commit (5760c16) — background-whiten mismatch, their
+  WIP, generative path (inactive). My fusion+scene tests all green.
+
+## ⬆️ EARLIER (2026-06-30 pm): Option D BUILT+WIRED, Option A (fusion) STARTED
+- **Best-observed object across ALL 8 scenes = office_3 chair#25** (hull 0.754, ang 120.6°).
+  Ranked from `out/gate_distribution.json`. **NOTHING exceeds 0.90** (room-scan ceiling;
+  only 1 object >0.70; median 0.298).
+- **Option D (geometric watertight repair) DONE.** `src/scene/geometric_repair.py`:
+  `declutter` (drop TSDF fragments) → quadric-decimate → **pymeshfix** → watertight
+  2-manifold collider + colour transfer. `watertight_collider(mesh, target_tris=80000)`.
+  On chair#25: watertight=TRUE, 1 comp, fidelity 2.0mm (matches Poisson) BUT actually
+  sealed (Poisson isn't — its crop reopens it). 40k too coarse for thin chair; 80k = sweet
+  spot; ~76s. CGAL alpha-wrap unavailable (no py binding); pymeshfix is the stand-in.
+  - **WIRED:** assembler `strategy=="tsdf"` → `_tsdf_watertight_finalize` → watertight_collider
+    (Poisson fallback). `config/pipeline.yaml` `keep_completeness=0.85` all tiers.
+  - **END-TO-END demo** (`scratchpad/d_pipeline_demo.py`, forces chair#25 to tsdf):
+    `chair_00 mass=10.9kg hulls=16`, CoACD logged **Mesh Manifoldness: true** (the payoff).
+    Scene `out/scene_d_demo`. 4 tests; **full suite 132 pass.**
+  - **CAVEAT:** keep bar ANDs angular (150-160°, max real 123°) + 0.85>0.754 ceiling → never
+    auto-fires on Replica; correct for future walk-around footage. User accepted.
+  - **Browser comparison** `out/scene_d_repair/` (raw|pymeshfix|alpha|poisson side by side);
+    serve `scripts/serve.py --scene out/scene_d_repair`. Memory: `geometric-repair-option-d`.
+- **Option A = FUSION — BUILT + WIRED + VALIDATED.** `src/reconstruction/fusion.py`:
+  `grid_from_vbg` (sparse VBG → dense T_real,W), `mesh_to_grid_sdf` (completion mesh →
+  signed-dist on same grid via o3d RaycastingScene), `fuse_fields` (`observed?real:comp`,
+  EDT blend over a 3-voxel seam), `grid_to_mesh` (skimage marching_cubes → world),
+  `fuse_completion` (end-to-end). 5 tests; **full suite 137 pass.**
+  - **Validated on chair#25:** fused mesh hugs OBSERVED points to **0.0mm** (Poisson alone
+    1.9mm) → real geometry preserved exactly, only the unseen back grafted. ~24s, no GPU.
+  - **Canonical combo proven:** real TSDF + **PatchComplete** completion → fusion → D-seal
+    → watertight 1-component collider. PatchComplete pred reused from
+    `PatchComplete/output_ours/.../chair25/input_0_pred.npz`, placed in world by inverting
+    the `chair_to_patchcomplete.py` normalisation. Browser `out/scene_a_patchcomplete`
+    (real|patchcomplete|fused|fused+D); also `out/scene_a_fusion` (real|poisson|fused).
+    Scripts: `scratchpad/a_fusion_{probe,validate,patchcomplete}.py`.
+  - **WIRED:** `tsdf.fuse(return_grids=True)` → `(meshes, {tid:VBG})`. `ObjectInput` gains
+    `vbg`+`voxel_size`; `run_assemble.py` passes them for fusable objects. Assembler
+    `_fuse_and_seal`: a "completion" object with a VBG KEEPS observed geometry + grafts the
+    engine's completion only where unobserved, then D-seals (all WORLD coords, recentred at
+    end). Backward-compatible (no VBG → old behaviour). This fires on the COMPLETION band,
+    which IS reachable on real Replica (unlike D's keep band).
+  - **KEY PROPERTY:** fused mesh inherits the real shell's openness (non-watertight) BY
+    DESIGN — fusion preserves real geometry; D seals it. So the pipeline is fusion→D.
+  - **PatchComplete-in-engine DONE:** `src/reconstruction/patchcomplete_completion.py`
+    loads multi_res in-process (reproduces the CLI prediction BIT-FOR-BIT) →
+    `LocalGpuEngine._run_completion` `patchcomplete` branch returns the mesh directly →
+    `make_engine()` default completion_model = **patchcomplete**. Validated end-to-end:
+    `engine.complete`→6970 tris/10.7s, assemble→fusion→D-seal→CoACD→`out/scene_a_engine`
+    (chair_00, 16 hulls, 17.5kg). GOTCHA: model reads its codebook from the RELATIVE
+    `priors/` dir → construct with cwd=PatchComplete repo (module handles it).
+  - **NOTE:** full `run_assemble` on office_3 is SLOW in the GATE phase (per-object cloud
+    accumulation; tier 4 @2mm timed out at 560s, tier 2 @4mm ~3-4min — PRE-EXISTING, not a
+    fusion cost). The completion→fusion→seal stage itself is ~1-2 min/object.
+
+## ⬆️ EARLIER SESSION (2026-06-30 am): full completion-model bake-off, ALL validated on own data
+Tested **4 completion models** for filling partial furniture, each FIRST validated on its
+OWN paper/demo data (with a reference output) BEFORE our objects — the discipline the user
+insisted on. It caught real bugs and closed the ComPC question. Memory: `completion-verdict`,
+`validate-and-run-completion-models`, `completion-tools-survey`, `compc-pod-setup`.
+- **VERDICT — PatchComplete wins.** Real-ScanNet-trained, clean + CORRECT-SIZE output, instant
+  (110ms), runs LOCALLY in the venv (pure torch, no env build). Couch reconstructed well;
+  table → filled solid block not thin legs (32³ too coarse). Validated on its ShapeNet lamp+GT.
+- **ComPC: env VALIDATED (not botched), but slow + coarse.** Rebuilt on a fresh RTX 6000 Ada pod;
+  validated on ComPC's OWN redwood REAL-SCAN eval data + GT (sym chamfer ~0.055, shape matches).
+  The "blob" is CORRECT ComPC behaviour — it outputs dense FILLED SOLIDS (right size, smoothed
+  structure). ~20 min/object. This finally closes the user's "did we botch the setup?" question.
+- **SDFusion: crisp on synthetic, BLOBS on our real scans** (domain gap). Validation caught a
+  feeding bug (SDF must clamp to ±0.2). Runs locally in venv (pytorch3d stubbed).
+- **PoinTr/AdaPoinTr: FAIL on real** (synthetic domain gap) — PROVEN: clean on PoinTr's own demo
+  sofa, scatter/collapse on our real chair. Not a usage bug (feeding matches official inference).
+- **BROWSER COMPARISON:** `out/scene_pointr_compare/` — grid (columns=model, rows=chair/couch/table),
+  colors+labels+legend in `frontend/app.js`. Serve: `scripts/serve.py --scene out/scene_pointr_compare`.
+  All scratchpad scripts in `scratchpad/` (+ `scratchpad/compc_fair/` artifacts).
+- **HIGHEST-VALUE NEXT STEP (conceptual, NOT built): FUSION** — keep REAL observed geometry +
+  graft ONLY the missing part. Fuse both as TSDF grids (`if observed→real else→completion`),
+  using our `tsdf.py` per-voxel WEIGHTS as the free observed/unobserved mask; marching-cubes.
+  Medium difficulty (~1-2 days), infra exists. Biggest win for the regenerate-everything models.
+- **⚠️ STOP THE RTX 6000 Ada POD** from the RunPod UI (bills ~$0.5/hr; SSH can't). `/workspace`
+  is a network volume → the ComPC env persists for next time.
+- **NOTE:** PatchComplete/SDFusion need NO pod (local RTX 4060). Only ComPC needs the pod.
+  Image-to-3D (TRELLIS/Hunyuan3D) is the user's chosen LAST RESORT — not yet tried.
+
+## ⬆️ EARLIER SESSION (2026-06-29): ComPC tested on a real GPU — verdict
+Rented a **RunPod RTX 4090 (24 GB)** and made **ComPC run end-to-end** (the friend's
+`deploy/runpod/` kit + a new `setup_compc.sh` that actually builds it: gcc-10,
+`--no-build-isolation`, `setuptools<70`, cv2/PATH fix — all committed & pushed).
+The pipeline seam is in: `src/reconstruction/compc_completion.py` + a dispatch
+branch in `LocalGpuEngine._run_completion`; activate with
+`VID2SIM_COMPLETION_MODEL=compc`; runs ONLY for gate "completion"-band objects.
+- **RESULT on the real office_3 couch:** ComPC produces a 16k-point **blob** — both
+  on the dense 256k input (out-of-regime misuse) AND on a clean **sparse 8k** input
+  (in-regime). It is **~40 min/object** (default pce_num=10000 ≈ 1-2 hr).
+- **Honest caveat (do not over-conclude):** the in-regime blob was NOT a fair test —
+  3 fixes untried: canonical **orientation** (ComPC's Zero123/SDS assumes a canonical
+  pose; we fed arbitrary yaw), **unit-normalization** (fed raw 3.6 m metric points),
+  and the **L-sectional couch is OOD** for ShapeNet (try a simple chair). Rule these
+  out before declaring learned completion dead.
+- **Direction that converged:** dense/well-observed → **geometric (Poisson)**, settled.
+  Sparse → learned completion is the *intended* band but unproven for us. To fill the
+  **unobserved pocket**: for vid2sim's PHYSICS goal use **symmetry-mirror + smooth
+  free-space-bounded closure** (ME-PCN's emptiness idea, which our TSDF already has);
+  learned hallucination is a visual-detail fallback only. See memory
+  `completion-verdict` + `compc-pod-setup`.
+- **Pod + cost:** pod bills ~$0.7/hr; **STOP it from the RunPod UI when done** (SSH can't).
+  `/workspace` is wiped if the pod is *replaced* (happened once). Repo is private →
+  SCP files to the pod, can't `git pull` anonymously.
 
 ## ⬆️ TOP PRIORITY FOR THE NEXT INSTANCE (user-directed 2026-06-28)
 The user wants the FRONT of the pipeline (input → observed cloud → TSDF → gate)

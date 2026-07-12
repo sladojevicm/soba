@@ -1,0 +1,130 @@
+# Replica semantic taxonomy -> COCO class map — GROUND-TRUTH EVALUATION ONLY.
+#
+# Used by scripts/evaluate_scene.py to turn the per-instance classes in a
+# Replica scene's semantic annotations (info_semantic.json /
+# mesh_semantic.ply) into the COCO keys the pipeline ships in scene.json.
+#
+# This is deliberately a SEPARATE file from coco_class_map.yaml: that file is
+# consumed at bundle-build time and changing it would alter what the pipeline
+# detects; this one only defines how ground truth is counted.
+#
+# Semantics of a mapping value:
+#   <coco name>  the GT instance is counted under that COCO class
+#   default      structural / unscorable — the instance is EXCLUDED from GT
+# Any Replica class not listed here behaves like `default` (excluded), and is
+# reported in eval.json under detection.unmapped_gt_classes so mapping gaps
+# stay visible instead of silently shrinking the ground truth.
+#
+# "In scope" for recall: evaluate_scene.py reads config/coco_class_map.yaml's
+# `replica:` section (the map the pipeline itself used when the bundles were
+# built) and treats its non-default COCO values as the classes the pipeline
+# could possibly ship. GT instances mapping to other COCO classes (tv, potted
+# plant, ...) are still counted and reported, but under
+# detection.out_of_scope_gt — missing them is a pipeline SCOPE gap, not a
+# per-scene detection failure, and they do not enter the recall used in the
+# correctness score (which is documented in eval.json itself).
+
+replica_to_coco:
+  # --- seating -------------------------------------------------------------
+  chair: chair
+  office-chair: chair
+  stool: chair            # COCO has no stool; nearest sittable key
+  bench: bench
+  beanbag: chair
+  sofa: couch
+  couch: couch
+  # --- tables --------------------------------------------------------------
+  table: "dining table"   # COCO umbrella class: every table lands here
+  desk: "dining table"
+  coffee-table: "dining table"
+  side-table: "dining table"
+  nightstand: "dining table"
+  tv-stand: "dining table"   # low table-like furniture carrying the screen
+  # --- small objects -------------------------------------------------------
+  bottle: bottle
+  cup: cup
+  mug: cup
+  book: book
+  bowl: bowl
+  vase: vase
+  clock: clock
+  # --- screens -------------------------------------------------------------
+  tv-screen: tv
+  tv: tv
+  monitor: tv             # COCO 'tv' is the umbrella for monitors/screens
+  screen: tv
+  # --- plants --------------------------------------------------------------
+  indoor-plant: "potted plant"
+  plant: "potted plant"
+  potted-plant: "potted plant"
+  plant-stand: default    # the stand is furniture, not the plant
+  # --- other COCO-representable things -------------------------------------
+  laptop: laptop
+  computer-keyboard: keyboard
+  keyboard: keyboard
+  mouse: mouse
+  remote-control: remote
+  backpack: backpack
+  handbag: handbag
+  umbrella: umbrella
+  exercise-ball: "sports ball"
+  ball: "sports ball"
+  bed: bed
+  sink: sink
+  refrigerator: refrigerator
+  microwave: microwave
+  toilet: toilet
+  person: person
+  # --- structural / soft / unscorable -> excluded from GT -------------------
+  wall: default
+  floor: default
+  ceiling: default
+  door: default
+  window: default
+  window-frame: default
+  blinds: default
+  curtain: default
+  beam: default
+  pillar: default
+  panel: default
+  pipe: default
+  vent: default
+  stair: default
+  handrail: default
+  rug: default
+  mat: default
+  cushion: default        # COCO has no cushion/pillow class
+  pillow: default
+  blanket: default
+  comforter: default
+  cloth: default
+  clothing: default
+  towel: default
+  picture: default
+  lamp: default           # COCO has no lamp class
+  shelf: default
+  rack: default
+  cabinet: default
+  wall-cabinet: default
+  base-cabinet: default
+  wardrobe: default
+  countertop: default
+  bin: default
+  basket: default
+  box: default
+  desk-organizer: default
+  sculpture: default
+  camera: default
+  switch: default
+  wall-plug: default
+  candle: default
+  coaster: default
+  chopping-board: default
+  plate: default
+  pot: default
+  pan: default
+  tissue-paper: default
+  paper-towel: default
+  tablet: default
+  phone: default
+  undefined: default

@@ -26,6 +26,13 @@ class Physics:
     is_rigid: bool
     origin: str            # "vlm" or "lookup"
     reasoning: str = ""
+    # Fraction of the object's enclosed volume that is actually solid material
+    # (thin metal bowl ~0.03, solid wood block ~1.0). Estimated per object by
+    # the VLM from the image; None from the lookup backend -> mass falls back
+    # to the per-CLASS solidity table. Motivated by YCB/ABO (BENCHMARK.md):
+    # class constants turned correctly-perceived hollow objects into 28-510x
+    # mass overshoots.
+    fill_fraction: float | None = None
 
 
 def from_lookup(coco_class: str, *, config_path: str = str(lookup._DEFAULT_CONFIG)) -> Physics:
@@ -37,18 +44,30 @@ def from_lookup(coco_class: str, *, config_path: str = str(lookup._DEFAULT_CONFI
     )
 
 
-def infer(coco_classes: list[str], *, backend=None,
+def infer(coco_classes: list[str], *, backend=None, crops=None, dims_m=None,
           config_path: str = str(lookup._DEFAULT_CONFIG)) -> list[Physics]:
     """Physics for a batch of objects (matched by ARRAY ORDER, fix Y5).
 
     backend: optional callable(list[str]) -> list[Physics] (the Claude path).
-    On None / any backend failure, every object falls back to the lookup table.
+    A backend with `wants_context = True` (vlm_claude.ClaudeBackend) is also
+    given the per-object crop paths + metric longest dims. When backend is
+    None, the live Claude backend is used IF it can run (ANTHROPIC_API_KEY
+    set — vlm_claude.make_backend). On None / any backend failure, every
+    object falls back to the lookup table.
     """
+    if backend is None:
+        from . import vlm_claude
+        backend = vlm_claude.make_backend(config_path)
     if backend is not None:
         try:
-            out = backend(coco_classes)
+            if getattr(backend, "wants_context", False):
+                out = backend(coco_classes, crops=crops, dims_m=dims_m)
+            else:
+                out = backend(coco_classes)
             if out and len(out) == len(coco_classes):
                 return out
         except Exception:
-            pass  # any VLM failure -> deterministic lookup (Step 8 fallback)
+            import logging
+            logging.getLogger(__name__).warning(
+                "physics backend failed -> lookup fallback", exc_info=True)
     return [from_lookup(c, config_path=config_path) for c in coco_classes]

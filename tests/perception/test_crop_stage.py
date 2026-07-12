@@ -1,0 +1,307 @@
+"""Best-frame crop staging tests (CPU, no model).
+
+Builds a tiny real bundle with the SAME object visible at two sizes across two
+frames, and asserts the guarantees the generative band relies on: the best view
+is chosen (largest 3D extent when depth+poses exist, else largest mask), among
+equally revealing views the sharpest / best-exposed frame wins (but a sharp
+foreshortened sliver never beats a revealing view), the crop is whitened
+outside the mask, and an object that is never visible enough yields None so
+the caller drops it.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+
+from perception import crop_stage
+from perception.bundle import Intrinsics, Manifest, PerceptionBundle
+
+
+def _diamond_mask(r: int, centre: int = 25) -> np.ndarray:
+    """A diamond (not a full square): the tight crop's CORNERS lie outside the
+    mask, so background whitening is observable at the corners."""
+    yy, xx = np.mgrid[0:64, 0:64]
+    return ((np.abs(yy - centre) + np.abs(xx - centre)) <= r).astype(np.uint8) * 255
+
+
+def _bundle(tmp_path):
+    b = PerceptionBundle.create(
+        tmp_path / "b",
+        Manifest(session_id="t", fps=30.0, frame_count=2, source="test"),
+        Intrinsics(fx=100.0, fy=100.0, cx=32.0, cy=32.0),
+    )
+    # frame 0: small mask (r=8 red diamond). frame 1: large mask (r=20 green).
+    for fid, r, color in ((0, 8, (255, 0, 0)), (1, 20, (0, 255, 0))):
+        mask = _diamond_mask(r)
+        rgb = np.zeros((64, 64, 3), np.uint8)
+        rgb[mask > 0] = color
+        b.write_rgb(fid, rgb)
+        b.write_mask(fid, 7, mask)
+    return b
+
+
+def test_picks_largest_mask_frame_and_whitens_background(tmp_path):
+    # No poses/depth in this bundle -> falls back to the largest-mask rule.
+    b = _bundle(tmp_path)
+    p = crop_stage.stage_crop(b, 7, pad_frac=0.0, min_area_px=16)
+    assert p is not None and p.exists()
+    crop = b.read_crop(7)
+    # frame 1 (the r=20 green view) wins -> crop ~41px, not ~17px
+    assert min(crop.shape[:2]) >= 36
+    # corners are outside the diamond after tight crop -> whitened (JPEG-tolerant)
+    assert all(int(c) >= 240 for c in crop[0, 0])
+    # the object's green survives somewhere in the crop
+    assert (crop[:, :, 1] > 200).any()
+
+
+def test_prefers_frame_revealing_most_3d_structure(tmp_path):
+    """With depth + poses available, the best frame is the one whose
+    back-projected points span the largest WORLD extent (a front-on revealing
+    view), even if another frame has a bigger mask (a close-up grazing view)."""
+    b = PerceptionBundle.create(
+        tmp_path / "b3d",
+        Manifest(session_id="t", fps=30.0, frame_count=2, source="test"),
+        Intrinsics(fx=100.0, fy=100.0, cx=32.0, cy=32.0),
+    )
+    # frame 0: HUGE mask (40x40 red) but very close (0.1 m) -> tiny 3D extent.
+    # frame 1: smaller mask (24x24 green) but far (2.0 m) -> big 3D extent.
+    for fid, side, color, depth_mm in ((0, 40, (255, 0, 0), 100),
+                                       (1, 24, (0, 255, 0), 2000)):
+        rgb = np.zeros((64, 64, 3), np.uint8)
+        mask = np.zeros((64, 64), np.uint8)
+        depth = np.zeros((64, 64), np.uint16)
+        rgb[5:5 + side, 5:5 + side] = color
+        mask[5:5 + side, 5:5 + side] = 255
+        depth[5:5 + side, 5:5 + side] = depth_mm
+        b.write_rgb(fid, rgb)
+        b.write_mask(fid, 7, mask)
+        b.write_depth_mm(fid, depth)
+    b.write_poses([np.eye(4), np.eye(4)])
+
+    p = crop_stage.stage_crop(b, 7, pad_frac=0.0, min_area_px=16)
+    assert p is not None
+    crop = b.read_crop(7)
+    # frame 1's 24px view chosen (not frame 0's 40px close-up)
+    assert max(crop.shape[:2]) <= 30
+    assert (crop[:, :, 1] > 200).any()      # green view
+    assert not (crop[:, :, 0] > 200).any()  # not the red close-up
+
+
+def _quality_bundle(tmp_path, name, frames):
+    """Two-frame bundle where BOTH frames back-project to the SAME world extent
+    (side_px / depth balanced), so the image-quality stage must break the tie.
+    `frames` = [(side_px, depth_mm, texture_hi, blur_sigma), ...]; the object is
+    an 8px checkerboard of 0/texture_hi values, optionally Gaussian-blurred.
+    Frame identity is observable through the staged crop's size (40px vs 24px).
+    """
+    import cv2
+
+    b = PerceptionBundle.create(
+        tmp_path / name,
+        Manifest(session_id="t", fps=30.0, frame_count=len(frames), source="test"),
+        Intrinsics(fx=100.0, fy=100.0, cx=32.0, cy=32.0),
+    )
+    for fid, (side, depth_mm, hi, sigma) in enumerate(frames):
+        yy, xx = np.mgrid[0:side, 0:side]
+        checker = (((yy // 8 + xx // 8) % 2) * hi).astype(np.uint8)
+        rgb = np.zeros((64, 64, 3), np.uint8)
+        rgb[5:5 + side, 5:5 + side] = checker[..., None]
+        if sigma:
+            rgb = cv2.GaussianBlur(rgb, (0, 0), sigma)
+        mask = np.zeros((64, 64), np.uint8)
+        mask[5:5 + side, 5:5 + side] = 255
+        depth = np.zeros((64, 64), np.uint16)
+        depth[5:5 + side, 5:5 + side] = depth_mm
+        b.write_rgb(fid, rgb)
+        b.write_mask(fid, 7, mask)
+        b.write_depth_mm(fid, depth)
+    b.write_poses([np.eye(4)] * len(frames))
+    return b
+
+
+def test_sharp_frame_beats_blurred_at_equal_extent(tmp_path):
+    """Same world extent both frames (40px@1m vs 24px@1.667m) -> the quality
+    stage decides: the SHARP 24px view wins over the blurred 40px close-up."""
+    b = _quality_bundle(tmp_path, "blur", [(40, 1000, 200, 8.0),
+                                           (24, 1667, 200, 0.0)])
+    assert crop_stage.stage_crop(b, 7, pad_frac=0.0, min_area_px=16) is not None
+    assert max(b.read_crop(7).shape[:2]) <= 30  # the sharp 24px frame
+
+    # and the mirror image: sharp 40px vs blurred 24px -> the 40px frame,
+    # proving the pick follows SHARPNESS, not crop size.
+    b2 = _quality_bundle(tmp_path, "blur2", [(40, 1000, 200, 0.0),
+                                             (24, 1667, 200, 8.0)])
+    assert crop_stage.stage_crop(b2, 7, pad_frac=0.0, min_area_px=16) is not None
+    assert min(b2.read_crop(7).shape[:2]) >= 36
+
+
+def test_lit_frame_beats_dark_at_equal_extent(tmp_path):
+    """Same extent, both sharp; one crop nearly black (checker 0/40, mean
+    luminance ~20) -> the well-exposed view wins, in either size order."""
+    b = _quality_bundle(tmp_path, "dark", [(40, 1000, 40, 0.0),
+                                           (24, 1667, 200, 0.0)])
+    assert crop_stage.stage_crop(b, 7, pad_frac=0.0, min_area_px=16) is not None
+    assert max(b.read_crop(7).shape[:2]) <= 30  # the lit 24px frame
+
+    b2 = _quality_bundle(tmp_path, "dark2", [(40, 1000, 200, 0.0),
+                                             (24, 1667, 40, 0.0)])
+    assert crop_stage.stage_crop(b2, 7, pad_frac=0.0, min_area_px=16) is not None
+    assert min(b2.read_crop(7).shape[:2]) >= 36  # the lit 40px frame
+
+
+def test_extent_stays_primary_over_sharpness(tmp_path):
+    """A sharp but FORESHORTENED view (extent below the top band) must not win:
+    the blurred frame that reveals far more 3D structure is kept."""
+    # frame 0: blurred, 40px@1m -> ext ~0.57 m; frame 1: sharp, 24px@0.5m ->
+    # ext ~0.17 m (< 0.8 * best) -> excluded from the quality shortlist.
+    b = _quality_bundle(tmp_path, "sliver", [(40, 1000, 200, 8.0),
+                                             (24, 500, 200, 0.0)])
+    assert crop_stage.stage_crop(b, 7, pad_frac=0.0, min_area_px=16) is not None
+    assert min(b.read_crop(7).shape[:2]) >= 36  # the revealing 40px frame
+
+
+def test_unoccluded_frame_beats_occluded_at_equal_extent(tmp_path):
+    """The holey-table bug: a view THROUGH other furniture has a big mask and a
+    big extent, but the occluder bites white intrusions into the crop that the
+    generative model reproduces as holes. The clean view must win."""
+    b = PerceptionBundle.create(
+        tmp_path / "bocc",
+        Manifest(session_id="t", fps=30.0, frame_count=2, source="test"),
+        Intrinsics(fx=100.0, fy=100.0, cx=32.0, cy=32.0),
+    )
+    # frame 0 (red): 30px square at 2 m, but a NEARER (0.5 m) vertical band
+    # splits the mask in two — an occluder in front (occ ~0.2, dominant 0.5).
+    # frame 1 (green): the same square fully visible. Same world extent.
+    for fid, color, occluded in ((0, (255, 0, 0), True), (1, (0, 255, 0), False)):
+        rgb = np.zeros((64, 64, 3), np.uint8)
+        mask = np.zeros((64, 64), np.uint8)
+        depth = np.zeros((64, 64), np.uint16)
+        rgb[5:35, 5:35] = color
+        mask[5:35, 5:35] = 255
+        depth[5:35, 5:35] = 2000
+        if occluded:
+            mask[5:35, 17:23] = 0        # the occluder's silhouette
+            depth[5:35, 17:23] = 500     # ...is much NEARER than the object
+        b.write_rgb(fid, rgb)
+        b.write_mask(fid, 7, mask)
+        b.write_depth_mm(fid, depth)
+    b.write_poses([np.eye(4), np.eye(4)])
+
+    assert crop_stage.stage_crop(b, 7, pad_frac=0.0, min_area_px=16) is not None
+    crop = b.read_crop(7)
+    assert (crop[:, :, 1] > 200).any()      # the clean green view won
+    assert not (crop[:, :, 0] > 200).any()  # not the occluded red one
+
+
+def test_tall_view_beats_flat_at_equal_extent(tmp_path):
+    """The slab-table bug: a top-down view has a huge diagonal and no occlusion
+    but reveals no vertical structure, so the generation is a flat slab. At
+    ~equal diagonal, the view with the larger world-Y span must win."""
+    b = PerceptionBundle.create(
+        tmp_path / "bflat",
+        Manifest(session_id="t", fps=30.0, frame_count=2, source="test"),
+        Intrinsics(fx=100.0, fy=100.0, cx=32.0, cy=32.0),
+    )
+    # Same depth, ~same diagonal: frame 0 (red) = wide flat strip 60x8;
+    # frame 1 (green) = 42x42 square (bigger Y span).
+    for fid, (hgt, wid), color in ((0, (8, 60), (255, 0, 0)),
+                                   (1, (42, 42), (0, 255, 0))):
+        rgb = np.zeros((64, 64, 3), np.uint8)
+        mask = np.zeros((64, 64), np.uint8)
+        depth = np.zeros((64, 64), np.uint16)
+        rgb[2:2 + hgt, 2:2 + wid] = color
+        mask[2:2 + hgt, 2:2 + wid] = 255
+        depth[2:2 + hgt, 2:2 + wid] = 2000
+        b.write_rgb(fid, rgb)
+        b.write_mask(fid, 7, mask)
+        b.write_depth_mm(fid, depth)
+    b.write_poses([np.eye(4), np.eye(4)])
+
+    assert crop_stage.stage_crop(b, 7, pad_frac=0.0, min_area_px=16) is not None
+    crop = b.read_crop(7)
+    assert (crop[:, :, 1] > 200).any()      # the tall green view won
+    assert not (crop[:, :, 0] > 200).any()
+
+
+def test_occluder_pixels_are_inpainted_not_white(tmp_path):
+    """A chosen view that still contains an occluder bite must ship with the
+    bite INPAINTED from the surrounding object, not as a white intrusion the
+    generative model would build as a hole."""
+    b = PerceptionBundle.create(
+        tmp_path / "binp",
+        Manifest(session_id="t", fps=30.0, frame_count=1, source="test"),
+        Intrinsics(fx=100.0, fy=100.0, cx=32.0, cy=32.0),
+    )
+    rgb = np.zeros((64, 64, 3), np.uint8)
+    mask = np.zeros((64, 64), np.uint8)
+    depth = np.zeros((64, 64), np.uint16)
+    rgb[5:35, 5:35] = (0, 200, 0)
+    mask[5:35, 5:35] = 255
+    depth[5:35, 5:35] = 2000
+    mask[5:35, 17:23] = 0        # occluder bite through the object...
+    depth[5:35, 17:23] = 500     # ...much nearer than the object
+    mask[5:35, 27:31] = 0        # a genuine OPENING (floor seen through)...
+    depth[5:35, 27:31] = 5000    # ...clearly BEHIND -> must stay background
+    b.write_rgb(0, rgb)
+    b.write_mask(0, 7, mask)
+    b.write_depth_mm(0, depth)
+    b.write_poses([np.eye(4)])
+
+    assert crop_stage.stage_crop(b, 7, pad_frac=0.0, min_area_px=16) is not None
+    crop = b.read_crop(7)
+    # the bite's centre is filled from the green surround, not left white
+    band = crop[15, 12:18]  # crop coords: mask bbox starts at (5,5)
+    assert not all(int(c) >= 240 for c in band[3]), "bite left white"
+    assert band[3][1] > 100, "bite not filled from the object"
+    # the see-through opening stays white — real holes are not painted shut
+    hole = crop[15, 23:25]
+    assert all(int(c) >= 240 for c in hole[0]), "opening was painted shut"
+
+
+def test_absent_object_returns_none(tmp_path):
+    b = _bundle(tmp_path)
+    assert crop_stage.stage_crop(b, 999, min_area_px=16) is None  # no mask -> drop
+
+
+def test_too_small_returns_none(tmp_path):
+    b = _bundle(tmp_path)
+    # both views are < a huge threshold -> not worth regenerating
+    assert crop_stage.stage_crop(b, 7, min_area_px=10_000) is None
+
+
+def test_crop_carries_ground_truth_mask_as_alpha(tmp_path):
+    """The staged crop is RGBA: alpha = our mask (+ inpainted cover), so
+    image-to-3D models must never re-guess the segmentation — TripoSG's own
+    background remover erased a WHITE tabletop as 'background' and the model
+    faithfully generated the leftover rim as a bent shell."""
+    from perception.bundle import _imread
+
+    b = PerceptionBundle.create(
+        tmp_path / "balpha",
+        Manifest(session_id="t", fps=30.0, frame_count=1, source="test"),
+        Intrinsics(fx=100.0, fy=100.0, cx=32.0, cy=32.0),
+    )
+    rgb = np.zeros((64, 64, 3), np.uint8)
+    mask = np.zeros((64, 64), np.uint8)
+    depth = np.zeros((64, 64), np.uint16)
+    rgb[5:35, 5:35] = (250, 250, 250)     # a WHITE object on white background
+    mask[5:35, 5:35] = 255
+    depth[5:35, 5:35] = 2000
+    mask[5:35, 17:23] = 0                 # occluder bite (nearer)
+    depth[5:35, 17:23] = 500
+    mask[5:35, 27:31] = 0                 # genuine opening (farther)
+    depth[5:35, 27:31] = 5000
+    b.write_rgb(0, rgb)
+    b.write_mask(0, 7, mask)
+    b.write_depth_mm(0, depth)
+    b.write_poses([np.eye(4)])
+
+    p = crop_stage.stage_crop(b, 7, pad_frac=0.1, min_area_px=16)
+    assert p is not None and p.suffix == ".png"
+    img = _imread(p, unchanged=True)
+    assert img.shape[2] == 4, "crop must be RGBA"
+    a = img[:, :, 3]
+    assert a[0, 0] == 0                       # padded corner = background
+    assert a[15, 8] == 255                    # object body = opaque
+    assert a[15, 15] == 255                   # inpainted occluder = object
+    assert a[15, 26] == 0                     # see-through opening = background

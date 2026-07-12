@@ -34,8 +34,10 @@ nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || {
 log "System libs for nvdiffrast / OpenGL (best-effort)"
 if command -v apt-get >/dev/null 2>&1; then
   apt-get update -qq || true
+  # gcc-10/g++-10: CUDA 11.6's nvcc cannot parse GCC 11 libstdc++ headers
+  # ("error: parameter packs not expanded with '...'") — host compiler must be <=10.
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-    git build-essential ninja-build libgl1 libglib2.0-0 \
+    git build-essential ninja-build gcc-10 g++-10 libgl1 libglib2.0-0 \
     libegl1 libgles2 libglvnd-dev pkg-config >/dev/null 2>&1 || true
 fi
 
@@ -62,6 +64,9 @@ log "CUDA 11.6 toolkit (nvcc) into the env — needed to compile the rasterizer"
   "$MM" install -y -p "$COMPC_ENV" -c "nvidia/label/cuda-11.6.0" cuda-nvcc cuda-cudart-dev libcusparse-dev
 export CUDA_HOME="$COMPC_ENV"
 export PATH="$COMPC_ENV/bin:$PATH"
+# Force nvcc's host compiler to gcc-10 (CUDA 11.6 rejects gcc-11 headers).
+export CC="${CC:-/usr/bin/gcc-10}"
+export CXX="${CXX:-/usr/bin/g++-10}"
 
 log "torch 1.12.1+cu116"
 "$PY" -m pip install --upgrade pip wheel -q
@@ -70,7 +75,14 @@ log "torch 1.12.1+cu116"
   --extra-index-url https://download.pytorch.org/whl/cu116
 
 log "ComPC requirements (compiles diff-gaussian-rasterization, pulls git deps)"
-( cd "$COMPC_HOME" && "$PY" -m pip install -q -r requirements.txt \
+# ComPC's CUDA extensions (Chamfer3D, diff-gaussian-rasterization, nvdiffrast)
+# `import torch` in their setup.py, so pip's ISOLATED build env (which lacks torch)
+# fails with ModuleNotFoundError. --no-build-isolation makes the build see the
+# env's torch; ninja is the compiler driver those extensions need.
+# setuptools>=70 dropped pkg_resources, which torch 1.12's cpp_extension build
+# still imports -> pin an older setuptools (and ninja/wheel) into the env first.
+"$PY" -m pip install -q ninja wheel "setuptools<70"
+( cd "$COMPC_HOME" && "$PY" -m pip install -q --no-build-isolation -r requirements.txt \
     --extra-index-url https://download.pytorch.org/whl/cu116 )
 
 log "Smoke test: import torch + build the rasterizer"

@@ -34,6 +34,9 @@ recon = [
     "opencv-python>=4.9",
     "trimesh>=4.0",
     "pillow>=10.0",
+    "scipy>=1.11",          # fusion.py field blend; patchcomplete cKDTree
+    "scikit-image>=0.22",   # marching-cubes (fusion + patchcomplete mesh extract)
+    "pymeshfix>=0.16",      # Option D geometric watertight repair (keep-band)
 ]
 
 [tool.setuptools.packages.find]

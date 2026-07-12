@@ -103,6 +103,34 @@ python3 scripts/serve.py --scene out/scene_office_3 --host 0.0.0.0 --port 8000
    the real mesh and repair holes geometrically (Poisson / pymeshfix); reserve
    learned completion/generation for genuinely sparse objects only.
 
+## Generative serverless endpoint (image-to-3D — TripoSG / Hunyuan3D 2.1)
+
+Separate from the host pod above. This is the "big generative GPU" — a RunPod
+**serverless** worker that turns an object crop into a mesh. One endpoint serves
+both models; the client (`reconstruction.generative.RunPodEngine`) picks per tier
+(fix K1): **tiers 1-2 → TripoSG**, **tiers 3-4 → Hunyuan3D 2.1**.
+
+1. Build a serverless worker whose image has the repo + weights:
+   ```bash
+   bash deploy/runpod/setup_triposg.sh      # tiers 1-2
+   bash deploy/runpod/setup_hunyuan3d.sh    # tiers 3-4 (~10 GB shape; >=16 GB GPU)
+   pip install runpod
+   ```
+   Worker entrypoint: `python deploy/runpod/generative_handler.py`
+   (it reuses the exact `LocalGpuEngine` model code behind the serverless API).
+2. Point the **host** pipeline at it (in `.env`, see `env.example`):
+   ```bash
+   export RUNPOD_API_KEY=...  RUNPOD_GEN_ENDPOINT_ID=...
+   # RUNPOD_GEN_MODEL is optional — the tier default already selects the model.
+   ```
+   Absent → the generative band drops (host still runs TSDF/gate). The request/
+   response contract (`image_b64`/`cloud_npy_b64` in, `mesh_b64`+`format` out) is
+   pinned by `tests/reconstruction/test_generative_handler.py`.
+
+Local cost-saver: on the 8 GB host, TripoSG runs in-process for small scenes; the
+full Hunyuan3D 2.1 needs ~10 GB so it belongs on the endpoint (or use the 8 GB
+`tencent/Hunyuan3D-2mini` via `VID2SIM_HUNYUAN_MODEL` locally).
+
 ## Cost hygiene
 
 - **Stop the pod when idle** (on-demand bills while running).

@@ -21,7 +21,38 @@ shell line — if the assignment lands on its own line it's silently dropped.)
 - **click** — select an object (orange highlight)
 - **drag** — push the selected object (velocity toward the cursor)
 - **space** — drop a rubber ball at the camera (10 s TTL)
+- **f** — re-frame the camera on ALL loaded objects (35° diagonal, 15% margin)
 - mouse — orbit / zoom (OrbitControls)
+
+The camera auto-frames the whole scene: `scene.json` `camera_pose` wins the
+initial position (fix W5) with the OrbitControls target aimed at the bbox of
+all objects; without a `camera_pose` the view is fully auto-fitted. As objects
+stream in over SSE the framing follows — until you first touch the camera.
+
+## Headless verification (`scripts/verify_browser.js`)
+
+Launches the server + headless Chrome and asserts: zero page errors, object
+count matches `scene.json`, every Rapier body's live mass equals
+`physics.mass_kg`, bodies load fixed and wake on click, no explosion /
+fall-through after ~3 s of simulation, `f`-framing works, and writes a
+screenshot. Exit 0 iff all checks pass.
+
+Puppeteer is not vendored — install it OUTSIDE the repo once and point
+`NODE_PATH` at it:
+
+```bash
+mkdir -p ~/tmp/pptr && cd ~/tmp/pptr && npm init -y && npm i puppeteer
+cd ~/projects/vid2sim/vid2sim-v2
+NODE_PATH=~/tmp/pptr/node_modules node scripts/verify_browser.js \
+  --scene out/scene_chairs --screenshot /tmp/chairs.png
+```
+
+Options: `--python <bin>` (default `~/projects/vid2sim/venv/bin/python`, or
+`VID2SIM_PYTHON`), `--settle <ms>` (sim time after the click, default 3000),
+`--timeout <ms>`. A swiftshader "context lost" warning is a known headless
+artifact and is filtered. The page exposes `window.__vid2sim`
+(`{objects: [{id, massKg, bodyType, position}], framedAll, screenPos(id)}`) —
+live getters into Rapier, used only by the checker.
 
 ## Vendored libraries (`vendor/`)
 - `three/` — Three.js 0.160 ESM (`three.module.js`) + addons GLTFLoader,

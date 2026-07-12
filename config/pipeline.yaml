@@ -50,12 +50,25 @@ solidity:
   person: 0.85
   default: 0.50
 
+# --- Generated-mesh mass volume (generative band ONLY) --------------------
+# A generated (image-to-3D) mesh is a watertight single component after cleanup,
+# so its ENCLOSED volume is used for mass — the convex hull overshoots badly (a
+# table's hull fills all the air under the top: 206 kg dining tables). But
+# generation STYLE still swings enclosed/hull ~20x on identical furniture
+# (thin shell vs solid blob) while real furniture occupies a roughly constant
+# fraction of its hull, so the enclosed volume is clamped into this hull-ratio
+# band before the class solidity applies. Non-watertight generations fall back
+# to the hull volume. Scanned (tsdf/completion) masses are untouched.
+generative_mass:
+  min_hull_ratio: 0.15   # below: thin-shell generation under-reports material
+  max_hull_ratio: 0.35   # above: solid-blob generation over-reports material
+
 # --- Class-specific physical size gates (metres), fix R2 ------------------
 # Catch ICP convergence to a wrong size. Out-of-range -> retry, then class-prior.
 class_gates:
   chair:          { height: [0.40, 1.10], width: [0.40, 0.80] }
-  "dining table": { height: [0.60, 1.00], width: [0.60, 2.50] }
-  couch:          { height: [0.70, 1.10], width: [1.40, 3.00] }
+  "dining table": { height: [0.30, 1.00], width: [0.60, 2.50] }  # COCO has no "coffee table" — every table lands here; office_3's real coffee table is ~0.35 m tall (gate was rejecting the ground truth)
+  couch:          { height: [0.45, 1.10], width: [1.40, 3.00] }  # low modern couches are real; office_3's L-couch measures ~0.55 m
   bottle:         { height: [0.10, 0.50], width: [0.05, 0.15] }
   cup:            { height: [0.08, 0.18], width: [0.07, 0.15] }
   book:           { height: [0.15, 0.35], width: [0.10, 0.25] }
@@ -110,9 +123,9 @@ tiers:
     # PROVISIONAL/uncalibrated — set near walk-around quality, so on room-scan data
     # nothing clears them and the survivors route to "completion" (correct: the
     # best object we have is ~0.75 completeness / 121deg, i.e. partial, not "keep").
-    gate: { angular_deg: 110, completeness: 0.45, keep_angular_deg: 160, keep_completeness: 0.85 }
+    gate: { angular_deg: 90, completeness: 0.35, keep_angular_deg: 160, keep_completeness: 0.85 }  # complete bar LOWERED 2026-07-05 (user: real geometry first, image-to-3D as LAST resort; photogrammetry rule-of-thumb ~90deg minimum coverage)
     generative_model: triposg      # BOTTOM band: image-to-3D (crop -> object)
-    completion_model: pointr        # MIDDLE band: learned geometry shape-completion (GPU)
+    completion_model: patchcomplete # MIDDLE band: learned geometry shape-completion (local GPU); matches make_engine() default (was stale 'pointr')
     physics: claude
     collider: hulls
     coacd: { threshold: 0.07, max_parts: 8 }
@@ -121,20 +134,20 @@ tiers:
     pose_method: mast3r
     tsdf: true
     voxel_size_m: 0.003
-    gate: { angular_deg: 100, completeness: 0.42, keep_angular_deg: 155, keep_completeness: 0.82 }  # complete bar recalibrated (was 140/0.60); keep bar provisional
+    gate: { angular_deg: 90, completeness: 0.35, keep_angular_deg: 155, keep_completeness: 0.85 }  # complete bar LOWERED 2026-07-05 (user: real geometry first, image-to-3D as LAST resort)
     generative_model: hunyuan3d    # BOTTOM band: image-to-3D (crop -> object)
-    completion_model: pointr        # MIDDLE band: learned geometry shape-completion (GPU)
+    completion_model: patchcomplete # MIDDLE band: learned geometry shape-completion (local GPU); matches make_engine() default (was stale 'pointr')
     physics: claude
     collider: hulls
     coacd: { threshold: 0.05, max_parts: 16 }
   4:
     name: maximum
-    pose_method: orbslam3
+    pose_method: mast3r            # ORB-SLAM3 dropped by decision 2026-07-05 (was never integrated; loop closure unjustified unless MASt3R drifts)
     tsdf: true
     voxel_size_m: 0.002
-    gate: { angular_deg: 90, completeness: 0.38, keep_angular_deg: 150, keep_completeness: 0.80 }  # complete bar recalibrated (was 130/0.55); keep bar provisional
+    gate: { angular_deg: 90, completeness: 0.35, keep_angular_deg: 150, keep_completeness: 0.85 }  # complete bar LOWERED 2026-07-05 (user: real geometry first, image-to-3D as LAST resort)
     generative_model: hunyuan3d    # BOTTOM band: image-to-3D (crop -> object)
-    completion_model: pointr        # MIDDLE band: learned geometry shape-completion (GPU)
+    completion_model: patchcomplete # MIDDLE band: learned geometry shape-completion (local GPU); matches make_engine() default (was stale 'pointr')
     physics: claude
     collider: hulls
     coacd: { threshold: 0.03, max_parts: 32 }

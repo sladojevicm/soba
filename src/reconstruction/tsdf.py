@@ -159,8 +159,12 @@ def fuse(
     move_thresh_frac: float = 0.3,
     block_resolution: int = BLOCK_RESOLUTION,
     progress: bool = False,
+    return_grids: bool = False,
 ):
     """Scene-level TSDF fusion. Returns {track_id: legacy o3d TriangleMesh}.
+
+    With ``return_grids=True`` returns ``(meshes, {track_id: VoxelBlockGrid})`` —
+    the live grids carry the per-voxel tsdf + weight that Option-A fusion needs.
 
     Args:
       track_ids: objects to fuse. None -> every object in the bundle.
@@ -276,6 +280,11 @@ def fuse(
         mesh = vbg.extract_triangle_mesh().to_legacy()
         mesh.compute_vertex_normals()
         meshes[tid] = mesh
+    if return_grids:
+        # Hand back the live VoxelBlockGrids too (per-voxel tsdf + weight) so the
+        # caller can run Option-A fusion (keep observed geometry, graft only the
+        # unobserved part — the weight is the free observed/unobserved mask).
+        return meshes, per_object_vbg
     return meshes
 
 

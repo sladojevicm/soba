@@ -252,11 +252,17 @@ class PerceptionBundle:
         return self.root / "crops"
 
     def crop_path(self, track_id: int) -> Path:
-        return self.crops_dir() / f"crop_{track_id}.jpg"
+        # PNG since 2026-07-04: the crop carries the OBJECT MASK as its ALPHA
+        # channel so image-to-3D models skip their own background removal.
+        # TripoSG's BriaRMBG deleted a WHITE tabletop as "background" and then
+        # faithfully generated the leftover wooden rim — we hold the exact
+        # mask, so the generator must never re-guess the segmentation.
+        return self.crops_dir() / f"crop_{track_id}.png"
 
     def write_crop(self, track_id: int, rgb: np.ndarray) -> None:
+        """rgb: HxWx3 (legacy) or HxWx4 RGBA with the mask as alpha."""
         self.crops_dir().mkdir(parents=True, exist_ok=True)
-        _imwrite(self.crop_path(track_id), rgb, quality=90)
+        _imwrite(self.crop_path(track_id), rgb)
 
     def read_crop(self, track_id: int) -> np.ndarray:
         return _imread(self.crop_path(track_id))
@@ -291,6 +297,8 @@ def _imaging_backend():
             img = arr
             if arr.ndim == 3 and arr.shape[2] == 3:  # RGB -> BGR for cv2
                 img = arr[:, :, ::-1]
+            elif arr.ndim == 3 and arr.shape[2] == 4:  # RGBA -> BGRA
+                img = arr[:, :, [2, 1, 0, 3]]
             if not cv2.imwrite(str(path), img, params):
                 raise OSError(f"cv2 failed to write {path}")
 
@@ -301,6 +309,8 @@ def _imaging_backend():
                 raise FileNotFoundError(path)
             if img.ndim == 3 and img.shape[2] == 3:  # BGR -> RGB
                 img = img[:, :, ::-1]
+            elif img.ndim == 3 and img.shape[2] == 4:  # BGRA -> RGBA
+                img = img[:, :, [2, 1, 0, 3]]
             return img
 
         return _w, _r

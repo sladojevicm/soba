@@ -122,16 +122,22 @@ def refine_masks(
     write_crops: bool = True,
     margin: float = 0.10,
     force: bool = False,
+    track_ids: set[int] | None = None,
 ) -> dict[int, dict]:
     """Refine every tracked object's masks and stage its best-frame crop.
 
     Returns a per-track summary {track_id: {"frames": n, "best_frame": fid|None}}.
     No-ops (returns {}) for ground-truth-mask datasets unless `force=True`.
+    `track_ids` restricts refinement to those tracks (detector flicker — 1-frame
+    phantom tracks — is real and SAM2 video is expensive; the caller filters).
     """
     if not force and bundle.manifest.source in GROUND_TRUTH_SOURCES:
         return {}
 
-    prompts = list(track_first_frames(bundle).values())
+    prompts = [
+        p for p in track_first_frames(bundle).values()
+        if track_ids is None or p.track_id in track_ids
+    ]
     if not prompts:
         return {}
 
@@ -180,6 +186,7 @@ class Sam2VideoPredictor:
     def refine(
         self, bundle: PerceptionBundle, prompts: list[Prompt]
     ) -> dict[int, list[FrameMask]]:
+        import contextlib
         import shutil
         import tempfile
 
@@ -188,6 +195,15 @@ class Sam2VideoPredictor:
 
         device = self.device or ("cuda" if torch.cuda.is_available() else "cpu")
         predictor = build_sam2_video_predictor(self.model_cfg, self.checkpoint, device=device)
+
+        # SAM2's video predictor is written for bf16 autocast (the official
+        # examples wrap ALL inference in it); without it the memory-attention
+        # matmul crashes on a dtype mismatch (BFloat16 vs Float).
+        amp = (
+            torch.autocast("cuda", dtype=torch.bfloat16)
+            if device == "cuda"
+            else contextlib.nullcontext()
+        )
 
         frame_ids = sorted(bundle.iter_frame_ids())
         idx_of = {fid: i for i, fid in enumerate(frame_ids)}
@@ -203,24 +219,25 @@ class Sam2VideoPredictor:
                 except OSError:
                     shutil.copyfile(src, dst)
 
-            state = predictor.init_state(video_path=str(staging))
-            for p in prompts:
-                x0, y0, x1, y1 = p.bbox
-                predictor.add_new_points_or_box(
-                    inference_state=state,
-                    frame_idx=idx_of[p.frame_id],
-                    obj_id=p.track_id,
-                    box=np.array([x0, y0, x1, y1], dtype=np.float32),
-                )
+            with amp:
+                state = predictor.init_state(video_path=str(staging))
+                for p in prompts:
+                    x0, y0, x1, y1 = p.bbox
+                    predictor.add_new_points_or_box(
+                        inference_state=state,
+                        frame_idx=idx_of[p.frame_id],
+                        obj_id=p.track_id,
+                        box=np.array([x0, y0, x1, y1], dtype=np.float32),
+                    )
 
-            out: dict[int, list[FrameMask]] = {p.track_id: [] for p in prompts}
-            for sam_idx, obj_ids, mask_logits in predictor.propagate_in_video(state):
-                fid = frame_ids[sam_idx]
-                for k, oid in enumerate(obj_ids):
-                    logit = mask_logits[k].squeeze()
-                    mask = (logit > 0.0).detach().cpu().numpy().astype(bool)
-                    score = float(torch.sigmoid(logit.max()).item())
-                    out[int(oid)].append(FrameMask(frame_id=fid, mask=mask, score=score))
+                out: dict[int, list[FrameMask]] = {p.track_id: [] for p in prompts}
+                for sam_idx, obj_ids, mask_logits in predictor.propagate_in_video(state):
+                    fid = frame_ids[sam_idx]
+                    for k, oid in enumerate(obj_ids):
+                        logit = mask_logits[k].squeeze()
+                        mask = (logit > 0.0).detach().cpu().numpy().astype(bool)
+                        score = float(torch.sigmoid(logit.max()).item())
+                        out[int(oid)].append(FrameMask(frame_id=fid, mask=mask, score=score))
             return out
         finally:
             shutil.rmtree(staging, ignore_errors=True)

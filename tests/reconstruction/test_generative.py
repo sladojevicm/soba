@@ -25,9 +25,41 @@ def test_make_engine_picks_runpod_when_configured(monkeypatch):
     monkeypatch.delenv("RUNPOD_COMPLETION_ENDPOINT_ID", raising=False)
     monkeypatch.setenv("RUNPOD_API_KEY", "k")
     monkeypatch.setenv("RUNPOD_ENDPOINT_ID", "gen")  # back-compat alias for gen
+    # no local GPU -> plain RunPodEngine (no SplitEngine composition)
+    monkeypatch.setattr(generative.LocalGpuEngine, "is_available", staticmethod(lambda: False))
     eng = generative.make_engine()
     assert isinstance(eng, generative.RunPodEngine)
     assert eng.gen_endpoint == "gen" and eng.api_key == "k"
+
+
+def test_make_engine_splits_gen_remote_completion_local(monkeypatch):
+    # RunPod gen endpoint + NO completion endpoint + local CUDA -> SplitEngine:
+    # the completion band keeps PatchComplete instead of degrading to Poisson.
+    monkeypatch.setenv("RUNPOD_API_KEY", "k")
+    monkeypatch.setenv("RUNPOD_GEN_ENDPOINT_ID", "gen")
+    monkeypatch.delenv("RUNPOD_ENDPOINT_ID", raising=False)
+    monkeypatch.delenv("RUNPOD_COMPLETION_ENDPOINT_ID", raising=False)
+    monkeypatch.setattr(generative.LocalGpuEngine, "is_available", staticmethod(lambda: True))
+    eng = generative.make_engine()
+    assert isinstance(eng, generative.SplitEngine)
+    assert isinstance(eng._regenerator, generative.RunPodEngine)
+    assert isinstance(eng._completer, generative.LocalGpuEngine)
+    assert eng._completer.completion_model == "patchcomplete"
+
+
+def test_split_engine_delegates_per_band():
+    class FakeCompleter:
+        completion_model = "c"
+        def complete(self, **kw):
+            return ("completed", kw["cloud"])
+    class FakeRegen:
+        gen_model = "g"
+        def regenerate(self, **kw):
+            return ("regenerated", kw["coco_class"])
+    eng = generative.SplitEngine(completer=FakeCompleter(), regenerator=FakeRegen())
+    assert eng.complete(mesh=None, cloud=7, crop_path=None, coco_class="x") == ("completed", 7)
+    assert eng.regenerate(cloud=None, crop_path=None, coco_class="chair") == ("regenerated", "chair")
+    assert eng.gen_model == "g" and eng.completion_model == "c"
 
 
 def test_make_engine_reads_both_endpoints(monkeypatch):
@@ -68,13 +100,179 @@ def test_local_engine_complete_closes_an_open_shell():
     assert out is not None and len(out.vertices) > 0
 
 
-def test_runpod_seams_raise_until_contract_provided():
-    eng = generative.RunPodEngine("k", gen_endpoint="gen", completion_endpoint="comp")
-    with pytest.raises(NotImplementedError):
-        eng._build_input(mode="complete", model="pointr", crop_path=None,
-                         coco_class="chair", cloud=None, mesh=None)
-    with pytest.raises(NotImplementedError):
+def test_runpod_build_input_regenerate_encodes_the_crop(tmp_path):
+    Image = pytest.importorskip("PIL.Image")
+    import base64
+    crop = tmp_path / "crop.jpg"
+    Image.new("RGB", (32, 32), (10, 20, 30)).save(crop)
+    eng = generative.RunPodEngine("k", gen_endpoint="gen")
+    payload = eng._build_input(mode="regenerate", model="hunyuan3d",
+                               crop_path=str(crop), coco_class="chair", cloud=None)
+    assert payload["mode"] == "regenerate" and payload["model"] == "hunyuan3d"
+    assert payload["coco_class"] == "chair"
+    assert len(base64.b64decode(payload["image_b64"])) > 100
+
+
+def test_runpod_build_input_complete_encodes_the_cloud():
+    import base64
+    import io
+    eng = generative.RunPodEngine("k", completion_endpoint="comp")
+    cloud = np.arange(30, dtype=np.float32).reshape(10, 3)
+    payload = eng._build_input(mode="complete", model="pointr", crop_path=None,
+                               coco_class="couch", cloud=cloud, mesh=None)
+    back = np.load(io.BytesIO(base64.b64decode(payload["cloud_npy_b64"])))
+    assert back.shape == (10, 3) and np.allclose(back, cloud)
+
+
+def test_runpod_decode_mesh_round_trips_obj():
+    o3d = pytest.importorskip("open3d")
+    import base64
+    import tempfile
+    box = o3d.geometry.TriangleMesh.create_box(0.5, 0.5, 0.5)
+    with tempfile.NamedTemporaryFile(suffix=".obj", delete=False) as tf:
+        path = tf.name
+    o3d.io.write_triangle_mesh(path, box)
+    with open(path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    eng = generative.RunPodEngine("k", gen_endpoint="gen")
+    rec = eng._decode_mesh({"mesh_b64": b64, "format": "obj"})
+    assert len(rec.vertices) > 0
+
+
+def test_runpod_decode_mesh_rejects_empty_output():
+    eng = generative.RunPodEngine("k", gen_endpoint="gen")
+    with pytest.raises(RuntimeError):
         eng._decode_mesh({})
+
+
+def test_gen_model_selected_by_tier():
+    # fix K1: tiers 1-2 -> TripoSG, tiers 3-4 -> Hunyuan3D
+    assert generative.gen_model_for_tier(1) == "triposg"
+    assert generative.gen_model_for_tier(2) == "triposg"
+    assert generative.gen_model_for_tier(3) == "hunyuan3d"
+    assert generative.gen_model_for_tier(4) == "hunyuan3d"
+    assert generative.gen_model_for_tier(None) == "triposg"  # safe default
+
+
+def test_make_engine_tier_sets_runpod_gen_model(monkeypatch):
+    monkeypatch.setenv("RUNPOD_API_KEY", "k")
+    monkeypatch.setenv("RUNPOD_GEN_ENDPOINT_ID", "gen")
+    monkeypatch.delenv("RUNPOD_GEN_MODEL", raising=False)
+    # no local GPU: model selection is what's under test, not Split composition
+    monkeypatch.setattr(generative.LocalGpuEngine, "is_available", staticmethod(lambda: False))
+    eng = generative.make_engine(tier=4)
+    assert isinstance(eng, generative.RunPodEngine) and eng.gen_model == "hunyuan3d"
+    # explicit override still wins
+    monkeypatch.setenv("RUNPOD_GEN_MODEL", "triposg")
+    assert generative.make_engine(tier=4).gen_model == "triposg"
+
+
+def _box(cx, cy, cz, sx, sy, sz):
+    import open3d as o3d
+    b = o3d.geometry.TriangleMesh.create_box(sx, sy, sz)
+    b.translate((cx - sx / 2, cy - sy / 2, cz - sz / 2))
+    return b
+
+
+def test_strip_removes_hallucinated_mat():
+    # a SMALL box standing on a thin full-footprint mat (the Hunyuan
+    # display-base artifact): the mat must go, the object must stay.
+    chair = _box(0, 0.15, 0, 0.2, 0.3, 0.2)   # miniature on the mat
+    mat = _box(0, 0.005, 0, 1.6, 0.01, 1.6)
+    cleaned = generative._strip_base_and_fragments(chair + mat)
+    import numpy as np
+    ext = np.asarray(cleaned.get_max_bound()) - np.asarray(cleaned.get_min_bound())
+    assert ext[0] < 0.6 and ext[2] < 0.6      # mat footprint (1.6 m) gone
+    assert ext[1] > 0.25                       # object height kept
+
+
+def test_strip_removes_tilted_mat():
+    # the mesh comes out VIEW-ALIGNED (tilted) — the mat is not axis-aligned,
+    # which defeated the first (axis-band) detector. Plane RANSAC must not care.
+    import numpy as np
+    import open3d as o3d
+    chair = _box(0, 0.15, 0, 0.2, 0.3, 0.2)
+    mat = _box(0, 0.005, 0, 1.6, 0.01, 1.6)
+    m = chair + mat
+    R = m.get_rotation_matrix_from_xyz((0.5, 0.2, 0.3))   # arbitrary tilt
+    m.rotate(R, center=(0, 0, 0))
+    cleaned = generative._strip_base_and_fragments(m)
+    diag0 = np.linalg.norm(np.asarray(m.get_max_bound()) - np.asarray(m.get_min_bound()))
+    diag1 = np.linalg.norm(np.asarray(cleaned.get_max_bound()) - np.asarray(cleaned.get_min_bound()))
+    assert diag1 < 0.5 * diag0                 # mat (the dominant extent) gone
+
+
+def test_strip_keeps_table_with_legs():
+    # a table = dominant flat top + legs spanning the same footprint: the
+    # rest-footprint test must keep it whole (legs cover the top's footprint).
+    table = _box(0, 0.72, 0, 1.6, 0.06, 0.9)
+    for x in (-0.7, 0.7):
+        for z in (-0.35, 0.35):
+            table = table + _box(x, 0.35, z, 0.08, 0.7, 0.08)
+    n_before = len(table.triangles)
+    cleaned = generative._strip_base_and_fragments(table)
+    assert len(cleaned.triangles) == n_before
+
+
+def test_strip_drops_large_detached_component():
+    # a 17%-area armrest floating 65 cm from its chair passed the old <15%
+    # size rule (seen live) — detachment alone must drop it now, any size
+    body = _box(0, 0.5, 0, 0.5, 1.0, 0.5)
+    armrest = _box(0, 2.0, 0, 0.4, 0.2, 0.2)
+    import numpy as np
+    cleaned, frac = generative._strip_base_and_fragments(body + armrest,
+                                                         return_stats=True)
+    assert np.asarray(cleaned.get_max_bound())[1] < 1.5   # floater gone
+    assert 0.05 < frac < 0.3                              # its share reported
+
+
+def test_clean_gen_rejects_mostly_debris(monkeypatch):
+    # when a third+ of the generation floats detached, the object is broken:
+    # ship nothing rather than an amputated body + hovering pieces
+    monkeypatch.delenv("VID2SIM_GEN_CLEAN", raising=False)
+    body = _box(0, 0.5, 0, 0.4, 0.8, 0.4)
+    debris = _box(2.0, 0.5, 0, 0.5, 0.5, 0.5)
+    m, frac = generative._clean_gen(body + debris)
+    assert m is None and frac > 0.3
+
+
+def test_shattered_generation_is_rejected():
+    # three similar-size disconnected pieces = debris, not an object
+    debris = _box(0, 0, 0, 0.3, 0.3, 0.3) + _box(1, 0, 0, 0.3, 0.3, 0.3) \
+        + _box(2, 0, 0, 0.28, 0.28, 0.28)
+    assert generative._looks_shattered(debris)
+    assert not generative._looks_shattered(_box(0, 0, 0, 0.5, 0.5, 0.5))
+
+
+def test_class_dims_gate_rejects_slab_chair():
+    # a 'chair' that is a 0.24 m-tall slab (thick fused mat) is nonsense;
+    # a 0.9 m one is fine
+    assert not generative._class_dims_ok(_box(0, 0.12, 0, 1.2, 0.24, 1.2), "chair")
+    assert generative._class_dims_ok(_box(0, 0.45, 0, 0.5, 0.9, 0.5), "chair")
+
+
+def test_strip_keeps_solid_objects_untouched():
+    # a couch-like solid is fat all the way up -> the mat rule must NOT fire
+    couch = _box(0, 0.45, 0, 2.0, 0.9, 0.9)
+    n_before = len(couch.triangles)
+    cleaned = generative._strip_base_and_fragments(couch)
+    assert len(cleaned.triangles) == n_before
+
+
+def test_strip_drops_floating_fragments():
+    body = _box(0, 0.5, 0, 0.5, 1.0, 0.5)
+    crumb = _box(2.0, 2.0, 2.0, 0.05, 0.05, 0.05)   # tiny far-away fragment
+    cleaned = generative._strip_base_and_fragments(body + crumb)
+    import numpy as np
+    hi = np.asarray(cleaned.get_max_bound())
+    assert hi[0] < 1.0 and hi[1] < 1.5          # crumb (at ~2.0) gone
+
+
+def test_runpod_regenerate_declines_without_crop():
+    # image-conditioned band, no crop -> decline (None), never raise (a raise
+    # here killed a full assembly run: the caller must be able to drop and go on)
+    eng = generative.RunPodEngine("k", gen_endpoint="gen")
+    assert eng.regenerate(cloud=None, crop_path=None, coco_class="chair") is None
 
 
 def test_regen_result_defaults_are_generative_provenance():
@@ -106,14 +304,100 @@ def test_local_gpu_falls_back_gracefully_when_models_missing():
     assert eng.regenerate(cloud=None, crop_path=None, coco_class="chair") is None
 
 
-def test_coarse_align_scales_unit_box_to_cloud_bbox():
+def test_coarse_align_uses_class_prior_for_size_not_the_cloud():
     o3d = pytest.importorskip("open3d")
-    box = o3d.geometry.TriangleMesh.create_box(1, 1, 1)  # unit cube at origin..1
+    box = o3d.geometry.TriangleMesh.create_box(1, 1, 1)  # unit cube
     box.compute_vertex_normals()
-    # target cloud spanning a 2 x 0.5 x 4 box centred at (10, 1, -3)
-    lo = np.array([9.0, 0.75, -5.0]); hi = np.array([11.0, 1.25, -1.0])
+    # The cloud is a PARTIAL fragment (0.2 x 0.05 x 0.4) — its extent must NOT set
+    # the size (that gave 0.1-25 kg chairs). Size comes from the class prior: a
+    # chair's largest side is 0.90 m, so the unit cube (max extent 1) -> 0.90 cube,
+    # proportions intact, and it is CENTRED on the cloud (placement only).
+    lo = np.array([9.0, 0.975, -5.2]); hi = np.array([9.2, 1.025, -4.8])
     cloud = np.array([lo, hi, (lo + hi) / 2])
-    out = generative.coarse_align_to_cloud(box, cloud)
+    out = generative.coarse_align_to_cloud(box, cloud, "chair")
     ab = out.get_axis_aligned_bounding_box()
-    assert np.allclose(ab.min_bound, lo, atol=1e-6)
-    assert np.allclose(ab.max_bound, hi, atol=1e-6)
+    size = np.asarray(ab.max_bound) - np.asarray(ab.min_bound)
+    centre = (np.asarray(ab.max_bound) + np.asarray(ab.min_bound)) / 2
+    assert np.allclose(size, 0.90, atol=1e-6)                 # class prior, not cloud
+    assert np.allclose(centre, [9.1, 1.0, -5.0], atol=1e-6)   # placed on the cloud
+
+
+def test_coarse_align_unknown_class_uses_default_size():
+    o3d = pytest.importorskip("open3d")
+    box = o3d.geometry.TriangleMesh.create_box(2, 1, 1)  # max extent 2
+    box.compute_vertex_normals()
+    cloud = np.array([[0.0, 0.0, 0.0], [0.1, 0.1, 0.1]])
+    out = generative.coarse_align_to_cloud(box, cloud, "unicorn")
+    ab = out.get_axis_aligned_bounding_box()
+    size = np.asarray(ab.max_bound) - np.asarray(ab.min_bound)
+    # default prior 0.60 on the largest side; proportions kept (2:1:1 -> 0.6:0.3:0.3)
+    assert np.allclose(size, [0.60, 0.30, 0.30], atol=1e-6)
+
+
+def test_class_dims_gate_rejects_panel_chair():
+    """A paper-thin PANEL 'chair' (0.25 m wide sheet) passed the height-only
+    gate and shipped as a floating board — the width check must catch it."""
+    assert not generative._class_dims_ok(_box(0, 0.45, 0, 0.25, 0.9, 0.05), "chair")
+    assert generative._class_dims_ok(_box(0, 0.45, 0, 0.5, 0.9, 0.5), "chair")
+
+
+def test_too_thin_rejects_l_shell_but_keeps_furniture():
+    """Drop-garbage policy: a bent L-shell 'table' (two paper-thin sheets
+    spanning a table-sized hull, enc/hull ~2%) is rejected; a real table shape
+    passes. Fixture sheets are DISJOINT (1 mm apart): o3d calls intersecting
+    components non-watertight, which would skip the gate."""
+    import open3d as o3d
+
+    shell = _box(0, 0, 0, 1.2, 0.005, 1.2) + _box(0, 0.4, 0, 0.005, 0.78, 1.2)
+    assert generative._too_thin(shell)
+    # table: 6 cm top over a fat pedestal -> comfortably above the 3% bar
+    table = _box(0, 0.7, 0, 1.2, 0.06, 0.8) + _box(0.45, 0, 0.25, 0.3, 0.69, 0.3)
+    assert not generative._too_thin(table)
+    # non-watertight -> skipped (enclosed volume is meaningless)
+    open_shell = _box(0, 0, 0, 1.0, 0.02, 1.0)
+    open_shell.triangles = o3d.utility.Vector3iVector(
+        __import__("numpy").asarray(open_shell.triangles)[:-2])
+    assert not generative._too_thin(open_shell)
+
+
+def test_accept_regen_applies_thin_shell_gate():
+    shell = _box(0, 0.2, 0, 1.2, 0.005, 1.2) + _box(0, 0.6, 0, 0.005, 0.75, 1.2)
+    assert not generative._accept_regen(shell, "dining table")
+
+
+def test_align_and_accept_retries_class_prior_when_icp_sizing_fails(monkeypatch):
+    """A fine generation ICP-sized from a PARTIAL cloud can land outside its
+    class range (tier 3 lost the couch this way). The SAME mesh must get a
+    second chance at class-prior size before the object is dropped."""
+    import numpy as np
+    from reconstruction import icp_align
+
+    couch = _box(0, 0.4, 0, 2.0, 0.8, 0.9)   # plausible couch proportions
+    tiny = _box(0, 0.1, 0, 0.5, 0.2, 0.22)   # ICP-shrunk to fragment size
+
+    monkeypatch.setattr(
+        icp_align, "align",
+        lambda mesh, cloud, cls, **k: icp_align.AlignResult(
+            mesh=tiny, alignment_method="fpfh_icp",
+            scale_method="per_axis_median"))
+    cloud = np.random.rand(100, 3)
+    got = generative._align_and_accept(couch, cloud, "couch")
+    assert got is not None, "class-prior retry must rescue the good mesh"
+    mesh, align_m, scale_m = got
+    assert (align_m, scale_m) == ("coarse_aligned", "class_prior")
+    ext = mesh.get_max_bound() - mesh.get_min_bound()
+    assert 1.4 * 0.7 <= float(max(ext[0], ext[2]))  # plausibly couch-sized
+
+
+def test_align_and_accept_drops_when_both_sizings_fail(monkeypatch):
+    """Garbage under BOTH sizings really is garbage -> dropped (user policy)."""
+    import numpy as np
+    from reconstruction import icp_align
+
+    slab = _box(0, 0.05, 0, 1.2, 0.1, 1.2)   # a slab is no couch at any size
+    monkeypatch.setattr(
+        icp_align, "align",
+        lambda mesh, cloud, cls, **k: icp_align.AlignResult(
+            mesh=slab, alignment_method="fpfh_icp",
+            scale_method="per_axis_median"))
+    assert generative._align_and_accept(slab, np.random.rand(100, 3), "couch") is None

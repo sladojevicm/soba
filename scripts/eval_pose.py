@@ -1,28 +1,40 @@
 #!/usr/bin/env python3
 """Evaluate estimated camera poses against a ground-truth trajectory (Phase 3).
 
-Reads a PerceptionBundle's poses.json + frame_times.json, associates each
-estimated pose with the nearest ground-truth pose by timestamp, rigidly aligns
-the two trajectories (SE(3) Umeyama / Kabsch — no scale, since RGB-D is metric),
-and reports the Absolute Trajectory Error (ATE). Ground truth is a TUM-format
-file: "timestamp tx ty tz qx qy qz qw" per line.
+Reads a PerceptionBundle's poses.json + frame_times.json (or an explicit
+--poses file), associates each estimated pose with the nearest ground-truth
+pose by timestamp (TUM protocol), and reports:
 
-Pure numpy + stdlib, so it runs without open3d/opencv/evo. Also writes the
-estimated trajectory in TUM format for optional cross-checking with `evo_ape`.
+* ATE after SE(3) Umeyama alignment (no scale — the pipeline claims METRIC
+  poses, so this is the honest headline number);
+* ATE after Sim(3) alignment, WITH the recovered scale factor printed — the
+  scale is a diagnostic of slam.solve_metric_scale (1.00 = truly metric);
+* translational RPE over 1 s (drift per second).
+
+Ground truth is a TUM-format file: "t tx ty tz qx qy qz qw" per line.
+Metric math lives in src/reconstruction/traj_eval.py (unit-tested); this
+script is the CLI. Also writes the estimated trajectory in TUM format for
+optional cross-checking with `evo_ape`.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-def read_estimated(bundle_root: Path) -> tuple[np.ndarray, np.ndarray]:
+from reconstruction import traj_eval  # noqa: E402
+
+
+def read_estimated(bundle_root: Path, poses_file: Path | None = None
+                   ) -> tuple[np.ndarray, np.ndarray]:
     """Return (timestamps[N], T_world_camera[N,4,4]) ordered by frame_id."""
-    records = json.loads((bundle_root / "poses.json").read_text())
+    records = json.loads((poses_file or bundle_root / "poses.json").read_text())
     records.sort(key=lambda r: r["frame_id"])
     times = json.loads((bundle_root / "frame_times.json").read_text())
     if len(times) != len(records):
@@ -31,45 +43,6 @@ def read_estimated(bundle_root: Path) -> tuple[np.ndarray, np.ndarray]:
         )
     Ts = np.array([r["T_world_camera"] for r in records], dtype=np.float64)
     return np.asarray(times, dtype=np.float64), Ts
-
-
-def read_groundtruth(path: Path) -> tuple[np.ndarray, np.ndarray]:
-    """Return (timestamps[M], positions[M,3]) from a TUM groundtruth.txt."""
-    ts, xyz = [], []
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        p = line.split()
-        if len(p) < 8:
-            continue
-        ts.append(float(p[0]))
-        xyz.append([float(p[1]), float(p[2]), float(p[3])])
-    return np.asarray(ts, dtype=np.float64), np.asarray(xyz, dtype=np.float64)
-
-
-def associate(est_t: np.ndarray, gt_t: np.ndarray, max_dt: float):
-    """Nearest-timestamp association; returns index pairs (i_est, j_gt)."""
-    order = np.argsort(gt_t)
-    gt_sorted = gt_t[order]
-    pairs = []
-    for i, t in enumerate(est_t):
-        k = int(np.searchsorted(gt_sorted, t))
-        cands = [c for c in (k - 1, k) if 0 <= c < len(gt_sorted)]
-        j = min(cands, key=lambda c: abs(gt_sorted[c] - t))
-        if abs(gt_sorted[j] - t) <= max_dt:
-            pairs.append((i, int(order[j])))
-    return pairs
-
-
-def kabsch(P: np.ndarray, Q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Rigid R,t (no scale) mapping P onto Q, minimising ||R P + t - Q||."""
-    muP, muQ = P.mean(0), Q.mean(0)
-    H = (P - muP).T @ (Q - muQ)
-    U, _, Vt = np.linalg.svd(H)
-    d = np.sign(np.linalg.det(Vt.T @ U.T))
-    R = Vt.T @ np.diag([1.0, 1.0, d]) @ U.T
-    return R, muQ - R @ muP
 
 
 def rotmat_to_quat(R: np.ndarray) -> np.ndarray:
@@ -103,27 +76,39 @@ def rotmat_to_quat(R: np.ndarray) -> np.ndarray:
     return np.array([qx, qy, qz, qw])
 
 
+def report(res: dict, max_dt: float) -> None:
+    print(f"frames estimated:   {res['n_est']}")
+    print(f"associated pairs:   {res['n_pairs']}  (|dt| <= {max_dt}s)")
+    print(f"trajectory length:  {res['gt_traj_len_m']:.3f} m")
+    a = res["ate_se3"]
+    print("--- ATE, SE(3)-aligned (no scale — metric claim) ---")
+    print(f"  RMSE:   {a['rmse'] * 100:.2f} cm")
+    print(f"  mean:   {a['mean'] * 100:.2f} cm")
+    print(f"  median: {a['median'] * 100:.2f} cm")
+    print(f"  max:    {a['max'] * 100:.2f} cm")
+    a = res["ate_sim3"]
+    print(f"--- ATE, Sim(3)-aligned (recovered scale s = {a['scale']:.4f}) ---")
+    print(f"  RMSE:   {a['rmse'] * 100:.2f} cm")
+    r = res["rpe_1s"]
+    print(f"--- RPE, translational drift over 1 s ({r['pairs']} pairs) ---")
+    print(f"  RMSE:   {r['rmse'] * 100:.2f} cm/s")
+    print(f"  median: {r['median'] * 100:.2f} cm/s")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--bundle", required=True, type=Path)
     ap.add_argument("--gt", required=True, type=Path)
+    ap.add_argument("--poses", type=Path, default=None,
+                    help="poses json (default: <bundle>/poses.json); lets one "
+                         "bundle carry poses_tier1.json / poses_mast3r.json etc.")
     ap.add_argument("--max-dt", type=float, default=0.02, help="assoc tolerance (s)")
     ap.add_argument("--out", type=Path, default=Path("estimated.tum"))
     args = ap.parse_args()
 
-    est_t, est_T = read_estimated(args.bundle)
-    gt_t, gt_xyz = read_groundtruth(args.gt)
-    est_xyz = est_T[:, :3, 3]
-
-    pairs = associate(est_t, gt_t, args.max_dt)
-    if len(pairs) < 3:
-        raise SystemExit(f"only {len(pairs)} associations (<3) — check timestamps/tol")
-
-    P = np.array([est_xyz[i] for i, _ in pairs])
-    Q = np.array([gt_xyz[j] for _, j in pairs])
-    R, t = kabsch(P, Q)
-    aligned = (R @ P.T).T + t
-    err = np.linalg.norm(aligned - Q, axis=1)
+    est_t, est_T = read_estimated(args.bundle, args.poses)
+    gt_t, gt_T = traj_eval.read_tum_trajectory(args.gt)
+    res = traj_eval.evaluate_trajectory(est_t, est_T, gt_t, gt_T, max_dt=args.max_dt)
 
     # estimated.tum for optional `evo_ape tum gt.txt estimated.tum -a`
     with args.out.open("w") as f:
@@ -132,15 +117,7 @@ def main() -> None:
             qx, qy, qz, qw = rotmat_to_quat(Ti[:3, :3])
             f.write(f"{ti:.6f} {x} {y} {z} {qx} {qy} {qz} {qw}\n")
 
-    print(f"frames estimated:   {len(est_t)}")
-    print(f"gt poses:           {len(gt_t)}")
-    print(f"associated pairs:   {len(pairs)}  (|dt| <= {args.max_dt}s)")
-    print(f"trajectory length:  {np.linalg.norm(np.diff(Q, axis=0), axis=1).sum():.3f} m")
-    print("--- ATE (SE(3)-aligned position error) ---")
-    print(f"  RMSE:   {np.sqrt((err**2).mean())*100:.2f} cm")
-    print(f"  mean:   {err.mean()*100:.2f} cm")
-    print(f"  median: {np.median(err)*100:.2f} cm")
-    print(f"  max:    {err.max()*100:.2f} cm")
+    report(res, args.max_dt)
     print(f"wrote {args.out}")
 
 

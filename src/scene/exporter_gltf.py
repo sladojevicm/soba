@@ -20,13 +20,59 @@ def decimate(mesh, target_triangles: int):
     return out
 
 
-def write_glb(mesh, path: Path | str, *, decimate_to: int | None = None) -> Path:
-    """Write a mesh to .glb (optionally decimated). Returns the path."""
+def smooth_taubin(mesh, iterations: int):
+    """Volume-preserving Taubin smoothing for the RENDER mesh ONLY (cosmetic).
+
+    De-facets the marching-cubes / voxel staircasing that fusion's `smooth_sigma`
+    leaves on the OBSERVED surface (smooth_sigma rounds only the unobserved back,
+    and the "tsdf" keep-band gets no smoothing at all). Returns a smoothed COPY —
+    the caller's mesh is untouched, so the collider/mass path keeps the exact
+    observed geometry. No-op (returns the same object) if iterations<=0 or empty.
+
+    Taubin's lambda/mu pair (Open3D defaults 0.5 / -0.53) counteracts the shrink
+    of plain Laplacian, so a watertight mesh stays watertight and the enclosed
+    volume is preserved.
+
+    We ONLY weld coincident vertices/triangles first — that connects the
+    marching-cubes / TripoSG triangle soup so neighbour-averaging actually
+    propagates. We deliberately do NOT run remove_degenerate_triangles /
+    remove_non_manifold_edges here: those DELETE geometry, and on the thin shells
+    the generative (TripoSG) meshes are, they punch holes and shred the surface
+    into ribbons (visible tearing). Smoothing must never remove surface.
+    """
+    if iterations <= 0 or len(mesh.vertices) == 0:
+        return mesh
+    import open3d as o3d
+
+    m = o3d.geometry.TriangleMesh(mesh)  # copy — never mutate the caller's mesh
+    m.remove_duplicated_vertices()   # weld only — connects the soup, deletes nothing
+    m.remove_duplicated_triangles()
+    m = m.filter_smooth_taubin(number_of_iterations=int(iterations))
+    m.compute_vertex_normals()
+    return m
+
+
+def write_glb(mesh, path: Path | str, *, decimate_to: int | None = None,
+              smooth_iters: int = 0) -> Path:
+    """Write a mesh to .glb (optionally Taubin-smoothed, then decimated). Returns
+    the path. `smooth_iters` is a RENDER-only cosmetic polish (see smooth_taubin);
+    leave it 0 for collider hulls so their geometry stays exact."""
     import open3d as o3d
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Decimate FIRST (on the clean input), THEN smooth. Taubin can break
+    # manifold-ness (self-intersections -> dark shading/see-through artefacts in
+    # the browser); decimating a broken mesh then tears real boundaries. Order +
+    # a guard: if smoothing turns a WATERTIGHT mesh non-watertight, discard the
+    # smooth and keep the clean decimated mesh (fusion output is already smooth,
+    # so it loses nothing; a genuinely faceted non-watertight input still gets
+    # polished).
     m = decimate(mesh, decimate_to) if decimate_to else mesh
+    if smooth_iters:
+        s = smooth_taubin(m, smooth_iters)
+        if not (m.is_watertight() and not s.is_watertight()):
+            m = s
     if not m.has_vertex_normals():
         m.compute_vertex_normals()
     ok = o3d.io.write_triangle_mesh(str(path), m)

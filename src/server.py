@@ -114,6 +114,17 @@ def create_app(
             return Response("hull not found", status_code=404)
         return FileResponse(path, media_type=GLB_MEDIA_TYPE)
 
+    async def eval_json(request):
+        # Ground-truth evaluation report (scripts/evaluate_scene.py). Scenes
+        # without one are the NORMAL case, so answer 200 with a "not available"
+        # marker instead of a 404 — the browser logs every 404 response as a
+        # console error, which would fail the headless zero-console-errors
+        # check on perfectly healthy scenes.
+        p = scene_dir / "eval.json"
+        if not p.is_file():
+            return JSONResponse({"available": False})
+        return FileResponse(p, media_type="application/json")
+
     async def events(request):
         async def gen():
             scene = _read_scene() or {}
@@ -141,6 +152,7 @@ def create_app(
     routes = [
         Route("/", index),
         Route("/scene.json", scene_json),
+        Route("/eval.json", eval_json),
         Route("/meshes/{id}.glb", mesh),
         Route("/hulls/{stem}.glb", hull),
         Route("/events", events),
@@ -151,7 +163,19 @@ def create_app(
     if frontend_dir.is_dir():
         routes.append(Mount("/", app=StaticFiles(directory=str(frontend_dir))))
 
-    return Starlette(routes=routes)
+    # No-store everything: the viewer is a live dev tool and meshes/app.js get
+    # regenerated in place, so a browser MUST NOT serve a stale cached mesh (a
+    # rebuilt object otherwise renders as its old geometry until a hard refresh).
+    from starlette.middleware import Middleware
+    from starlette.middleware.base import BaseHTTPMiddleware
+
+    async def _no_store(request, call_next):
+        resp = await call_next(request)
+        resp.headers["Cache-Control"] = "no-store, must-revalidate"
+        return resp
+
+    return Starlette(routes=routes,
+                     middleware=[Middleware(BaseHTTPMiddleware, dispatch=_no_store)])
 
 
 # Module-level app for `uvicorn server:app` (uses env/defaults).
