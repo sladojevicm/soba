@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# vid2sim-v2 — ComPC middle-band setup (RunPod, big-GPU host).
+# soba — ComPC middle-band setup (RunPod, big-GPU host).
 #
 # ComPC (Tianxinhuang/ComPC, ICLR'25) is training-free and PRESERVES observed
 # geometry, but needs its OWN brittle env: python 3.10.13 + CUDA 11.6 toolkit +
 # torch 1.12.1+cu116 + a compiled diff-gaussian-rasterizer. That is incompatible
 # with the host pipeline's torch 2.x, so we build it in an ISOLATED micromamba
-# env and the pipeline calls it as a subprocess (VID2SIM_COMPC_CMD).
+# env and the pipeline calls it as a subprocess (SOBA_COMPC_CMD).
 #
 # Diffusion weights (Stable-Diffusion-2.1 + Zero123) AUTO-DOWNLOAD from
 # HuggingFace on first run — no manual download here.
@@ -23,7 +23,7 @@ WORKDIR="${WORKDIR:-/workspace}"
 COMPC_HOME="${COMPC_HOME:-$WORKDIR/ComPC}"
 COMPC_ENV="${COMPC_ENV:-$WORKDIR/compc-env}"
 MAMBA_ROOT="${MAMBA_ROOT:-$WORKDIR/micromamba}"
-REPO_DIR="${REPO_DIR:-$WORKDIR/vid2sim-v2}"
+REPO_DIR="${REPO_DIR:-$WORKDIR/soba}"
 
 log(){ printf '\n\033[1;35m== %s ==\033[0m\n' "$*"; }
 
@@ -95,11 +95,11 @@ PY
 
 cat <<EOF
 
-\033[1;32mComPC env ready.\033[0m To use it from the pipeline (in the vid2sim venv):
+\033[1;32mComPC env ready.\033[0m To use it from the pipeline (in the soba venv):
 
   export COMPC_HOME="$COMPC_HOME"
-  export VID2SIM_COMPLETION_MODEL=compc
-  export VID2SIM_COMPC_CMD="$PY $REPO_DIR/deploy/runpod/compc_runner.py --input {input} --output {output}"
+  export SOBA_COMPLETION_MODEL=compc
+  export SOBA_COMPC_CMD="$PY $REPO_DIR/deploy/runpod/compc_runner.py --input {input} --output {output}"
 
 Quick standalone check (one object) BEFORE the full pipeline:
   $PY -c "import numpy as np; np.save('/tmp/p.npy', (np.random.rand(2048,3)-0.5).astype('float32'))"

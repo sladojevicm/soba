@@ -7,7 +7,7 @@ needed. Completes a partial object point cloud (N,3) into a dense one (~16k pts)
 which the caller meshes.
 
 The PoinTr repo lives OUTSIDE this repo (clone of github.com/yuxumin/PoinTr) at
-POINTR_HOME (default ~/projects/vid2sim/PoinTr), with the PCN checkpoint at
+POINTR_HOME (default ~/projects/soba/PoinTr), with the PCN checkpoint at
 pretrained/PoinTr_PCN.pth. Verified on an RTX 4060: loads in ~30 s, < 250 MB VRAM.
 
 PCN was trained on chair/sofa/table (among others) — in-domain for our furniture
@@ -26,7 +26,7 @@ from pathlib import Path
 import numpy as np
 
 _POINTR_HOME = Path(os.environ.get(
-    "POINTR_HOME", str(Path.home() / "projects" / "vid2sim" / "PoinTr")))
+    "POINTR_HOME", str(Path.home() / "projects" / "soba" / "PoinTr")))
 
 # model name -> (config relative to POINTR_HOME, checkpoint relative to POINTR_HOME)
 # NOTE the PCN models expect PCN's own pre-normalised convention (their inference
@@ -161,12 +161,12 @@ def complete_points(partial: np.ndarray, *, model: str = "pointr",
     (PoinTr normalises to a unit sphere internally; we denormalise back). The
     input should be object-local (recentred); output is too.
 
-    pca_align (default on; env VID2SIM_PCA_ALIGN=0 to disable): yaw-canonicalise
+    pca_align (default on; env SOBA_PCA_ALIGN=0 to disable): yaw-canonicalise
     the object before completion to reduce the arbitrary-orientation variance the
     model is sensitive to, then rotate the result back."""
     import torch
     if pca_align is None:
-        pca_align = os.environ.get("VID2SIM_PCA_ALIGN", "1") != "0"
+        pca_align = os.environ.get("SOBA_PCA_ALIGN", "1") != "0"
     net = load_model(model)
     pts = np.asarray(partial, dtype=np.float32)
     centroid = pts.mean(axis=0)

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# vid2sim-v2 — RunPod host-pipeline bootstrap.
+# soba — RunPod host-pipeline bootstrap.
 #
 # Idempotent: safe to re-run. Targets a RunPod "PyTorch 2.x / CUDA 12.x" pod
 # template (torch + CUDA already installed). It clones the repo, installs the
@@ -17,10 +17,10 @@
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
-REPO_URL="${REPO_URL:-https://github.com/sladojevicm/vid2sim-v2.git}"
+REPO_URL="${REPO_URL:-https://github.com/sladojevicm/soba.git}"
 REPO_BRANCH="${REPO_BRANCH:-fix/phase3-pose-and-eval}"
 WORKDIR="${WORKDIR:-/workspace}"
-REPO_DIR="${REPO_DIR:-$WORKDIR/vid2sim-v2}"
+REPO_DIR="${REPO_DIR:-$WORKDIR/soba}"
 POINTR_HOME="${POINTR_HOME:-$WORKDIR/PoinTr}"
 SETUP_POINTR="${SETUP_POINTR:-0}"   # 1 = also clone PoinTr (optional middle band)
 SETUP_COMPC="${SETUP_COMPC:-0}"     # 1 = also build ComPC (training-free, preserves
@@ -64,7 +64,7 @@ else
   echo "           pip install torch --index-url https://download.pytorch.org/whl/cu121" >&2
 fi
 
-log "Install vid2sim-v2 (recon + serve + dev extras)"
+log "Install soba (recon + serve + dev extras)"
 python3 -m pip install --upgrade pip -q
 python3 -m pip install -e "${REPO_DIR}[recon,serve,dev]" -q
 
@@ -107,7 +107,7 @@ if [ "$SETUP_COMPC" = "1" ]; then
   # Run non-fatally: a ComPC build hiccup must NOT break the working host pipeline.
   if COMPC_HOME="${COMPC_HOME:-$WORKDIR/ComPC}" REPO_DIR="$REPO_DIR" WORKDIR="$WORKDIR" \
        bash "$REPO_DIR/deploy/runpod/setup_compc.sh"; then
-    echo "ComPC env built. Export VID2SIM_COMPC_CMD (printed above) to activate."
+    echo "ComPC env built. Export SOBA_COMPC_CMD (printed above) to activate."
   else
     echo "WARNING: ComPC setup failed — host pipeline is unaffected. See output above." >&2
   fi
@@ -118,7 +118,7 @@ if [ "$SETUP_TRIPOSG" = "1" ]; then
   # Non-fatal: a TripoSG hiccup must NOT break the working host pipeline.
   if TRIPOSG_HOME="${TRIPOSG_HOME:-$WORKDIR/TripoSG}" \
        bash "$REPO_DIR/deploy/runpod/setup_triposg.sh"; then
-    echo "TripoSG ready. export VID2SIM_TRIPOSG_HOME=${TRIPOSG_HOME:-$WORKDIR/TripoSG}"
+    echo "TripoSG ready. export SOBA_TRIPOSG_HOME=${TRIPOSG_HOME:-$WORKDIR/TripoSG}"
   else
     echo "WARNING: TripoSG setup failed — host pipeline is unaffected. See above." >&2
   fi

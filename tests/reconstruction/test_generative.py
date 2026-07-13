@@ -229,7 +229,7 @@ def test_strip_drops_large_detached_component():
 def test_clean_gen_rejects_mostly_debris(monkeypatch):
     # when a third+ of the generation floats detached, the object is broken:
     # ship nothing rather than an amputated body + hovering pieces
-    monkeypatch.delenv("VID2SIM_GEN_CLEAN", raising=False)
+    monkeypatch.delenv("SOBA_GEN_CLEAN", raising=False)
     body = _box(0, 0.5, 0, 0.4, 0.8, 0.4)
     debris = _box(2.0, 0.5, 0, 0.5, 0.5, 0.5)
     m, frac = generative._clean_gen(body + debris)
@@ -293,7 +293,7 @@ def test_make_engine_prefers_local_gpu_when_cuda_available(monkeypatch):
 def test_make_engine_local_gpu_can_be_disabled(monkeypatch):
     monkeypatch.delenv("RUNPOD_API_KEY", raising=False)
     monkeypatch.setattr(generative.LocalGpuEngine, "is_available", staticmethod(lambda: True))
-    monkeypatch.setenv("VID2SIM_LOCAL_GPU", "0")
+    monkeypatch.setenv("SOBA_LOCAL_GPU", "0")
     assert isinstance(generative.make_engine(), generative.LocalEngine)
 
 

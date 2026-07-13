@@ -9,16 +9,16 @@ the runtime is a brittle CUDA 11.6 / torch 1.12 / py3.10 env — INCOMPATIBLE wi
 our venv (torch 2.6 / py3.12). So we never import ComPC; we run it as a quarantined
 SUBPROCESS in its own environment and exchange point clouds via .npy files.
 
-THE RUNNER CONTRACT (what `VID2SIM_COMPC_CMD` must satisfy)
+THE RUNNER CONTRACT (what `SOBA_COMPC_CMD` must satisfy)
 ----------------------------------------------------------
-`VID2SIM_COMPC_CMD` is a command *template* containing the literal tokens
+`SOBA_COMPC_CMD` is a command *template* containing the literal tokens
 `{input}` and `{output}`. We substitute temp file paths and run it. The command
 must, in ComPC's own env:
   1. load an (N,3) float32 array of object-local partial points from `{input}` (np.load),
   2. run ComPC completion,
   3. save the (M,3) float32 completed cloud to `{output}` (np.save), SAME frame as input.
 Example:
-  VID2SIM_COMPC_CMD="/opt/compc-env/bin/python ~/projects/vid2sim/ComPC/vid2sim_runner.py \\
+  SOBA_COMPC_CMD="/opt/compc-env/bin/python ~/projects/soba/ComPC/soba_runner.py \\
                      --input {input} --output {output}"
 If the var is unset or the runner fails, complete_points raises -> the engine
 falls back to local Poisson (never crashes the pipeline). Output is a dense cloud
@@ -38,22 +38,22 @@ import numpy as np
 
 # ComPC's SDS optimisation is per-object and slow (minutes); be generous but
 # bounded so a hung runner can't wedge the pipeline.
-_DEFAULT_TIMEOUT_S = int(os.environ.get("VID2SIM_COMPC_TIMEOUT", "1800"))
+_DEFAULT_TIMEOUT_S = int(os.environ.get("SOBA_COMPC_TIMEOUT", "1800"))
 
 
 def _build_command(input_path: Path, output_path: Path) -> list[str]:
-    """Resolve `VID2SIM_COMPC_CMD` into an argv list with {input}/{output} filled.
+    """Resolve `SOBA_COMPC_CMD` into an argv list with {input}/{output} filled.
 
     Raised errors here are caught upstream and turned into the Poisson fallback,
     so a missing/blank runner degrades gracefully rather than crashing."""
-    tmpl = os.environ.get("VID2SIM_COMPC_CMD", "").strip()
+    tmpl = os.environ.get("SOBA_COMPC_CMD", "").strip()
     if not tmpl:
         raise RuntimeError(
-            "VID2SIM_COMPC_CMD is not set — point it at a ComPC runner "
+            "SOBA_COMPC_CMD is not set — point it at a ComPC runner "
             "(see compc_completion docstring for the contract)")
     if "{input}" not in tmpl or "{output}" not in tmpl:
         raise RuntimeError(
-            "VID2SIM_COMPC_CMD must contain the {input} and {output} tokens")
+            "SOBA_COMPC_CMD must contain the {input} and {output} tokens")
     filled = tmpl.replace("{input}", str(input_path)).replace("{output}", str(output_path))
     return shlex.split(os.path.expanduser(filled))
 

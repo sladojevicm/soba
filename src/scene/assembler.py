@@ -249,7 +249,7 @@ def _assemble_object(obj: ObjectInput, oid: int, ground_y: float, out_dir: Path,
     exporter_gltf.write_glb(final_mesh, obj_dir / "mesh.glb",
                             decimate_to=decimate_to, smooth_iters=smooth_iters)
     import os as _os
-    if _os.environ.get("VID2SIM_DUMP_PLY"):  # debug: a readable copy for inspection
+    if _os.environ.get("SOBA_DUMP_PLY"):  # debug: a readable copy for inspection
         import open3d as _o3d
         _o3d.io.write_triangle_mesh(str(obj_dir / "mesh.ply"), final_mesh)
 
@@ -424,10 +424,10 @@ def assemble(objects: list[ObjectInput], poses: list[np.ndarray], out_dir: Path 
         for oid, (o, ph) in enumerate(zip(objects, phys_list))
     ]
 
-    # placement de-overlap (VID2SIM_DEOVERLAP=0 disables), then strip the
+    # placement de-overlap (SOBA_DEOVERLAP=0 disables), then strip the
     # internal half-extents field before schema validation
     import os as _os
-    if _os.environ.get("VID2SIM_DEOVERLAP", "1") != "0":
+    if _os.environ.get("SOBA_DEOVERLAP", "1") != "0":
         deoverlap(entries)
     for e in entries:
         e.pop("_half_extents", None)

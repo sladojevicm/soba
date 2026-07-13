@@ -82,7 +82,7 @@ let userInteracted = false;       // stop auto-framing once the user touches the
 // Debug handle for headless verification (scripts/verify_browser.js). Additive
 // and harmless: getters read live Rapier state, nothing in the viewer uses it.
 const dbg = { objects: [], framedAll: false, screenPos: null };
-window.__vid2sim = dbg;
+window.__soba = dbg;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -296,7 +296,7 @@ async function addObject(id, sceneJson) {
 }
 
 function statusLine() {
-  return `<b>vid2sim viewer</b>\n` +
+  return `<b>Soba viewer</b>\n` +
     `objects: ${loadedIds.size}\n` +
     `<span class="key">click</span> select · ` +
     `<span class="key">drag</span> push · ` +

@@ -1,4 +1,4 @@
-# vid2sim-v2 pipeline configuration (PLAN_FINAL_FINAL v11).
+# soba pipeline configuration (PLAN_FINAL_FINAL v11).
 #
 # Single source of truth for tier parameters, the per-class physical gates,
 # solidity factors, material densities, the physics lookup table, and the

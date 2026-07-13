@@ -1,4 +1,11 @@
-# vid2sim-v2 — Build Status & Handoff
+# Soba — Build Status & Handoff
+
+_Renamed from "vid2sim-v2" to "Soba" on 2026-07-13 (branding + code identifiers,
+e.g. `VID2SIM_*` env vars → `SOBA_*`; see the rename commit). The log entries
+below predate the rename and still say "vid2sim-v2" / `VID2SIM_*` — left as
+written since they're a historical record of what was actually run, not
+retroactively edited. Substitute `soba` / `SOBA_*` for any command you copy
+from below into a post-rename checkout._
 
 _Last updated: 2026-07-02. This is a working handoff so a fresh session can resume
 without re-deriving everything. The authoritative design is `PLAN_FINAL_FINAL.txt`

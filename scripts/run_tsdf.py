@@ -4,7 +4,7 @@ per-object meshes for inspection in Blender.
 
 Example:
   PYTHONPATH=src python scripts/run_tsdf.py \
-    --bundle ~/projects/vid2sim/data/replica/bundle_room0 \
+    --bundle ~/projects/soba/data/replica/bundle_room0 \
     --out    out/tsdf_room0 \
     --voxel  0.004 \
     --tracks 9 73 11

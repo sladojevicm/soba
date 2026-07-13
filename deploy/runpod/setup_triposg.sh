@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# vid2sim-v2 — local TripoSG (image-to-3D) setup for the generative band.
+# soba — local TripoSG (image-to-3D) setup for the generative band.
 #
 # Clones VAST-AI-Research/TripoSG, installs its python deps INTO the pod's
 # existing CUDA torch (we do NOT touch torch — TripoSG's requirements pin one,
@@ -57,9 +57,9 @@ print("weights under:", out)
 PY
 
 log "Smoke-import (no inference)"
-VID2SIM_TRIPOSG_HOME="$TRIPOSG_HOME" python3 - <<'PY'
+SOBA_TRIPOSG_HOME="$TRIPOSG_HOME" python3 - <<'PY'
 import os, sys
-home = os.environ["VID2SIM_TRIPOSG_HOME"]
+home = os.environ["SOBA_TRIPOSG_HOME"]
 for p in (home, os.path.join(home, "scripts")):
     sys.path.insert(0, p)
 from triposg.pipelines.pipeline_triposg import TripoSGPipeline  # noqa
@@ -71,8 +71,8 @@ PY
 cat <<EOF
 
 TripoSG ready. Tell the pipeline where it lives, then run the gate:
-    export VID2SIM_TRIPOSG_HOME=$TRIPOSG_HOME
+    export SOBA_TRIPOSG_HOME=$TRIPOSG_HOME
     PYTHONPATH=src python3 scripts/run_assemble.py --bundle bundles/office_3 --tier 2 --out out/scene_office_3
 Generative-routed objects now regenerate from their staged crops instead of being
-dropped. Tunables: VID2SIM_TRIPOSG_STEPS (default 50), _CFG (7.0), _SEED (42).
+dropped. Tunables: SOBA_TRIPOSG_STEPS (default 50), _CFG (7.0), _SEED (42).
 EOF

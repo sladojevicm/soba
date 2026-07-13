@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vid2sim.local/spec/scene.schema.json",
+  "$id": "https://soba.local/spec/scene.schema.json",
   "title": "SceneSpec v2.0",
-  "description": "VID2SIM v2 frozen scene contract (Contract 3, PLAN_FINAL_FINAL v11). Single typed boundary between the pipeline and the browser. DO NOT modify after freeze; a breaking change is a new major version.",
+  "description": "SOBA v2 frozen scene contract (Contract 3, PLAN_FINAL_FINAL v11). Single typed boundary between the pipeline and the browser. DO NOT modify after freeze; a breaking change is a new major version.",
   "type": "object",
   "required": ["version", "world", "ground", "objects", "camera_pose"],
   "additionalProperties": false,

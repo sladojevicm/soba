@@ -31,7 +31,7 @@ def client(scene_dir):
     # Zero replay delay so the SSE test doesn't sleep.
     import os
 
-    os.environ["VID2SIM_SSE_DELAY"] = "0"
+    os.environ["SOBA_SSE_DELAY"] = "0"
     return TestClient(create_app(scene_dir=scene_dir))
 
 
@@ -98,7 +98,7 @@ def test_events_replays_object_added_per_object(scene_dir):
     import httpx
     import uvicorn
 
-    os.environ["VID2SIM_SSE_DELAY"] = "0"
+    os.environ["SOBA_SSE_DELAY"] = "0"
     scene = json.loads((scene_dir / "scene.json").read_text())
     want_ids = [o["id"] for o in scene["objects"]]
 

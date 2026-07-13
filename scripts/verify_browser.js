@@ -11,7 +11,7 @@
 //   4. bodies load FIXED; after clicking an object through the real pointer
 //      path and letting the sim run ~3 s, at least one body is dynamic and NO
 //      body has a NaN or |position| > 50 m (no explosion / fall-through);
-//   5. "f" re-frames the camera on the whole scene (window.__vid2sim.framedAll).
+//   5. "f" re-frames the camera on the whole scene (window.__soba.framedAll).
 // Then screenshots the scene and prints a PASS/FAIL table. Exit 0 iff all pass.
 //
 // Usage (puppeteer is NOT vendored — install it anywhere and point NODE_PATH
@@ -53,10 +53,10 @@ function parseArgs(argv) {
     process.exit(2);
   }
   a.scene = path.resolve(REPO_ROOT, a.scene);
-  a.python = a.python || process.env.VID2SIM_PYTHON ||
-    path.join(os.homedir(), "projects/vid2sim/venv/bin/python");
+  a.python = a.python || process.env.SOBA_PYTHON ||
+    path.join(os.homedir(), "projects/soba/venv/bin/python");
   a.screenshot = path.resolve(
-    a.screenshot || path.join(os.tmpdir(), `vid2sim_verify_${path.basename(a.scene)}.png`)
+    a.screenshot || path.join(os.tmpdir(), `soba_verify_${path.basename(a.scene)}.png`)
   );
   return a;
 }
@@ -154,12 +154,12 @@ async function main() {
 
     // Wait until every scene.json object is registered in the viewer.
     await page.waitForFunction(
-      (n) => window.__vid2sim && window.__vid2sim.objects.length >= n,
+      (n) => window.__soba && window.__soba.objects.length >= n,
       { timeout: args.timeout }, expected.length
     );
     await sleep(500); // let framing / first paints settle
 
-    const snap = () => page.evaluate(() => window.__vid2sim.objects.map((o) => ({
+    const snap = () => page.evaluate(() => window.__soba.objects.map((o) => ({
       id: o.id, massKg: o.massKg, bodyType: o.bodyType, position: o.position,
     })));
 
@@ -188,13 +188,13 @@ async function main() {
     // ---- check 5 (do before clicking: click marks user interaction) -------
     await page.keyboard.press("f");
     await sleep(200);
-    const framed = await page.evaluate(() => window.__vid2sim.framedAll);
+    const framed = await page.evaluate(() => window.__soba.framedAll);
     check("'f' frames all objects (framedAll)", framed === true, `framedAll=${framed}`);
 
     // ---- check 4: click an object, run ~settle ms, no explosion -----------
     let clickedDynamic = false;
     for (const o of objs) {
-      const pos = await page.evaluate((id) => window.__vid2sim.screenPos(id), o.id);
+      const pos = await page.evaluate((id) => window.__soba.screenPos(id), o.id);
       if (!pos || pos[0] < 0 || pos[1] < 0 || pos[0] > 1280 || pos[1] > 800) continue;
       await page.mouse.click(pos[0], pos[1]);
       await sleep(100);

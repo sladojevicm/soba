@@ -7,8 +7,8 @@ build step / bundler: `index.html` uses an **import map** and the libraries are
 ## Run
 
 ```bash
-cd ~/projects/vid2sim/vid2sim-v2
-~/projects/vid2sim/venv/bin/python scripts/serve.py        # serves out/scene_office_3
+cd ~/projects/soba/soba
+~/projects/soba/venv/bin/python scripts/serve.py        # serves out/scene_office_3
 # then open http://127.0.0.1:8000/
 # another scene / port:  python scripts/serve.py --scene out/scene_xxx --port 8001
 ```
@@ -42,15 +42,15 @@ Puppeteer is not vendored — install it OUTSIDE the repo once and point
 
 ```bash
 mkdir -p ~/tmp/pptr && cd ~/tmp/pptr && npm init -y && npm i puppeteer
-cd ~/projects/vid2sim/vid2sim-v2
+cd ~/projects/soba/soba
 NODE_PATH=~/tmp/pptr/node_modules node scripts/verify_browser.js \
   --scene out/scene_chairs --screenshot /tmp/chairs.png
 ```
 
-Options: `--python <bin>` (default `~/projects/vid2sim/venv/bin/python`, or
-`VID2SIM_PYTHON`), `--settle <ms>` (sim time after the click, default 3000),
+Options: `--python <bin>` (default `~/projects/soba/venv/bin/python`, or
+`SOBA_PYTHON`), `--settle <ms>` (sim time after the click, default 3000),
 `--timeout <ms>`. A swiftshader "context lost" warning is a known headless
-artifact and is filtered. The page exposes `window.__vid2sim`
+artifact and is filtered. The page exposes `window.__soba`
 (`{objects: [{id, massKg, bodyType, position}], framedAll, screenPos(id)}`) —
 live getters into Rapier, used only by the checker.
 

@@ -1,12 +1,12 @@
 <div align="center">
 
-# 🐉 VID2SIM v2 🎮
+# 🛋️ SOBA 🎮
 
-### 🎥 Point a depth camera at a room. Get a browser physics playground back.
+### 🎥 *Soba* is Slovenian for "room." Point a depth camera at one. Get a browser physics playground back.
 
 📄 **Headed to ERK 2026 · Portorož 🌊🇸🇮** — same pipeline, now with numbers instead of vibes.
 
-**The grown-up rewrite of the [original VID2SIM](https://github.com/Vector-Space-Moggers/vid2sim)** 🏆
+**The grown-up rewrite of the [original VID2SIM](https://github.com/Vector-Space-Moggers/vid2sim)** 🏆 *(formerly known as vid2sim v2 — same repo, better name)*
 *(winner of the Epilog Clean Code challenge at DragonHack 2026 — built in 24 h, including a nightclub pause 🪩)*
 
 [![ERK](https://img.shields.io/badge/ERK-2026%20Portoro%C5%BE-blue?style=for-the-badge)](https://erk.fe.uni-lj.si)
@@ -24,9 +24,9 @@
 
 Digital twins you can actually *poke* are either **💸 expensive** (enterprise RTX + Omniverse), **🛠️ manual** (Blender artisans hand-crafting URDFs), or **🧩 incomplete** (splats are gorgeous but a physics engine can't collide with a vibe).
 
-**VID2SIM v2** takes a short RGB-D video of a room and produces an interactive, mesh-based, physically-parameterised simulation that runs in a **plain browser tab with zero backend** 🌐. Click a chair. Throw a ball at it. It falls over with a plausible mass, because a VLM looked at it and said *"wooden, mostly hollow, ~6 kg"* 🪑⚖️.
+**Soba** takes a short RGB-D video of a room and produces an interactive, mesh-based, physically-parameterised simulation that runs in a **plain browser tab with zero backend** 🌐. Click a chair. Throw a ball at it. It falls over with a plausible mass, because a VLM looked at it and said *"wooden, mostly hollow, ~6 kg"* 🪑⚖️.
 
-The hackathon original proved it works. **v2 is the version that can defend itself at a conference**: rewritten for clarity, gated by confidence, benchmarked against TUM, Replica, YCB and ABO — and honest about every number. 📊
+The hackathon original proved it works. **Soba is the version that can defend itself at a conference**: rewritten for clarity, gated by confidence, benchmarked against TUM, Replica, YCB and ABO — and honest about every number. 📊
 
 ---
 
@@ -73,7 +73,7 @@ Four bounded contexts, one typed contract: [`spec/scene.schema.json`](spec/scene
 
 (There used to be an ORB-SLAM3 plan for tier 4. Then we measured MASt3R at 7.6 cm on the hardest TUM sequence and deleted the stub. 🪦 The benchmark giveth, the benchmark taketh away.)
 
-### ✨ The confidence gate (v2's party trick)
+### ✨ The confidence gate (Soba's party trick)
 
 The camera only ever sees the *front* of your couch 🛋️. The gate scores every object's angular coverage + surface completeness and routes it three ways: **keep** the fused TSDF mesh (well observed), **complete** it (fill the unseen back, keep the real geometry), or **regenerate** it entirely from an image crop (barely seen). Real geometry when we have it, hallucination only where we must. 🎯
 

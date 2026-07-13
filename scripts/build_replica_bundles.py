@@ -92,9 +92,9 @@ def build_scene(zf, rf, names, scene, tmp_root, out_root, stride, max_frames, fp
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", type=Path,
-                    default=Path.home() / "projects/vid2sim/data/replica/bundles")
+                    default=Path.home() / "projects/soba/data/replica/bundles")
     ap.add_argument("--tmp", type=Path,
-                    default=Path.home() / "projects/vid2sim/data/replica/_tmp_extract")
+                    default=Path.home() / "projects/soba/data/replica/_tmp_extract")
     ap.add_argument("--scenes", nargs="*", default=SCENES)
     ap.add_argument("--stride", type=int, default=20)
     ap.add_argument("--max-frames", type=int, default=100)
