@@ -2,7 +2,7 @@
 
 *Soba* (Slovenian for "room") is a pipeline that converts a short RGB-D video of a room into an interactive, physics-enabled 3D scene that runs in a plain browser tab with no backend.
 
-It is a ground-up rewrite of [vid2sim](https://github.com/Vector-Space-Moggers/vid2sim), which was built in 24 hours at DragonHack 2026 and won the Epilog Clean Code challenge there. This repository accompanies a paper submitted to ERK 2026 (Portorož); the evaluation behind every claim below is in [BENCHMARK.md](BENCHMARK.md).
+It is a ground-up rewrite of [vid2sim](https://github.com/Vector-Space-Moggers/vid2sim), which was built in 24 hours at DragonHack 2026. This repository accompanies a paper submitted to ERK 2026 (Portorož); the evaluation behind every claim below is in [BENCHMARK.md](BENCHMARK.md).
 
 ## Motivation
 
