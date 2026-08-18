@@ -1,11 +1,14 @@
-// App — DOM side. Owns the canvas element and the overlay panels; hands the
-// canvas to the viewer through the store bridge and never touches Three.js or
-// Rapier itself.
+// App — DOM side. Owns the canvas element and the edge-docked panels; hands
+// the canvas to the viewer through the store bridge and never touches
+// Three.js or Rapier itself.
 
 import { useEffect, useRef } from "react";
 import { attachViewer } from "../store";
-import { Hud } from "./panels/Hud";
-import { EvalPanel } from "./panels/EvalPanel";
+import { TooltipProvider } from "./components/tooltip";
+import { EvalReportPanel } from "./panels/EvalReportPanel";
+import { ScenePanel } from "./panels/ScenePanel";
+import { StatusBar } from "./panels/StatusBar";
+import { Toolbar } from "./panels/Toolbar";
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -13,10 +16,12 @@ export default function App() {
   useEffect(() => attachViewer(canvasRef.current!), []);
 
   return (
-    <>
+    <TooltipProvider delayDuration={150}>
       <canvas id="c" ref={canvasRef} />
-      <Hud />
-      <EvalPanel />
-    </>
+      <ScenePanel />
+      <EvalReportPanel />
+      <Toolbar />
+      <StatusBar />
+    </TooltipProvider>
   );
 }

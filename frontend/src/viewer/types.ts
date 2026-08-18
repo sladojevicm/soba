@@ -68,9 +68,28 @@ export interface ViewerStats {
   dynamicBodies: number;
 }
 
+// Plain-data summary of one loaded object — everything the UI shows, nothing
+// live. This is what crosses the viewer->store boundary; never a Three.js or
+// Rapier object.
+export interface ObjectInfo {
+  id: string;
+  cls: string;
+  massKg: number;
+  material: string;
+  geometrySource: "tsdf" | "generative";
+  alignmentMethod: string;
+  scaleMethod: string;
+  physicsOrigin: "vlm" | "lookup";
+  vlmReasoning: string;
+  colliderShape: "hulls" | "box";
+  colliderCount: number;
+  friction: number;
+  restitution: number;
+}
+
 export interface ViewerEventMap {
   ready: { objects: number };
-  "object-loaded": { id: string; count: number };
+  "object-loaded": { id: string; count: number; info: ObjectInfo };
   "selection-changed": { id: string | null };
   stats: ViewerStats;
   error: Error;

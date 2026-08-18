@@ -21,7 +21,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import RAPIER, { type RigidBody } from "@dimforge/rapier3d-compat";
 import type { World } from "@dimforge/rapier3d-compat";
-import type { SceneJson, SceneObject, SobaDebug, ViewerEventMap } from "./types";
+import type { ObjectInfo, SceneJson, SceneObject, SobaDebug, ViewerEventMap } from "./types";
 import { glbVertices, enableShadows, makeLabel } from "./loaders";
 import { boundsOf, framePlacement } from "./framing";
 import { initWorld, createGroundCollider, createObjectBody, attachColliders } from "./physics";
@@ -271,7 +271,53 @@ export class SobaViewer {
 
     // Re-frame the camera as objects stream in (until the user interacts).
     this.maybeAutoFrame();
-    this.emit("object-loaded", { id, count: this.loadedIds.size });
+    this.emit("object-loaded", {
+      id,
+      count: this.loadedIds.size,
+      info: SobaViewer.objectInfo(entry),
+    });
+  }
+
+  // Plain-data projection of a scene.json entry for the UI — no live objects.
+  private static objectInfo(entry: SceneObject): ObjectInfo {
+    return {
+      id: entry.id,
+      cls: entry.class,
+      massKg: entry.physics.mass_kg,
+      material: entry.material_class,
+      geometrySource: entry.source.geometry_source,
+      alignmentMethod: entry.source.alignment_method,
+      scaleMethod: entry.source.scale_method,
+      physicsOrigin: entry.source.physics_origin,
+      vlmReasoning: entry.source.vlm_reasoning ?? "",
+      colliderShape: entry.collider.shape,
+      colliderCount: entry.collider.shape === "box" ? 1 : (entry.collider.hull_paths?.length ?? 0),
+      friction: entry.physics.friction,
+      restitution: entry.physics.restitution,
+    };
+  }
+
+  // Programmatic selection (inspector -> 3D). Highlight + selection state
+  // ONLY: unlike a canvas click this must NOT wake the body into physics —
+  // browsing the object list is not a physical interaction, and the frozen
+  // click semantics (click = select + wake) stay untouched.
+  selectById(id: string | null): void {
+    if (this.selected) {
+      SobaViewer.highlight(this.selected.mesh, false);
+      this.selected = null;
+    }
+    if (id !== null) {
+      for (const [mesh, entry] of this.meshToEntry) {
+        if (entry.id !== id) continue;
+        const body = this.bodyFor(mesh);
+        if (!body) break;
+        this.selected = { body, mesh };
+        SobaViewer.highlight(mesh, true);
+        this.emit("selection-changed", { id });
+        return;
+      }
+    }
+    this.emit("selection-changed", { id: null });
   }
 
   // ---- boot ---------------------------------------------------------------
