@@ -1,0 +1,52 @@
+/* Tailwind WITHOUT preflight for the parity phase: preflight's box-sizing /
+ * typography reset visibly shifts the legacy panels (e.g. border-box makes
+ * #hud wrap a word earlier). Phase 3 replaces these panels with the token
+ * design system and switches to the full "tailwindcss" import (preflight on).
+ */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/* ---------------------------------------------------------------------------
+ * Phase-2 PARITY styles: copied verbatim from the pre-React index.html so any
+ * visual regression is unambiguous. The Phase-3 design system replaces these
+ * with @theme tokens; do not grow this section.
+ * ------------------------------------------------------------------------- */
+
+html, body { margin: 0; height: 100%; overflow: hidden; background: #15171c; }
+#c { display: block; width: 100vw; height: 100vh; }
+#hud {
+  position: fixed; top: 10px; left: 12px; z-index: 10;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #cdd3dc; background: rgba(20,22,27,.72); padding: 9px 11px;
+  border-radius: 7px; max-width: 340px; pointer-events: none;
+  white-space: pre-wrap;
+}
+#hud b { color: #fff; }
+.key { color: #ffb454; }
+/* Ground-truth eval panel (only rendered when /eval.json has results;
+   fixed-position so scenes without one render with zero layout shift). */
+#evalPanel {
+  position: fixed; top: 10px; right: 12px; z-index: 10;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #cdd3dc; background: rgba(20,22,27,.82); border-radius: 7px;
+  max-width: 360px; max-height: 80vh; overflow-y: auto;
+}
+#evalPanel summary {
+  cursor: pointer; padding: 9px 11px; list-style: none; user-select: none;
+  white-space: nowrap;
+}
+#evalPanel summary::before { content: "\25B8 "; color: #8a93a2; }
+#evalPanel details[open] summary::before, #evalPanel[open] summary::before { content: "\25BE "; }
+#evalPanel .body { padding: 0 11px 10px; }
+#evalPanel .score { font-weight: bold; color: #fff; }
+#evalPanel .good { color: #7dd97b; }
+#evalPanel .fair { color: #ffb454; }
+#evalPanel .poor { color: #ff6b6b; }
+#evalPanel table { border-collapse: collapse; width: 100%; margin-top: 4px; }
+#evalPanel td, #evalPanel th {
+  padding: 1px 6px 1px 0; text-align: left; font-weight: normal;
+  color: #cdd3dc; white-space: nowrap;
+}
+#evalPanel th { color: #8a93a2; border-bottom: 1px solid #2a2e35; }
+#evalPanel .dim { color: #8a93a2; }

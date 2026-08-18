@@ -75,7 +75,7 @@ All numbers below are measured; the full methodology, per-tier and per-room tabl
 │   ├── reconstruction/   # odometry/MASt3R, TSDF, confidence gate, gen engines
 │   ├── scene/            # VLM physics, mass, CoACD, glTF export, assembler
 │   └── server.py         # Starlette server (scene.json + meshes + SSE)
-├── frontend/             # Three.js + Rapier WASM viewer (vendored, no build step)
+├── frontend/             # Three.js + Rapier viewer, React UI (built bundle committed)
 ├── spec/                 # scene.json v2.0 JSON Schema — the frozen contract
 ├── config/               # pipeline.yaml: tiers, gates, densities, solidity
 ├── scripts/              # run_assemble, serve, benchmarks, Replica tooling

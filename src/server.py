@@ -75,7 +75,13 @@ def create_app(
         or os.environ.get("SOBA_SCENE_DIR")
         or _DEFAULT_SCENE_DIR
     ).resolve()
-    frontend_dir = Path(frontend_dir or _DEFAULT_FRONTEND_DIR).resolve()
+    if frontend_dir is None:
+        # Prefer the committed Vite bundle (frontend/dist/) so `python
+        # scripts/serve.py` needs no Node; fall back to frontend/ itself so a
+        # stale checkout (pre-bundle, vendored libs) still runs.
+        dist = _DEFAULT_FRONTEND_DIR / "dist"
+        frontend_dir = dist if (dist / "index.html").is_file() else _DEFAULT_FRONTEND_DIR
+    frontend_dir = Path(frontend_dir).resolve()
 
     def _read_scene() -> dict | None:
         p = scene_dir / "scene.json"

@@ -53,3 +53,9 @@ scratchpad/
 
 # stray trajectory dumps from eval runs
 *.tum
+
+# the built viewer bundle IS committed (frontend/CLAUDE.md constraint 4):
+# `python scripts/serve.py` must serve it with no Node installed. The parent
+# dir must be re-included before its contents can be (gitignore semantics).
+!frontend/dist/
+!frontend/dist/**
