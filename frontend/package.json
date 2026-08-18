@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "0.13.1",
+    "@radix-ui/react-slider": "^1.4.7",
+    "@radix-ui/react-tooltip": "^1.2.16",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.539.0",
