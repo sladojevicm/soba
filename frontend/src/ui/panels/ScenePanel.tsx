@@ -75,7 +75,7 @@ export function ScenePanel() {
   const selected = objects.find((o) => o.id === selectedId) ?? null;
 
   return (
-    <div className="fixed top-2 bottom-10 left-2 z-10 flex w-64 animate-panel-in flex-col gap-2">
+    <div className="fixed top-2 bottom-10 left-2 z-10 flex w-60 animate-panel-in flex-col gap-2 lg:w-64">
       <Panel className="flex min-h-0 flex-1 flex-col">
         <PanelHeader
           title="Scene"

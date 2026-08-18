@@ -46,7 +46,8 @@ const pct = (v: number | null | undefined) =>
 
 export function EvalReportPanel() {
   const [report, setReport] = useState<EvalReport | null>(null);
-  const [open, setOpen] = useState(true);
+  // starts collapsed on narrow screens so the 3D keeps room
+  const [open, setOpen] = useState(() => window.matchMedia("(min-width: 1024px)").matches);
   const loadedIds = useSobaStore((s) => s.objects.map((o) => o.id).join(","));
   const selectedId = useSobaStore((s) => s.selectedId);
 
@@ -77,7 +78,7 @@ export function EvalReportPanel() {
   const loaded = new Set(loadedIds.split(","));
 
   return (
-    <div className="pointer-events-none fixed top-2 right-2 bottom-10 z-10 flex w-80 animate-panel-in flex-col items-stretch">
+    <div className="pointer-events-none fixed top-2 right-2 bottom-10 z-10 flex w-72 animate-panel-in flex-col items-stretch lg:w-80">
       <Panel className="pointer-events-auto flex max-h-full min-h-0 flex-col">
         <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b border-hairline px-3">
           <span className="flex items-baseline gap-2">
@@ -142,11 +143,18 @@ export function EvalReportPanel() {
                   {objs.map((o) => {
                     const f = o.fscore_5cm;
                     const inScene = loaded.has(o.id);
+                    const toggle = inScene
+                      ? () => selectObject(o.id === selectedId ? null : o.id)
+                      : undefined;
                     return (
                       <Tr
                         key={o.id}
                         selected={o.id === selectedId}
-                        onClick={inScene ? () => selectObject(o.id === selectedId ? null : o.id) : undefined}
+                        onClick={toggle}
+                        tabIndex={inScene ? 0 : undefined}
+                        onKeyDown={toggle && ((e) => {
+                          if (e.key === "Enter") { e.preventDefault(); toggle(); }
+                        })}
                         className={inScene ? "cursor-pointer" : undefined}
                       >
                         <Td className={cn("pl-3 font-mono", !inScene && "text-dim")}>{o.id}</Td>

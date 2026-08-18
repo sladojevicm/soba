@@ -44,7 +44,8 @@ export function StatusBar() {
           : <span className="text-faint">—</span>}
       </span>
       <span className="ml-auto text-micro uppercase tracking-label text-faint">
-        click select · drag push · space ball · f frame
+        <span className="hidden lg:inline">click select · drag push · space ball · f frame · </span>
+        ? shortcuts
       </span>
     </div>
   );

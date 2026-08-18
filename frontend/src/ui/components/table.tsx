@@ -25,6 +25,7 @@ export function Tr({
       className={cn(
         "border-b border-hairline/60 transition-colors duration-150 ease-out",
         "hover:bg-surface-hover/60",
+        "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
         selected && "bg-accent/10 hover:bg-accent/10",
         className
       )}

@@ -32,6 +32,16 @@ const initialState: SobaState = {
 
 export const useSobaStore = create<SobaState>(() => ({ ...initialState }));
 
+// Dev-only render-cause probe for the "orbiting causes ZERO React renders"
+// rule: every store write comes from exactly one viewer event, so counting
+// events by type shows what could have re-rendered. During an orbit, only
+// `stats` (the explicitly allowed 4 Hz tick) may increment.
+type EventCounts = Record<string, number>;
+const devCounts: EventCounts | null = import.meta.env.DEV
+  ? ((window as unknown as { __eventCounts: EventCounts }).__eventCounts =
+      { ready: 0, "object-loaded": 0, "selection-changed": 0, stats: 0, error: 0 })
+  : null;
+
 let viewerRef: SobaViewer | null = null;
 
 // Create the viewer, mount it on `canvas`, and pipe its events into the store.
@@ -47,6 +57,11 @@ export function attachViewer(canvas: HTMLCanvasElement): () => void {
   viewer.on("selection-changed", ({ id }) => set({ selectedId: id }));
   viewer.on("stats", (stats) => set({ stats }));
   viewer.on("error", (err) => set({ phase: "error", error: err.message }));
+  if (devCounts) {
+    for (const k of Object.keys(devCounts) as (keyof typeof devCounts)[]) {
+      viewer.on(k as "ready", () => { devCounts[k]++; });
+    }
+  }
   viewer.mount(canvas).catch(() => { /* reported via the error event */ });
   return () => {
     viewer.dispose();
