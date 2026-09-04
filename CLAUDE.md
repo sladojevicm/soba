@@ -107,6 +107,16 @@ SOBA_PYTHON=.venv/bin/python NODE_PATH=~/tmp/pptr/node_modules \
    `window.__soba` shape. Read it before touching `frontend/`.
 7. This box has no GPU. Never fake a GPU result; say the run needs the pod.
 
+Known places where modules can disagree (do not "fix" one side alone):
+- Up axis: Replica poses are rotated to Y-up on read; TUM/odometry/MASt3R world = first camera frame, never re-oriented. `ground.py` and floor snapping assume Y-up.
+- Placement uses the RAW TSDF mesh AABB (`assembler.py`); fusion/pymeshfix/Poisson can move the final mesh's centre and bottom. De-overlap and box colliders use the final mesh.
+- Two raw clouds: `run_assemble` gates on a `--gate-stride` cloud (also the ICP target and ground input); `tsdf.fuse` re-accumulates every frame for grid sizing.
+- `config/pipeline.yaml` `depth:` block is read by nothing; 400/8000 mm live as constants in `observed_cloud.py` and `tsdf.py`; `crop_stage.py` uses depth > 0.
+- Class size gates: `icp_align._dims_ok` is strict, `generative._class_dims_ok` allows 0.7x–1.5x.
+- `transform.scale` is allowed by the schema, always written 1.0, never read by the viewer.
+- PatchComplete runs in the assembler's recentred frame; `_fuse_and_seal` restores world with `+center`.
+- `evaluate_scene.py` ignores `source.alignment_method` / `scale_method` and aligns per object translation-only.
+
 ## Before you finish — Python
 
 - `source .venv/bin/activate && pytest` passes.
