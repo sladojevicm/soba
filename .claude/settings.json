@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(./**)",
+      "Bash(pytest)",
+      "Bash(pytest *)",
+      "Bash(ruff *)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(python scripts/*)",
+      "Bash(PYTHONPATH=src python scripts/*)",
+      "Bash(.venv/bin/python scripts/*)"
+    ],
+    "deny": [
+      "Edit(spec/scene.schema.json)",
+      "Write(spec/scene.schema.json)",
+      "Edit(BENCHMARK.md)",
+      "Write(BENCHMARK.md)",
+      "Bash(rm -rf*)",
+      "Bash(rm -fr*)",
+      "Bash(rm -Rf*)",
+      "Bash(rm -fR*)",
+      "Bash(rm -r *)",
+      "Bash(rm -R *)",
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(./**/.env)",
+      "Read(./**/.env.*)",
+      "Bash(cat .env*)",
+      "Bash(cat ./.env*)",
+      "Bash(less .env*)",
+      "Bash(more .env*)",
+      "Bash(head .env*)",
+      "Bash(tail .env*)",
+      "Bash(source .env*)",
+      "Bash(. .env*)"
+    ]
+  }
+}
