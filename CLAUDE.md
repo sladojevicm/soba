@@ -84,7 +84,8 @@ SOBA_PYTHON=.venv/bin/python NODE_PATH=~/tmp/pptr/node_modules \
 - `frontend/src/index.css` — the design tokens (`@theme`), the only source of visual values
 - `frontend/dist/` — built bundle, committed so the viewer runs with no Node
 - `out/` — local outputs; only the `scene_test` fixture exists here
-- `BENCHMARK.md` measured results · `STATUS.md` engineering log · `README.md` overview
+- `BENCHMARK.md` and `spec/scene.schema.json` — the two authoritative sources: measured numbers, and the contract
+- `STATUS.md` — current state only (~40 lines) · `docs/log/` — dated engineering log, read when you need the reasoning · `README.md` overview
 
 ## Invariants — never break these
 
@@ -124,7 +125,7 @@ Known places where modules can disagree (do not "fix" one side alone):
 - Thresholds, densities, solidity changed only in `config/pipeline.yaml`.
 - Benchmark tables regenerated from `eval.json`, not typed in.
 - A GPU-dependent change is reported as untested here, with the pod command to run.
-- Anything that changes what is runnable gets a dated entry at the top of `STATUS.md`.
+- Anything that changes what is runnable gets a dated file in `docs/log/`; update the current-state block in `STATUS.md` only if the state itself changed.
 
 ## Before you finish — frontend
 
