@@ -444,7 +444,41 @@ _All four tiers produce an **empty scene**: room_1 is a walkthrough-only corrido
 
 <!-- SECTION3:END -->
 
+## 4. Routing ablation — gated tier 2 vs a single forced strategy (2026-09-05)
 
+Reviewer-requested isolation of the confidence gate for the ERK camera-ready:
+the seven non-empty `_v2` rooms rebuilt at otherwise identical tier-2 settings
+with the gate's per-object decision replaced by a constant
+(`run_assemble.py --force-strategy tsdf|completion|generative`). Everything
+downstream — drop-garbage output checks, sizing, placement, eval protocol —
+is unchanged. Driver: `scripts/ablation_routing.sh`; aggregation:
+`scripts/ablation_summary.py` (metric definitions identical to §3; macro-avg
+across the 7 rooms; scenes in `out/abl_<room>_<strategy>/`).
+
+| Strategy | Shipped | Matched/80 | Recall | Precision | mean Chamfer (cm) | mean F@5cm | mean dim-err |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **Gated routing (tier 2)** | 56 | 55 | 0.71 | 0.95 | **5.6** | **0.68** | 0.20 |
+| All TSDF + repair | 66 | 64 | 0.83 | 0.95 | 8.5 | 0.52 | 0.21 |
+| All completion | 66 | 64 | 0.83 | 0.95 | 6.6 | 0.64 | 0.20 |
+| All generative | 47 | 47 | 0.61 | 1.00 | 9.9 | 0.41 | 0.30 |
+
+Readings (all in the camera-ready §3.2/Discussion):
+- **Forced generative reproduces tier 1 to rounding** (47/0.61/1.00/9.9/0.41/0.30
+  vs tier 1's identical row) — the generation cache reuses tier-1 outputs and
+  geometry metrics don't depend on the other tier-2 stage changes, so the
+  tier-1→2 gain in §3 is attributable to the routing itself, not confounds.
+- **Gated routing has the best surface fidelity of any strategy** (Chamfer
+  5.6 cm, F@5cm 0.68) at equal precision.
+- **The fixed measured-geometry strategies buy recall (0.83 vs 0.71), not
+  quality**: both match the same 9 extra GT instances — the poorly observed
+  tail the gate sends to generation, where output checks drop it. Those 9
+  average F@5cm 0.29 (completion) / 0.22 (tsdf) vs 0.72 / 0.56 for the 55
+  objects shared with the gated scene. The gate is a fidelity↔coverage dial;
+  "all completion" is the recall-maximal setting of the same
+  measurement-first principle and the strongest fixed baseline.
+- The paper's claims were reworded accordingly (fidelity, not blanket
+  superiority): "yields more faithful surfaces than fixing any single
+  reconstruction strategy".
 
 
 
