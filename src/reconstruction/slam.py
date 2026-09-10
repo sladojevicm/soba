@@ -183,9 +183,9 @@ class Mast3rEstimator:
     poses; the residual metric scale is solved against the depth sensor
     (fix M1) and skipped frames are SE(3)-interpolated. World = first frame.
 
-    Env knobs: VID2SIM_MAST3R_HOME (repo, default ~/projects/vid2sim/mast3r),
-    VID2SIM_MAST3R_STRIDE (default config frame_sample_stride = 3),
-    VID2SIM_MAST3R_MAX_IMAGES (memory guard, default 24 — the stride grows to
+    Env knobs: SOBA_MAST3R_HOME (repo, default ~/projects/soba/mast3r),
+    SOBA_MAST3R_STRIDE (default config frame_sample_stride = 3),
+    SOBA_MAST3R_MAX_IMAGES (memory guard, default 24 — the stride grows to
     fit; global alignment holds every pairwise pointmap in memory, and ~34
     images / ~130 pairs at 512 res already exhausts an 8 GB GPU AND a
     similarly-sized host RAM on the CPU fallback).
@@ -196,10 +196,10 @@ class Mast3rEstimator:
     def __init__(self, stride: int | None = None, device: str | None = None):
         import os
         self.home = Path(os.environ.get(
-            "VID2SIM_MAST3R_HOME",
-            str(Path.home() / "projects/vid2sim/mast3r")))
-        self.stride = stride or int(os.environ.get("VID2SIM_MAST3R_STRIDE", "3"))
-        self.max_images = int(os.environ.get("VID2SIM_MAST3R_MAX_IMAGES", "24"))
+            "SOBA_MAST3R_HOME",
+            str(Path.home() / "projects/soba/mast3r")))
+        self.stride = stride or int(os.environ.get("SOBA_MAST3R_STRIDE", "3"))
+        self.max_images = int(os.environ.get("SOBA_MAST3R_MAX_IMAGES", "24"))
         self.device = device
 
     def _add_paths(self):

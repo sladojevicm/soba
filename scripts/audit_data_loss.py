@@ -21,7 +21,7 @@ TSDF stages need --tsdf (a full fusion pass; minutes on big bundles).
 
 Run:
   PYTHONPATH=src python scripts/audit_data_loss.py \
-      --bundle ~/projects/vid2sim/data/replica/bundles/office_3 [--tsdf]
+      --bundle ~/projects/soba/data/replica/bundles/office_3 [--tsdf]
 """
 from __future__ import annotations
 

@@ -8,7 +8,7 @@ evaluation (~250 KB per scene; nothing else is downloaded).
 
 Usage:
   python scripts/fetch_replica_gt_traj.py [--scenes office_1 office_2 ...]
-Writes ~/projects/vid2sim/data/replica/gt_traj/<scene>_traj_w_c.txt
+Writes ~/projects/soba/data/replica/gt_traj/<scene>_traj_w_c.txt
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--scenes", nargs="*", default=DEFAULT_SCENES)
     ap.add_argument("--out", type=Path,
-                    default=Path.home() / "projects/vid2sim/data/replica/gt_traj")
+                    default=Path.home() / "projects/soba/data/replica/gt_traj")
     ap.add_argument("--url", default=VMAP_URL)
     args = ap.parse_args()
 

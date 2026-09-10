@@ -34,7 +34,7 @@ import tempfile
 
 # The repo's src/ must be importable so we can reuse the model adapters.
 _REPO_SRC = os.environ.get(
-    "VID2SIM_SRC",
+    "SOBA_SRC",
     os.path.join(os.path.dirname(__file__), "..", "..", "src"),
 )
 if _REPO_SRC not in sys.path:

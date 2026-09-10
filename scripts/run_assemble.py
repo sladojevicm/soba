@@ -7,7 +7,7 @@ Z-D order (gate first, TSDF only for survivors).
 
 Example:
   PYTHONPATH=src python scripts/run_assemble.py \
-    --bundle ~/projects/vid2sim/data/replica/bundles/office_3 --tier 4 \
+    --bundle ~/projects/soba/data/replica/bundles/office_3 --tier 4 \
     --out out/scene_office_3
 """
 
@@ -54,7 +54,7 @@ def run_eval_hook(bundle: Path, out: Path, *,
     import sys as _sys
 
     try:
-        data_root = Path.home() / "projects/vid2sim/data/replica"
+        data_root = Path.home() / "projects/soba/data/replica"
         gt_root = gt_root or data_root / "scenes"
         traj_root = traj_root or data_root / "gt_traj"
         evaluator = evaluator or Path(__file__).resolve().parent / "evaluate_scene.py"
@@ -225,8 +225,8 @@ def main() -> None:
 
     gen_cache = args.bundle / ".gen_cache"
     gen_cache.mkdir(exist_ok=True)
-    base_seed = int(_os.environ.get("VID2SIM_TRIPOSG_SEED",
-                                    _os.environ.get("VID2SIM_HUNYUAN_SEED", "42")))
+    base_seed = int(_os.environ.get("SOBA_TRIPOSG_SEED",
+                                    _os.environ.get("SOBA_HUNYUAN_SEED", "42")))
     n_dropped = 0
     for tid in gen_tids:
         _strat, cloud = routed[tid]
@@ -249,7 +249,7 @@ def main() -> None:
                                        scale_method=m["scale_method"])
             print(f"  #{tid} generation reused from cache ({ply.name})")
         else:
-            for var in ("VID2SIM_TRIPOSG_SEED", "VID2SIM_HUNYUAN_SEED"):
+            for var in ("SOBA_TRIPOSG_SEED", "SOBA_HUNYUAN_SEED"):
                 _os.environ[var] = str(seed)
             r = engine.regenerate(cloud=cloud, crop_path=crop,
                                   coco_class=classes.get(tid, "obj"))
@@ -269,7 +269,7 @@ def main() -> None:
         print(f"  {n_dropped} generative object(s) dropped — "
               f"{type(engine).__name__} declined to regenerate (no engine, model "
               f"not installed/failed, or no crop; e.g. hunyuan3d needs ~10 GB "
-              f"VRAM — VID2SIM_GEN_MODEL=triposg fits an 8 GB card)")
+              f"VRAM — SOBA_GEN_MODEL=triposg fits an 8 GB card)")
 
     # tsdf + completion bands: fuse, then assemble (completion gets gap-filled).
     if fusable:

@@ -6,8 +6,8 @@ Adds `src/` to sys.path itself so a plain `python scripts/serve.py` works (the
 a multi-line paste where the assignment lands on its own command).
 
 Examples:
-  ~/projects/vid2sim/venv/bin/python scripts/serve.py
-  ~/projects/vid2sim/venv/bin/python scripts/serve.py --scene out/scene_office_3 --port 8000
+  ~/projects/soba/venv/bin/python scripts/serve.py
+  ~/projects/soba/venv/bin/python scripts/serve.py --scene out/scene_office_3 --port 8000
 then open http://127.0.0.1:8000/
 """
 

@@ -42,7 +42,7 @@ def _partial_cloud(n=256, shift=(2.0, -1.0, 0.5)) -> np.ndarray:
 def test_complete_points_roundtrips_through_subprocess(tmp_path, monkeypatch):
     runner = _write_stub_runner(tmp_path)
     monkeypatch.setenv(
-        "VID2SIM_COMPC_CMD",
+        "SOBA_COMPC_CMD",
         f"{sys.executable} {runner} --input {{input}} --output {{output}}")
     partial = _partial_cloud()
     dense = compc_completion.complete_points(partial)
@@ -56,25 +56,25 @@ def test_complete_points_roundtrips_through_subprocess(tmp_path, monkeypatch):
 
 
 def test_unset_command_raises(tmp_path, monkeypatch):
-    monkeypatch.delenv("VID2SIM_COMPC_CMD", raising=False)
-    with pytest.raises(RuntimeError, match="VID2SIM_COMPC_CMD"):
+    monkeypatch.delenv("SOBA_COMPC_CMD", raising=False)
+    with pytest.raises(RuntimeError, match="SOBA_COMPC_CMD"):
         compc_completion.complete_points(_partial_cloud())
 
 
 def test_missing_tokens_raises(monkeypatch):
-    monkeypatch.setenv("VID2SIM_COMPC_CMD", "echo no-tokens-here")
+    monkeypatch.setenv("SOBA_COMPC_CMD", "echo no-tokens-here")
     with pytest.raises(RuntimeError, match="must contain"):
         compc_completion.complete_points(_partial_cloud())
 
 
 def test_runner_failure_propagates(tmp_path, monkeypatch):
-    monkeypatch.setenv("VID2SIM_COMPC_CMD", "false {input} {output}")
+    monkeypatch.setenv("SOBA_COMPC_CMD", "false {input} {output}")
     with pytest.raises(RuntimeError, match="failed|no output"):
         compc_completion.complete_points(_partial_cloud())
 
 
 def test_too_few_points_raises(monkeypatch):
-    monkeypatch.setenv("VID2SIM_COMPC_CMD", "true {input} {output}")
+    monkeypatch.setenv("SOBA_COMPC_CMD", "true {input} {output}")
     with pytest.raises(RuntimeError, match="too few"):
         compc_completion.complete_points(np.zeros((4, 3), dtype=np.float32))
 

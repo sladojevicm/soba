@@ -4,20 +4,20 @@
 # vs the gated tier-2 scenes already on disk.
 # Sequential — never two GPU builds at once (4060 OOM gotcha).
 set -uo pipefail
-REPO="$HOME/projects/vid2sim/vid2sim-v2"
-PY="$HOME/projects/vid2sim/venv/bin/python"
+REPO="$HOME/projects/soba"
+PY="$HOME/projects/soba/venv/bin/python"
 cd "$REPO" || exit 2
 export PYTHONPATH=src
-export VID2SIM_TRIPOSG_HOME="$HOME/projects/vid2sim/TripoSG"
-export VID2SIM_TRIPOSG_FLASH=0
-export VID2SIM_GEN_MODEL=triposg
-export VID2SIM_PATCHCOMPLETE_HOME="$HOME/projects/vid2sim/PatchComplete"
+export SOBA_TRIPOSG_HOME="$HOME/projects/soba/TripoSG"
+export SOBA_TRIPOSG_FLASH=0
+export SOBA_GEN_MODEL=triposg
+export SOBA_PATCHCOMPLETE_HOME="$HOME/projects/soba/PatchComplete"
 
 ROOMS="office_0 office_1 office_2 office_3 office_4 room_0 room_2"
 STRATS="tsdf completion generative"
 
 for ROOM in $ROOMS; do
-  BUNDLE="$HOME/projects/vid2sim/data/replica/bundles/${ROOM}_v2"
+  BUNDLE="$HOME/projects/soba/data/replica/bundles/${ROOM}_v2"
   for S in $STRATS; do
     OUT="$REPO/out/abl_${ROOM}_${S}"
     LOG="$REPO/scratchpad/abl_${ROOM}_${S}.log"

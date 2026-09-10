@@ -9,13 +9,13 @@ and evaluates against groundtruth.txt with the TUM protocol (traj_eval):
 SE(3)-aligned ATE, Sim(3)-aligned ATE + recovered scale, 1-s translational RPE.
 
 GPU note: MASt3R needs ~6 GB VRAM — do not run tiers 2/3/4 while another GPU
-job is active. VID2SIM_MAST3R_MAX_IMAGES (default 24) caps the anchor count
+job is active. SOBA_MAST3R_MAX_IMAGES (default 24) caps the anchor count
 on 8 GB cards.
 
 Example:
-  PYTHONPATH=src ~/projects/vid2sim/venv/bin/python scripts/bench_tum_pose.py \
-      --seq ~/projects/vid2sim/data/tum/rgbd_dataset_freiburg1_xyz \
-      --bundle ~/projects/vid2sim/data/tum/bundle_f1xyz \
+  PYTHONPATH=src ~/projects/soba/venv/bin/python scripts/bench_tum_pose.py \
+      --seq ~/projects/soba/data/tum/rgbd_dataset_freiburg1_xyz \
+      --bundle ~/projects/soba/data/tum/bundle_f1xyz \
       --tiers 1 2 --max-frames 500 --json results.json
 """
 

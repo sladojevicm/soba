@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# vid2sim-v2 — Hunyuan3D 2.1 (image-to-3D) setup for the generative band.
+# soba — Hunyuan3D 2.1 (image-to-3D) setup for the generative band.
 #
 # Clones Tencent-Hunyuan/Hunyuan3D-2.1, installs its shape-model deps INTO the
 # pod's existing CUDA torch (we do NOT touch torch), and downloads the weights.
@@ -81,11 +81,11 @@ PY
 cat <<EOF
 
 Hunyuan3D 2.1 ready. Point the pipeline at it, then run a tier-3/4 build:
-    export VID2SIM_HUNYUAN_HOME=$HUNYUAN_HOME
-    export VID2SIM_GEN_MODEL=hunyuan3d          # or rely on the tier default (3/4)
+    export SOBA_HUNYUAN_HOME=$HUNYUAN_HOME
+    export SOBA_GEN_MODEL=hunyuan3d          # or rely on the tier default (3/4)
     PYTHONPATH=src python3 scripts/run_assemble.py --bundle bundles/office_3 --tier 3 --out out/scene_office_3
 Tiers 3-4 default to Hunyuan3D automatically (fix K1). Tunables:
-VID2SIM_HUNYUAN_STEPS (default 30), _SEED (42), _MODEL (tencent/Hunyuan3D-2mini for 8 GB).
+SOBA_HUNYUAN_STEPS (default 30), _SEED (42), _MODEL (tencent/Hunyuan3D-2mini for 8 GB).
 EOF
 
 # --- hy3dpaint fixups (found live on the 3090 pod, 2026-07-04) --------------

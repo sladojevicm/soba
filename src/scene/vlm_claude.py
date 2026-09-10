@@ -187,17 +187,17 @@ def make_backend(config_path: str = str(lookup._DEFAULT_CONFIG)):
     """The Step-8 backend for vlm.infer, or None when it can't run.
 
     Requires ANTHROPIC_API_KEY (never blocks key-less assembly). Model comes
-    from config vlm.model (claude-opus-4-8); VID2SIM_VLM_MODEL overrides (e.g.
-    the config's cost_option claude-haiku-4-5 for cheap runs). VID2SIM_VLM=0
+    from config vlm.model (claude-opus-4-8); SOBA_VLM_MODEL overrides (e.g.
+    the config's cost_option claude-haiku-4-5 for cheap runs). SOBA_VLM=0
     disables even with a key.
     """
-    if os.environ.get("VID2SIM_VLM", "1") == "0":
+    if os.environ.get("SOBA_VLM", "1") == "0":
         return None
     if not os.environ.get("ANTHROPIC_API_KEY"):
         return None
     try:
         cfg = lookup.load_config(config_path).get("vlm", {})
-        model = os.environ.get("VID2SIM_VLM_MODEL") or cfg.get("model", "claude-opus-4-8")
+        model = os.environ.get("SOBA_VLM_MODEL") or cfg.get("model", "claude-opus-4-8")
         max_tokens = int(cfg.get("max_tokens", 4096))
         return ClaudeBackend(model=model, max_tokens=max_tokens)
     except Exception as e:  # SDK missing/broken -> lookup, never a crash

@@ -10,7 +10,7 @@ This module loads the multi_res model in-process (verified to reproduce the CLI
 `generation.py` prediction bit-for-bit) and exposes `complete_mesh(pts)`:
 partial object-local points -> completed mesh in the SAME frame.
 
-Repo + weights via VID2SIM_PATCHCOMPLETE_HOME (default ~/projects/vid2sim/
+Repo + weights via SOBA_PATCHCOMPLETE_HOME (default ~/projects/soba/
 PatchComplete). The model's few-shot codebook is read from the repo's RELATIVE
 `priors/` dir, so model construction is done with cwd set to the repo.
 """
@@ -26,8 +26,8 @@ TRUNC = 2.5         # voxel-unit truncation (matches the validated chair25 run)
 FILL = 30.0         # object max-extent -> ~30 voxels inside the 32^3 grid
 CHANNELS = 128
 
-_HOME = Path(os.environ.get("VID2SIM_PATCHCOMPLETE_HOME",
-                            str(Path("~/projects/vid2sim/PatchComplete").expanduser())))
+_HOME = Path(os.environ.get("SOBA_PATCHCOMPLETE_HOME",
+                            str(Path("~/projects/soba/PatchComplete").expanduser())))
 _MODEL = None       # cached (model, device)
 
 

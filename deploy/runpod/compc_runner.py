@@ -1,13 +1,13 @@
 #!/usr/bin/env python
-"""vid2sim <-> ComPC bridge runner. RUNS INSIDE ComPC's OWN env (py3.10/cu116).
+"""soba <-> ComPC bridge runner. RUNS INSIDE ComPC's OWN env (py3.10/cu116).
 
-Implements the vid2sim subprocess contract (see vid2sim-v2
+Implements the soba subprocess contract (see soba
 src/reconstruction/compc_completion.py): read an (N,3) float32 partial cloud from
 --input (.npy), run ComPC's per-object optimization, write the (M,3) completed
 cloud to --output (.npy), in the SAME frame.
 
 The pipeline (running in OUR venv) invokes this via:
-  VID2SIM_COMPC_CMD="<compc_env_python> <repo>/deploy/runpod/compc_runner.py \\
+  SOBA_COMPC_CMD="<compc_env_python> <repo>/deploy/runpod/compc_runner.py \\
                      --input {input} --output {output}"
 with COMPC_HOME pointing at the ComPC clone. It stages the cloud into the
 indir/<name>/indata/<file>.ply layout ComPC's test.py expects, runs it, and reads
@@ -28,7 +28,7 @@ def _compc_home() -> str:
     h = os.environ.get("COMPC_HOME")
     if not h:
         for cand in (os.path.join(os.environ.get("WORKDIR", "/workspace"), "ComPC"),
-                     os.path.expanduser("~/projects/vid2sim/ComPC")):
+                     os.path.expanduser("~/projects/soba/ComPC")):
             if os.path.isdir(cand):
                 h = cand
                 break

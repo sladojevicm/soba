@@ -36,7 +36,7 @@ Reproduce:
   PYTHONPATH=src python scripts/benchmark_physics.py --dataset ycb
   PYTHONPATH=src python scripts/benchmark_physics.py --dataset abo
 
-Outputs (under --data-root, default ~/projects/vid2sim/data/benchmarks):
+Outputs (under --data-root, default ~/projects/soba/data/benchmarks):
   {ycb,abo}/…             fetched ground truth + images (manifest *_gt.json)
   predictions/…           per-object cached Claude responses (rerun-safe)
   results/{ds}_results.json   per-object rows + metrics summary
@@ -60,8 +60,8 @@ if str(_REPO / "src") not in sys.path:
 
 DEFAULT_DATA_ROOT = Path(
     os.environ.get(
-        "VID2SIM_BENCH_DATA",
-        str(Path.home() / "projects" / "vid2sim" / "data" / "benchmarks"),
+        "SOBA_BENCH_DATA",
+        str(Path.home() / "projects" / "soba" / "data" / "benchmarks"),
     )
 )
 
@@ -575,7 +575,7 @@ def run_claude(objs: list[dict], pred_root: Path, cap: int = 300):
 
     backend = vlm_claude.make_backend()
     if backend is None:
-        return None, None, "no ANTHROPIC_API_KEY (or VID2SIM_VLM=0)"
+        return None, None, "no ANTHROPIC_API_KEY (or SOBA_VLM=0)"
     backend.client = UsageClient(backend.client)  # cost accounting only
     model = backend.model
 

@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "vid2sim-v2"
+name = "soba"
 version = "0.0.1"
-description = "VID2SIM rewrite — scene.json contract and pipeline"
+description = "Soba — video-to-simulation pipeline (scene.json contract)"
 requires-python = ">=3.11"
 dependencies = [
     "jsonschema>=4.21",

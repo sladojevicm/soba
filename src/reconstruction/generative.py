@@ -249,7 +249,7 @@ def _strip_base_and_fragments(mesh, return_stats: bool = False):
     components spatially DETACHED from the dominant one (any size — the
     detached fraction is returned with return_stats=True so the caller can
     reject a generation that lost >30% of itself as structurally broken).
-    Disable with VID2SIM_GEN_CLEAN=0.
+    Disable with SOBA_GEN_CLEAN=0.
     """
     import numpy as np
     import open3d as o3d
@@ -386,9 +386,9 @@ def _too_thin(mesh) -> bool:
     >= ~4% of its hull even when spindly (worst honest office_3 chair: 4.1%),
     while the failure mode — a bent L-shell 'table' spanning a table-sized
     hull with paper-thin walls — measures 1-2.5%. Bar: 3%
-    (VID2SIM_GEN_MIN_SOLID overrides; 0 disables). Non-watertight meshes are
+    (SOBA_GEN_MIN_SOLID overrides; 0 disables). Non-watertight meshes are
     skipped (enclosed volume means nothing there)."""
-    bar = float(os.environ.get("VID2SIM_GEN_MIN_SOLID", "0.03"))
+    bar = float(os.environ.get("SOBA_GEN_MIN_SOLID", "0.03"))
     if bar <= 0:
         return False
     try:
@@ -409,9 +409,9 @@ def _clean_gen(mesh, max_detached: float = 0.3):
     max_detached of the surface was floating debris — a generation that lost a
     third of itself detached is broken (its 'missing part' was the floater),
     so ship nothing rather than an amputated object + hovering pieces.
-    Respects VID2SIM_GEN_CLEAN=0 (no cleaning, never rejects here).
+    Respects SOBA_GEN_CLEAN=0 (no cleaning, never rejects here).
     """
-    if os.environ.get("VID2SIM_GEN_CLEAN", "1") == "0":
+    if os.environ.get("SOBA_GEN_CLEAN", "1") == "0":
         return mesh, 0.0
     cleaned, detached = _strip_base_and_fragments(mesh, return_stats=True)
     if detached > max_detached:
@@ -422,8 +422,8 @@ def _clean_gen(mesh, max_detached: float = 0.3):
 def _accept_regen(mesh, coco_class) -> bool:
     """Post-alignment quality gate for the generative band: drop debris and
     dimensionally-absurd generations instead of shipping them into the scene.
-    VID2SIM_GEN_STRICT=0 disables (every generation is kept)."""
-    if os.environ.get("VID2SIM_GEN_STRICT", "1") == "0":
+    SOBA_GEN_STRICT=0 disables (every generation is kept)."""
+    if os.environ.get("SOBA_GEN_STRICT", "1") == "0":
         return True
     if _looks_shattered(mesh):
         log.info("generated mesh rejected: shattered (no dominant component)")
@@ -494,7 +494,7 @@ def coarse_align_to_cloud(mesh, cloud, coco_class: str | None = None,
     # class-prior scale sizes the actual object, not object+mat. (clean=False
     # when the caller already cleaned — e.g. regenerate(), which needs the
     # detached-fraction stats to reject broken generations.)
-    if clean and os.environ.get("VID2SIM_GEN_CLEAN", "1") != "0":
+    if clean and os.environ.get("SOBA_GEN_CLEAN", "1") != "0":
         mesh = _strip_base_and_fragments(mesh)
 
     out = o3d.geometry.TriangleMesh(mesh)  # copy
@@ -613,7 +613,7 @@ class RunPodEngine(Engine):
         # shape ~2.5 min + paint ~2 min per object, plus cold model loads on
         # the first request — 600 s is tight there; env-tunable for paint runs
         self.timeout_s = float(timeout_s if timeout_s is not None
-                               else os.environ.get("VID2SIM_RUNPOD_TIMEOUT", "900"))
+                               else os.environ.get("SOBA_RUNPOD_TIMEOUT", "900"))
 
     # --- transport (generic RunPod serverless runsync) ------------------
     def _runsync(self, endpoint: str, payload: dict) -> dict:
@@ -626,10 +626,10 @@ class RunPodEngine(Engine):
         import os
         import urllib.request
 
-        # VID2SIM_RUNPOD_URL overrides the full runsync URL — for the SDK's
+        # SOBA_RUNPOD_URL overrides the full runsync URL — for the SDK's
         # local test server (`python generative_handler.py --rp_serve_api`) on
         # a plain SSH pod, reached through a tunnel (no serverless endpoint).
-        url = os.environ.get("VID2SIM_RUNPOD_URL") or \
+        url = os.environ.get("SOBA_RUNPOD_URL") or \
             f"{self.BASE_URL}/{endpoint}/runsync"
         body = json.dumps({"input": payload}).encode()
         req = urllib.request.Request(
@@ -862,7 +862,7 @@ class LocalGpuEngine(Engine):
         package at its root and `image_process` / `briarmbg` under `scripts/`, so
         both go on sys.path. Weights live under <home>/pretrained_weights by
         default (snapshot_download targets in the setup script). Overridable via
-        VID2SIM_TRIPOSG_HOME / _WEIGHTS / RMBG_WEIGHTS.
+        SOBA_TRIPOSG_HOME / _WEIGHTS / RMBG_WEIGHTS.
         """
         if self._triposg is not None:
             return self._triposg
@@ -870,7 +870,7 @@ class LocalGpuEngine(Engine):
 
         import torch
 
-        home = os.environ.get("VID2SIM_TRIPOSG_HOME", "/workspace/TripoSG")
+        home = os.environ.get("SOBA_TRIPOSG_HOME", "/workspace/TripoSG")
         for p in (home, os.path.join(home, "scripts")):
             if p not in sys.path:
                 sys.path.insert(0, p)
@@ -886,7 +886,7 @@ class LocalGpuEngine(Engine):
                 stub = types.ModuleType("diso")
                 class _NoDiso:  # noqa: N801
                     def __init__(self, *a, **k):
-                        raise RuntimeError("diso not built; use VID2SIM_TRIPOSG_FLASH=0")
+                        raise RuntimeError("diso not built; use SOBA_TRIPOSG_FLASH=0")
                 stub.DiffDMC = _NoDiso
                 sys.modules["diso"] = stub
         from triposg.pipelines.pipeline_triposg import TripoSGPipeline
@@ -894,8 +894,8 @@ class LocalGpuEngine(Engine):
         from briarmbg import BriaRMBG
 
         weights = os.path.join(home, "pretrained_weights")
-        tri_dir = os.environ.get("VID2SIM_TRIPOSG_WEIGHTS", os.path.join(weights, "TripoSG"))
-        rmbg_dir = os.environ.get("VID2SIM_RMBG_WEIGHTS", os.path.join(weights, "RMBG-1.4"))
+        tri_dir = os.environ.get("SOBA_TRIPOSG_WEIGHTS", os.path.join(weights, "TripoSG"))
+        rmbg_dir = os.environ.get("SOBA_RMBG_WEIGHTS", os.path.join(weights, "RMBG-1.4"))
         pipe = TripoSGPipeline.from_pretrained(tri_dir).to("cuda", torch.float16)
         rmbg = BriaRMBG.from_pretrained(rmbg_dir).to("cuda")
         rmbg.eval()
@@ -917,7 +917,7 @@ class LocalGpuEngine(Engine):
             raise NotImplementedError(f"local gen model '{self.gen_model}' not wired")
         mesh = self._finalize_gen_mesh(verts, faces)
         if (self.gen_model in ("hunyuan3d", "hunyuan")
-                and os.environ.get("VID2SIM_HUNYUAN_PAINT", "0") == "1"):
+                and os.environ.get("SOBA_HUNYUAN_PAINT", "0") == "1"):
             mesh = self._paint_hunyuan(mesh, crop_path)
         return mesh
 
@@ -977,7 +977,7 @@ class LocalGpuEngine(Engine):
             return self._hunyuan_paint
         import sys
 
-        home = os.environ.get("VID2SIM_HUNYUAN_HOME", "/workspace/Hunyuan3D-2.1")
+        home = os.environ.get("SOBA_HUNYUAN_HOME", "/workspace/Hunyuan3D-2.1")
         paint_dir = os.path.join(home, "hy3dpaint")
         for p in (home, paint_dir):
             if os.path.isdir(p) and p not in sys.path:
@@ -999,8 +999,8 @@ class LocalGpuEngine(Engine):
         from textureGenPipeline import (Hunyuan3DPaintConfig,
                                         Hunyuan3DPaintPipeline)
 
-        views = int(os.environ.get("VID2SIM_PAINT_VIEWS", "6"))
-        res = int(os.environ.get("VID2SIM_PAINT_RES", "512"))
+        views = int(os.environ.get("SOBA_PAINT_VIEWS", "6"))
+        res = int(os.environ.get("SOBA_PAINT_RES", "512"))
         conf = Hunyuan3DPaintConfig(views, res)
         # the repo's defaults mix two bases (cfg is repo-root-relative, the
         # RealESRGAN ckpt is hy3dpaint-relative) — pin both absolutely
@@ -1021,7 +1021,7 @@ class LocalGpuEngine(Engine):
         """Shared post-processing for any image-to-3D output: build the open3d
         mesh, weld/clean, and decimate to a physics-sane budget. Generative
         extractors emit 1-3M triangles (TripoSG at 505^3, Hunyuan3D's marching
-        cubes) which choke the downstream Poisson finalize + CoACD; VID2SIM_GEN_FACES
+        cubes) which choke the downstream Poisson finalize + CoACD; SOBA_GEN_FACES
         caps it (0 disables)."""
         import numpy as np
         import open3d as o3d
@@ -1049,8 +1049,8 @@ class LocalGpuEngine(Engine):
         except Exception:
             pass
         # accept the legacy TripoSG knob as a fallback so existing runs are unchanged
-        budget = int(os.environ.get("VID2SIM_GEN_FACES",
-                                    os.environ.get("VID2SIM_TRIPOSG_FACES", "40000")))
+        budget = int(os.environ.get("SOBA_GEN_FACES",
+                                    os.environ.get("SOBA_TRIPOSG_FACES", "40000")))
         if budget > 0 and len(m.triangles) > budget:
             m = m.simplify_quadric_decimation(budget)
         m.compute_vertex_normals()
@@ -1059,30 +1059,30 @@ class LocalGpuEngine(Engine):
     def _run_triposg(self, crop_path):
         """TripoSG (image-to-3D) inference -> (verts, faces). Removes the crop's
         background (BriaRMBG) and samples a mesh in TripoSG's unit cube.
-        Steps/CFG/seed via VID2SIM_TRIPOSG_STEPS / _CFG / _SEED."""
+        Steps/CFG/seed via SOBA_TRIPOSG_STEPS / _CFG / _SEED."""
         import numpy as np
         import torch
 
         pipe, rmbg, prepare_image = self._load_triposg()
         img = prepare_image(str(crop_path), bg_color=np.array([1.0, 1.0, 1.0]),
                             rmbg_net=rmbg)
-        steps = int(os.environ.get("VID2SIM_TRIPOSG_STEPS", "50"))
-        cfg = float(os.environ.get("VID2SIM_TRIPOSG_CFG", "7.0"))
-        seed = int(os.environ.get("VID2SIM_TRIPOSG_SEED", "42"))
+        steps = int(os.environ.get("SOBA_TRIPOSG_STEPS", "50"))
+        cfg = float(os.environ.get("SOBA_TRIPOSG_CFG", "7.0"))
+        seed = int(os.environ.get("SOBA_TRIPOSG_SEED", "42"))
         # The flash decoder needs `diso` (a CUDA ext requiring nvcc). Default OFF so
         # TripoSG uses the marching-cubes extractor instead — no nvcc/diso needed.
-        # Set VID2SIM_TRIPOSG_FLASH=1 on a pod that has diso built.
-        use_flash = os.environ.get("VID2SIM_TRIPOSG_FLASH", "0") == "1"
+        # Set SOBA_TRIPOSG_FLASH=1 on a pod that has diso built.
+        use_flash = os.environ.get("SOBA_TRIPOSG_FLASH", "0") == "1"
         # Mesh-extraction resolution. TripoSG's default (dense 8 / hierarchical 9,
         # a 512^3 grid) is REQUIRED for correct geometry: the reduced 7/8 (256^3)
         # under-resolves the marching-cubes iso-surface and turns thin/concave
         # objects (chairs) into a holey genus-~3000 sponge, while bulky objects
         # (couch) survive. 8/9 decodes ~16M points and is tight on an 8 GB GPU; it
         # fits when the card is otherwise free (serial per-object regen), and is a
-        # non-issue on RunPod. Dial DOWN via VID2SIM_TRIPOSG_DENSE/_HIER only if it
+        # non-issue on RunPod. Dial DOWN via SOBA_TRIPOSG_DENSE/_HIER only if it
         # OOMs — accepting the sponge — but prefer RunPod for 8 GB quality builds.
-        dense = int(os.environ.get("VID2SIM_TRIPOSG_DENSE", "8"))
-        hier = int(os.environ.get("VID2SIM_TRIPOSG_HIER", "9"))
+        dense = int(os.environ.get("SOBA_TRIPOSG_DENSE", "8"))
+        hier = int(os.environ.get("SOBA_TRIPOSG_HIER", "9"))
         if torch.cuda.is_available():
             torch.cuda.empty_cache()  # free the prior object's decode before this one
         with torch.no_grad():
@@ -1102,7 +1102,7 @@ class LocalGpuEngine(Engine):
         The repo (cloned by deploy/runpod/setup_hunyuan3d.sh) exposes the shape
         package under hy3dshape/ (and hy3dpaint/ for the optional PBR texture
         model). Model id defaults to the full 2.1 checkpoint; override with
-        VID2SIM_HUNYUAN_MODEL=tencent/Hunyuan3D-2mini for the 0.6B variant that
+        SOBA_HUNYUAN_MODEL=tencent/Hunyuan3D-2mini for the 0.6B variant that
         fits an 8 GB GPU (the local cost-saver path). Shape gen needs ~10 GB, so
         the full 2.1 OOMs an 8 GB box -> caught -> object dropped (RunPod carries
         it); texture generation (21 GB) is RunPod-only and not run here.
@@ -1111,13 +1111,13 @@ class LocalGpuEngine(Engine):
             return self._hunyuan
         import sys
 
-        home = os.environ.get("VID2SIM_HUNYUAN_HOME", "/workspace/Hunyuan3D-2.1")
+        home = os.environ.get("SOBA_HUNYUAN_HOME", "/workspace/Hunyuan3D-2.1")
         for p in (home, os.path.join(home, "hy3dshape"), os.path.join(home, "hy3dpaint")):
             if os.path.isdir(p) and p not in sys.path:
                 sys.path.insert(0, p)
         from hy3dshape.pipelines import Hunyuan3DDiTFlowMatchingPipeline
 
-        model_id = os.environ.get("VID2SIM_HUNYUAN_MODEL", "tencent/Hunyuan3D-2.1")
+        model_id = os.environ.get("SOBA_HUNYUAN_MODEL", "tencent/Hunyuan3D-2.1")
         pipe = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(model_id)
         # Hunyuan ships its own background remover; if unavailable, we pass the raw
         # crop (the shape model tolerates a light background but prefers a clean one).
@@ -1132,7 +1132,7 @@ class LocalGpuEngine(Engine):
     def _run_hunyuan(self, crop_path):
         """Hunyuan3D 2.1 SHAPE inference -> (verts, faces). Background-removes the
         crop, runs the flow-matching shape pipeline, and returns the untextured
-        mesh in the model's own frame. Steps/seed via VID2SIM_HUNYUAN_STEPS/_SEED."""
+        mesh in the model's own frame. Steps/seed via SOBA_HUNYUAN_STEPS/_SEED."""
         import numpy as np
         import torch
         from PIL import Image
@@ -1145,8 +1145,8 @@ class LocalGpuEngine(Engine):
             img = img.convert("RGB")
             if rembg is not None:
                 img = rembg(img)  # -> RGBA with background stripped
-        steps = int(os.environ.get("VID2SIM_HUNYUAN_STEPS", "30"))
-        seed = int(os.environ.get("VID2SIM_HUNYUAN_SEED", "42"))
+        steps = int(os.environ.get("SOBA_HUNYUAN_STEPS", "30"))
+        seed = int(os.environ.get("SOBA_HUNYUAN_SEED", "42"))
         with torch.no_grad():
             mesh = pipe(image=img, num_inference_steps=steps,
                         generator=torch.Generator().manual_seed(seed))[0]
@@ -1194,15 +1194,15 @@ def make_engine(tier=None) -> Engine:
            If only the GEN endpoint is set and a local CUDA GPU exists, the
            completion band stays local (SplitEngine) instead of degrading from
            PatchComplete to the Poisson fallback.
-      2. LocalGpuEngine — if a CUDA GPU is visible (and VID2SIM_LOCAL_GPU != "0").
+      2. LocalGpuEngine — if a CUDA GPU is visible (and SOBA_LOCAL_GPU != "0").
       3. LocalEngine    — no GPU: completion = Poisson, generation = drop.
 
     The generative model defaults to the per-tier pick (gen_model_for_tier: T1-2
     TripoSG, T3-4 Hunyuan3D). An explicit env override always wins:
-    RUNPOD_GEN_MODEL/RUNPOD_COMPLETION_MODEL (RunPod) or VID2SIM_GEN_MODEL/
-    VID2SIM_COMPLETION_MODEL (local). This is why heavy Hunyuan3D (~10 GB, tiers
+    RUNPOD_GEN_MODEL/RUNPOD_COMPLETION_MODEL (RunPod) or SOBA_GEN_MODEL/
+    SOBA_COMPLETION_MODEL (local). This is why heavy Hunyuan3D (~10 GB, tiers
     3-4) lands on RunPod by default while the local 8 GB box keeps TripoSG — and
-    a small local scene can still force Hunyuan-2mini via VID2SIM_GEN_MODEL."""
+    a small local scene can still force Hunyuan-2mini via SOBA_GEN_MODEL."""
     tier_gen = gen_model_for_tier(tier)
     key = os.environ.get("RUNPOD_API_KEY")
     gen = os.environ.get("RUNPOD_GEN_ENDPOINT_ID") or os.environ.get("RUNPOD_ENDPOINT_ID")
@@ -1213,19 +1213,19 @@ def make_engine(tier=None) -> Engine:
             gen_model=os.environ.get("RUNPOD_GEN_MODEL", tier_gen),
             completion_model=os.environ.get("RUNPOD_COMPLETION_MODEL", "pointr"),
         )
-        local_ok = (os.environ.get("VID2SIM_LOCAL_GPU", "1") != "0"
+        local_ok = (os.environ.get("SOBA_LOCAL_GPU", "1") != "0"
                     and LocalGpuEngine.is_available())
         if gen and not comp and local_ok:
             local = LocalGpuEngine(
                 completion_model=os.environ.get(
-                    "VID2SIM_COMPLETION_MODEL", "patchcomplete"))
+                    "SOBA_COMPLETION_MODEL", "patchcomplete"))
             return SplitEngine(completer=local, regenerator=runpod)
         return runpod
-    if os.environ.get("VID2SIM_LOCAL_GPU", "1") != "0" and LocalGpuEngine.is_available():
+    if os.environ.get("SOBA_LOCAL_GPU", "1") != "0" and LocalGpuEngine.is_available():
         return LocalGpuEngine(
-            gen_model=os.environ.get("VID2SIM_GEN_MODEL", tier_gen),
+            gen_model=os.environ.get("SOBA_GEN_MODEL", tier_gen),
             # PatchComplete is the verdict completion pick (real-scan robust, runs
-            # locally); override with VID2SIM_COMPLETION_MODEL=pointr/compc/etc.
-            completion_model=os.environ.get("VID2SIM_COMPLETION_MODEL", "patchcomplete"),
+            # locally); override with SOBA_COMPLETION_MODEL=pointr/compc/etc.
+            completion_model=os.environ.get("SOBA_COMPLETION_MODEL", "patchcomplete"),
         )
     return LocalEngine()

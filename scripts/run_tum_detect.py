@@ -10,8 +10,8 @@ This is the Build-Order Phase-4 validation the fake backend couldn't give us:
 
 Run (weights: yolo auto-downloads; sam2 checkpoint from --sam2-ckpt):
   PYTHONPATH=src python scripts/run_tum_detect.py \
-      --seq ~/projects/vid2sim/data/tum/rgbd_dataset_freiburg1_xyz \
-      --out ~/projects/vid2sim/data/tum/bundle_f1xyz_yolo --max-frames 100
+      --seq ~/projects/soba/data/tum/rgbd_dataset_freiburg1_xyz \
+      --out ~/projects/soba/data/tum/bundle_f1xyz_yolo --max-frames 100
 """
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ def main() -> None:
     ap.add_argument("--model", default="yolo11s-seg.pt")
     ap.add_argument("--conf", type=float, default=0.4)
     ap.add_argument("--sam2-ckpt",
-                    default=str(Path.home() / "projects/vid2sim/models/sam2.1_hiera_large.pt"))
+                    default=str(Path.home() / "projects/soba/models/sam2.1_hiera_large.pt"))
     ap.add_argument("--sam2-cfg", default="configs/sam2.1/sam2.1_hiera_l.yaml")
     ap.add_argument("--skip-sam2", action="store_true",
                     help="stop after YOLO (inspect raw detections first)")

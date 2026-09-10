@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# vid2sim-v2 — one-shot host front-end run on a RunPod pod.
+# soba — one-shot host front-end run on a RunPod pod.
 #
 # Runs, in order: sanity tests -> Replica bundle -> scene assembly
 # (run_assemble.py does the gate + TSDF + assembly end-to-end, Z-D order,
@@ -8,7 +8,7 @@
 # (serve.py blocks the terminal, so you start it yourself).
 #
 # Usage on the pod:
-#     cd /workspace/vid2sim-v2 && git pull && bash deploy/runpod/run_pipeline.sh
+#     cd /workspace/soba && git pull && bash deploy/runpod/run_pipeline.sh
 #
 # Tunables (env) — defaults are a FAST smoke run; override for the dense build:
 #     SCENE       scene name              (default office_3)

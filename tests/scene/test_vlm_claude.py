@@ -124,18 +124,18 @@ def test_make_backend_requires_api_key(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     assert vlm_claude.make_backend() is None
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setenv("VID2SIM_VLM", "0")  # explicit off-switch wins
+    monkeypatch.setenv("SOBA_VLM", "0")  # explicit off-switch wins
     assert vlm_claude.make_backend() is None
 
 
 def test_make_backend_reads_config_model(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.delenv("VID2SIM_VLM", raising=False)
-    monkeypatch.delenv("VID2SIM_VLM_MODEL", raising=False)
+    monkeypatch.delenv("SOBA_VLM", raising=False)
+    monkeypatch.delenv("SOBA_VLM_MODEL", raising=False)
     be = vlm_claude.make_backend()
     assert be is not None and be.model == "claude-opus-4-8"
     assert be.max_tokens == 4096
-    monkeypatch.setenv("VID2SIM_VLM_MODEL", "claude-haiku-4-5")
+    monkeypatch.setenv("SOBA_VLM_MODEL", "claude-haiku-4-5")
     assert vlm_claude.make_backend().model == "claude-haiku-4-5"
 
 

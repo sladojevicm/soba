@@ -1,4 +1,4 @@
-# BENCHMARK — measured accuracy of the vid2sim-v2 pipeline
+# BENCHMARK — measured accuracy of the Soba pipeline (formerly vid2sim-v2)
 
 _Measured 2026-07-05 on branch `fix/phase3-pose-and-eval` (commit `363dc52`),
 CPU-only (WSL2, 8 cores, no CUDA), Open3D 0.19 / numpy 2.5 / CoACD 1.0.
@@ -72,7 +72,7 @@ time; the capped numbers were T1 2.15 / MASt3R 1.85 cm — the full sequence
 worsens both and flips the winner, see the reading below). Cross-machine
 protocol check: tier-1 odometry re-run here reproduces the fr1 rows exactly
 (4.74 / 26.37 cm; the fr2/xyz check predates the full re-run). MASt3R runs with the 8 GB
-anchor cap `VID2SIM_MAST3R_MAX_IMAGES=24` — 24 anchor frames globally aligned
+anchor cap `SOBA_MAST3R_MAX_IMAGES=24` — 24 anchor frames globally aligned
 (dust3r), metric scale solved against sensor depth, all in-between poses
 SE(3)-interpolated._
 
@@ -119,9 +119,9 @@ Reading, per regime:
 Reproduce:
 
 ```
-PYTHONPATH=src VID2SIM_MAST3R_MAX_IMAGES=24 python scripts/bench_tum_pose.py \
-    --seq  ~/projects/vid2sim/data/tum/rgbd_dataset_freiburg1_desk \
-    --bundle ~/projects/vid2sim/data/tum/bundle_f1desk \
+PYTHONPATH=src SOBA_MAST3R_MAX_IMAGES=24 python scripts/bench_tum_pose.py \
+    --seq  ~/projects/soba/data/tum/rgbd_dataset_freiburg1_desk \
+    --bundle ~/projects/soba/data/tum/bundle_f1desk \
     --tiers 1 2 --max-frames 10000 --json results.json
 ```
 

@@ -56,7 +56,7 @@ _DEFAULT_FRONTEND_DIR = _REPO_ROOT / "frontend"
 
 # Spacing between replayed object_added events, so the browser visibly streams
 # objects in rather than popping them all at once. Overridable for tests.
-_REPLAY_DELAY_S = float(os.environ.get("VID2SIM_SSE_DELAY", "0.4"))
+_REPLAY_DELAY_S = float(os.environ.get("SOBA_SSE_DELAY", "0.4"))
 _HEARTBEAT_S = 15.0
 
 
@@ -67,15 +67,21 @@ def create_app(
     """Build the Starlette app serving `scene_dir` and the `frontend_dir` viewer.
 
     Both default to the repo's `out/scene_office_3/` and `frontend/`. The scene
-    dir can also be set via the `VID2SIM_SCENE_DIR` env var (the factory arg
+    dir can also be set via the `SOBA_SCENE_DIR` env var (the factory arg
     wins when given).
     """
     scene_dir = Path(
         scene_dir
-        or os.environ.get("VID2SIM_SCENE_DIR")
+        or os.environ.get("SOBA_SCENE_DIR")
         or _DEFAULT_SCENE_DIR
     ).resolve()
-    frontend_dir = Path(frontend_dir or _DEFAULT_FRONTEND_DIR).resolve()
+    if frontend_dir is None:
+        # Prefer the committed Vite bundle (frontend/dist/) so `python
+        # scripts/serve.py` needs no Node; fall back to frontend/ itself so a
+        # stale checkout (pre-bundle, vendored libs) still runs.
+        dist = _DEFAULT_FRONTEND_DIR / "dist"
+        frontend_dir = dist if (dist / "index.html").is_file() else _DEFAULT_FRONTEND_DIR
+    frontend_dir = Path(frontend_dir).resolve()
 
     def _read_scene() -> dict | None:
         p = scene_dir / "scene.json"
@@ -187,14 +193,14 @@ def main() -> None:
 
     import uvicorn
 
-    ap = argparse.ArgumentParser(description="vid2sim Step-10 scene server")
+    ap = argparse.ArgumentParser(description="soba Step-10 scene server")
     ap.add_argument("--scene", default=None, help="scene dir (default out/scene_office_3)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
     args = ap.parse_args()
 
     if args.scene:
-        os.environ["VID2SIM_SCENE_DIR"] = str(Path(args.scene).resolve())
+        os.environ["SOBA_SCENE_DIR"] = str(Path(args.scene).resolve())
     uvicorn.run(create_app(args.scene), host=args.host, port=args.port)
 
 

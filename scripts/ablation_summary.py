@@ -8,7 +8,7 @@ across the 7 rooms with reconstructable furniture (room_1 excluded)."""
 import json, statistics as st
 from pathlib import Path
 
-REPO = Path.home()/"projects/vid2sim/vid2sim-v2"
+REPO = Path.home()/"projects/soba"
 OUT = REPO/"out"
 ROOMS = ["office_0","office_1","office_2","office_3","office_4","room_0","room_2"]
 COLS = {

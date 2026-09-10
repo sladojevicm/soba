@@ -1,45 +1,112 @@
-# vid2sim-v2
+# Soba
 
-Rewrite of [vid2sim](https://github.com/Vector-Space-Moggers/vid2sim) — a pipeline that turns a short depth-camera video of a room into an interactive, browser-based physics simulation.
+*Soba* (Slovenian for "room") is a pipeline that converts a short RGB-D video of a room into an interactive, physics-enabled 3D scene that runs in a plain browser tab with no backend.
 
-> **Status:** Build in progress against `PLAN_FINAL_FINAL` (v11). The plan's
-> Build Order is followed phase by phase.
->
-> **Done so far (first three build steps):**
-> - ✅ **Step 1 — Foundation:** `scene.json` **v2.0** contract (Contract 3) — schema,
->   example, validator, tests (see [`docs/scene-spec.md`](docs/scene-spec.md)); plus
->   [`config/pipeline.yaml`](config/pipeline.yaml) (tier params, class gates, solidity,
->   density, physics lookup, ground default) and
->   [`config/coco_class_map.yaml`](config/coco_class_map.yaml) (dataset→COCO, fix T2).
-> - ✅ **Step 2 — Data input:** `perception/bundle.py` (Contract-1 PerceptionBundle I/O)
->   and `perception/dataset_reader.py` (TUM RGB-D reader + COCO label mapping).
-> - ✅ **Step 3 — Pose estimation:** `reconstruction/slam.py` (RGB-D odometry; MASt3R /
->   ORB-SLAM3 interfaces) and `reconstruction/observed_cloud.py` (Step 4 Part A
->   back-projection — the tier-independent ICP/gate reference).
->
-> Heavy host-side deps (Open3D, OpenCV, trimesh) live behind the `recon` extra; the
-> contract and data-input layers install and test without them.
+This repository accompanies a paper submitted to ERK 2026 (Portorož); the evaluation behind every claim below is in [BENCHMARK.md](BENCHMARK.md).
 
-## Goal
+## Motivation
 
-Preserve what works in the original pipeline while rewriting the implementation for clarity and maintainability.
+Existing routes to an interactive replica of a real room are either expensive (enterprise GPU + simulation platforms), manual (hand-modelled assets and physics authoring), or incomplete (radiance-field and splat reconstructions render well but provide no per-object collision geometry or physical parameters).
 
-The original is organized as four bounded contexts communicating through a single typed `scene.json` contract:
+Soba takes a short RGB-D video and produces a mesh-based, physically parameterised simulation: each object is a separate rigid body with an estimated mass and material, assigned by a vision-language model from an image crop, and convex collision hulls. The scene runs at interactive rates in the browser; objects can be selected, dragged, and knocked over.
 
-| Stage | Context | Responsibility |
-|---|---|---|
-| A | Perception | Camera capture, depth fusion, segmentation |
-| B | Reconstruction | Mesh completion (image-to-3D), ICP alignment |
-| C | Scene Assembly | Physics inference (VLM), convex decomposition, exporters |
-| D | Presentation | Browser viewer (Three.js + Rapier WASM) |
+## How it works
 
-The `scene.json` schema is the cross-context contract and should remain the stable boundary through the rewrite.
+```
+  RGB-D video (TUM / Replica / OAK capture)
+        |
+        v
+  +---- A - Perception -----------------------------+
+  |  frames + depth + masks -> PerceptionBundle     |
+  |  (YOLO/SAM2 seam, GT masks on datasets)         |
+  +------------------+------------------------------+
+                     v
+  +---- B - Reconstruction -------------------------+
+  |  pose: RGB-D odometry (T1) / MASt3R (T2-4)      |
+  |  per-object cloud -> TSDF fusion                |
+  |  confidence gate: keep / complete / regenerate  |
+  |  image-to-3D: TripoSG (T2) / Hunyuan3D (T3-4)   |
+  +------------------+------------------------------+
+                     v
+  +---- C - Scene Assembly -------------------------+
+  |  physics: Claude VLM (material + fill_fraction) |
+  |  mass = volume x density x fill fraction        |
+  |  CoACD convex hulls -> colliders                |
+  +------------------+------------------------------+
+                     v
+  +---- D - Presentation ---------------------------+
+  |  scene.json v2.0 -> Three.js + Rapier WASM      |
+  |  real-time, no backend                          |
+  +-------------------------------------------------+
+```
 
-## Migration notes
+Four bounded contexts communicate through one typed contract, [`spec/scene.schema.json`](spec/scene.schema.json). No stage depends on how any other is implemented — swapping the image-to-3D model is a configuration change, not a refactor.
 
-- Reference implementation: `../vid2sim` (local clone) / [upstream](https://github.com/Vector-Space-Moggers/vid2sim).
-- Stage B fallback chain in the original: Hunyuan3D 2.1 (primary, RunPod) → TripoSG 1.5B → SF3D (local emergency) → stub. (Note: the upstream README markets SF3D as primary, but the code/ADRs treat it as the last-resort fallback.)
+### Quality tiers
 
-## License
+| Tier | Pose | Mesh source | Physics | Colliders |
+|---|---|---|---|---|
+| 1 · fast | RGB-D odometry | image-to-3D (TripoSG) | lookup table | AABB box |
+| 2 · balanced | MASt3R | gate → TSDF / completion / TripoSG | Claude VLM | CoACD ≤8 hulls |
+| 3 · quality | MASt3R | gate → TSDF / completion / Hunyuan3D 2.1 | Claude VLM | CoACD ≤16 hulls |
+| 4 · maximum | MASt3R | tier 3 + 2 mm voxels | Claude VLM | CoACD ≤32 hulls |
 
-TBD.
+An ORB-SLAM3 pose path was originally planned for tier 4 and dropped after measurement: MASt3R already reaches 7.6 cm ATE on the hardest TUM sequence, leaving loop closure without a demonstrated benefit.
+
+### The confidence gate
+
+A camera typically sees only part of each object. The gate scores every object's angular coverage and surface completeness and routes it one of three ways: **keep** the fused TSDF mesh (well observed), **complete** it (fill the unseen regions while keeping the measured geometry), or **regenerate** it from an image crop (poorly observed). Measured geometry is used wherever it is trustworthy; generative models step in only where observation ends.
+
+## Evaluation
+
+All numbers below are measured; the full methodology, per-tier and per-room tables, and known limitations are in [BENCHMARK.md](BENCHMARK.md). Where a metric is not applicable, that file states why rather than substituting a proxy.
+
+- **Pose (TUM RGB-D):** MASt3R reaches 1.85–8.8 cm ATE RMSE; on fast handheld motion it improves on frame-to-frame odometry by 3.5× (26.4 → 7.6 cm). Metric scale is recovered to within 0.1–7.5 % from sensor depth alone.
+- **Scene reconstruction (Replica, 8 rooms vs. ground-truth meshes):** recall, precision, Chamfer distance, and F-score at 5 cm per tier and per room; scene scores up to 89/100 (room_2, tier 2). Tier 4's extra compute improves physics fidelity but not the surface-accuracy metrics.
+- **Physical properties on ground-truth meshes (YCB + ABO):** on calibrated furniture classes, 80 % of predicted masses fall within 2× of the real weight. The VLM identifies materials at 98 % accuracy on YCB, and the `fill_fraction` ablation (asking the model how hollow an object is) reduces ABO's median mass error from 2.46 to 1.30.
+- **Colliders:** CoACD successfully decomposed 86 of 87 meshes.
+
+## Repository layout
+
+```
+.
+├── src/
+│   ├── perception/       # bundle I/O, TUM/Replica readers, detection seam
+│   ├── reconstruction/   # odometry/MASt3R, TSDF, confidence gate, gen engines
+│   ├── scene/            # VLM physics, mass, CoACD, glTF export, assembler
+│   └── server.py         # Starlette server (scene.json + meshes + SSE)
+├── frontend/             # Three.js + Rapier viewer, React UI (built bundle committed)
+├── spec/                 # scene.json v2.0 JSON Schema — the frozen contract
+├── config/               # pipeline.yaml: tiers, gates, densities, solidity
+├── scripts/              # run_assemble, serve, benchmarks, Replica tooling
+├── deploy/runpod/        # GPU-side bootstrap (Hunyuan3D / TripoSG / MASt3R)
+├── tests/                # pytest — contract, readers, gate, assembly, server
+└── BENCHMARK.md          # measured results behind the claims above
+```
+
+## Running
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[recon,serve]"
+
+# 1. Build a perception bundle (e.g. a Replica room, GT masks included)
+PYTHONPATH=src python scripts/build_replica_bundles.py --scenes office_3 --out bundles
+
+# 2. Gate -> reconstruct -> physics -> assemble
+PYTHONPATH=src python scripts/run_assemble.py \
+    --bundle bundles/office_3 --tier 2 --out out/scene_office_3
+
+# 3. Serve and interact
+python scripts/serve.py --scene out/scene_office_3
+# open http://127.0.0.1:8000 — click furniture to select, drag to push,
+# spacebar drops a ball
+```
+
+Without a GPU, tier 1–2 completion falls back to geometric repair and generative objects are deferred. With a local GPU or a RunPod instance (see [`deploy/runpod/`](deploy/runpod)), the full TripoSG/Hunyuan3D path is enabled with no code changes.
+
+## Documentation
+
+- [BENCHMARK.md](BENCHMARK.md) — TUM / Replica / YCB / ABO results, per stage and per tier
+- [Scene spec](docs/scene-spec.md) — the `scene.json` v2.0 contract
+- [STATUS.md](STATUS.md) — running engineering log
