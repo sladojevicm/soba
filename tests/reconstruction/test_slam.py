@@ -64,6 +64,7 @@ def test_make_estimator_types():
     assert isinstance(slam.make_estimator(4), slam.Mast3rEstimator)
 
 
+@pytest.mark.gpu  # estimate() imports torch + the dust3r checkout before its early return
 def test_mast3r_empty_bundle_returns_no_poses():
     import types
 

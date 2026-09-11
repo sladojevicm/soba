@@ -45,6 +45,12 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    # Needs torch and/or a model checkout (MASt3R, SAM2, ...) that only the GPU
+    # machine has. tests/conftest.py skips these when SOBA_SKIP_GPU_TESTS=1
+    # (set by .github/workflows/ci.yml); they run unchanged everywhere else.
+    "gpu: needs torch and/or a model checkout (skipped in CI via SOBA_SKIP_GPU_TESTS=1)",
+]
 
 # CI lint baseline (docker-agent, 2026-09-11): only syntax errors (E9) and
 # pyflakes (F) — undefined names, unused imports/variables. Style rules are
