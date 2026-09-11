@@ -6,9 +6,12 @@ import tailwindcss from "@tailwindcss/vite";
 // Dev proxy: `npm run dev` gives HMR against the real Python scene server
 // (scripts/serve.py on :8000). The /events route is SSE — proxied as a
 // streaming response (http-proxy pipes chunked bodies; verified manually).
+// /api (job upload + status) and /jobs (job-scoped scene routes) are proxied
+// too, so http://localhost:5173/jobs/<id>/ works in dev; the viewer resolves
+// its own fetches through sceneUrl() (viewer/loaders.ts).
 const SCENE_SERVER = "http://127.0.0.1:8000";
 const proxy = Object.fromEntries(
-  ["/scene.json", "/meshes", "/hulls", "/events", "/eval.json"].map((p) => [
+  ["/scene.json", "/meshes", "/hulls", "/events", "/eval.json", "/api", "/jobs"].map((p) => [
     p,
     { target: SCENE_SERVER, changeOrigin: true },
   ])

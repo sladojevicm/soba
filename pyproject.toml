@@ -27,6 +27,12 @@ serve = [
     "uvicorn>=0.27",
     "sse-starlette>=2.0",
 ]
+# Job API (src/api/): multipart upload parsing + async file writes on top of
+# the `serve` extra. `pip install -e ".[serve,api]"` for the ingest service.
+api = [
+    "python-multipart>=0.0.9",
+    "aiofiles>=23.2",
+]
 # Heavy, host-side reconstruction deps (CUDA recommended for TSDF). Kept
 # optional so the contract + data-input layers install and test without them.
 recon = [
