@@ -120,8 +120,8 @@ Reproduce:
 
 ```
 PYTHONPATH=src SOBA_MAST3R_MAX_IMAGES=24 python scripts/bench_tum_pose.py \
-    --seq  ~/projects/soba/data/tum/rgbd_dataset_freiburg1_desk \
-    --bundle ~/projects/soba/data/tum/bundle_f1desk \
+    --seq  ~/soba/data/tum/rgbd_dataset_freiburg1_desk \
+    --bundle ~/soba/data/tum/bundle_f1desk \
     --tiers 1 2 --max-frames 10000 --json results.json
 ```
 

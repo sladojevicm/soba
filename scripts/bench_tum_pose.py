@@ -13,9 +13,9 @@ job is active. SOBA_MAST3R_MAX_IMAGES (default 24) caps the anchor count
 on 8 GB cards.
 
 Example:
-  PYTHONPATH=src ~/projects/soba/venv/bin/python scripts/bench_tum_pose.py \
-      --seq ~/projects/soba/data/tum/rgbd_dataset_freiburg1_xyz \
-      --bundle ~/projects/soba/data/tum/bundle_f1xyz \
+  PYTHONPATH=src ~/soba/.venv/bin/python scripts/bench_tum_pose.py \
+      --seq ~/soba/data/tum/rgbd_dataset_freiburg1_xyz \
+      --bundle ~/soba/data/tum/bundle_f1xyz \
       --tiers 1 2 --max-frames 500 --json results.json
 """
 

@@ -6,7 +6,7 @@ the single best-observed object to confirm a mesh comes out with sane dimensions
 
 Example:
   PYTHONPATH=src python scripts/report_scenes.py \
-    --bundles ~/projects/soba/data/replica/bundles --tier 2 --fuse-best
+    --bundles ~/soba/data/replica/bundles --tier 2 --fuse-best
 """
 
 from __future__ import annotations

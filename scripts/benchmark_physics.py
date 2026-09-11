@@ -36,7 +36,7 @@ Reproduce:
   PYTHONPATH=src python scripts/benchmark_physics.py --dataset ycb
   PYTHONPATH=src python scripts/benchmark_physics.py --dataset abo
 
-Outputs (under --data-root, default ~/projects/soba/data/benchmarks):
+Outputs (under --data-root, default ~/soba/data/benchmarks):
   {ycb,abo}/…             fetched ground truth + images (manifest *_gt.json)
   predictions/…           per-object cached Claude responses (rerun-safe)
   results/{ds}_results.json   per-object rows + metrics summary

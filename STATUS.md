@@ -45,7 +45,7 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   gravity-aligned, so floor snapping is wrong on real-sensor runs.
 - **Machines.** This WSL box has no GPU and no data, and its `.venv` lacks the
   `recon` extra: `pytest` here gives 125 pass and 49 fail or error, every one a
-  missing-`open3d` import (last full run: 241 pass, 2026-07-06, GPU machine). Data and builds: `~/projects/soba/data` on the
+  missing-`open3d` import (last full run: 241 pass, 2026-07-06, GPU machine). Data and builds: `~/soba/data` on the
   RTX 4060 machine; `/workspace` on the RunPod pod holds tier 3/4 outputs, and the
   tier 1/2 output folders may be gone with the old pod. The pod bills hourly.
 

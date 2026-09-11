@@ -18,7 +18,7 @@ must, in ComPC's own env:
   2. run ComPC completion,
   3. save the (M,3) float32 completed cloud to `{output}` (np.save), SAME frame as input.
 Example:
-  SOBA_COMPC_CMD="/opt/compc-env/bin/python ~/projects/soba/ComPC/soba_runner.py \\
+  SOBA_COMPC_CMD="/opt/compc-env/bin/python ~/soba/ComPC/soba_runner.py \\
                      --input {input} --output {output}"
 If the var is unset or the runner fails, complete_points raises -> the engine
 falls back to local Poisson (never crashes the pipeline). Output is a dense cloud

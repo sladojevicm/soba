@@ -7,7 +7,7 @@ Z-D order (gate first, TSDF only for survivors).
 
 Example:
   PYTHONPATH=src python scripts/run_assemble.py \
-    --bundle ~/projects/soba/data/replica/bundles/office_3 --tier 4 \
+    --bundle ~/soba/data/replica/bundles/office_3 --tier 4 \
     --out out/scene_office_3
 """
 
@@ -54,7 +54,7 @@ def run_eval_hook(bundle: Path, out: Path, *,
     import sys as _sys
 
     try:
-        data_root = Path.home() / "projects/soba/data/replica"
+        data_root = Path.home() / "soba/data/replica"
         gt_root = gt_root or data_root / "scenes"
         traj_root = traj_root or data_root / "gt_traj"
         evaluator = evaluator or Path(__file__).resolve().parent / "evaluate_scene.py"
