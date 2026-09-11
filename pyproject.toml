@@ -45,3 +45,13 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+# CI lint baseline (docker-agent, 2026-09-11): only syntax errors (E9) and
+# pyflakes (F) — undefined names, unused imports/variables. Style rules are
+# deliberately NOT enabled so the check never blocks on formatting.
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E9", "F"]

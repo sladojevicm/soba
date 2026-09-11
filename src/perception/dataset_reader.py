@@ -308,7 +308,7 @@ class ReplicaReader:
         *,
         keep_default: bool = False,
     ) -> PerceptionBundle:
-        from .bundle import _imread, _imwrite  # lazy: only used when writing
+        from .bundle import _imread  # lazy: only used when writing
 
         class_map = load_coco_class_map()
         all_poses = self.poses()

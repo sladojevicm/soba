@@ -11,7 +11,6 @@ import json
 from types import SimpleNamespace
 
 import numpy as np
-import pytest
 
 from scene import vlm, vlm_claude
 
