@@ -4,6 +4,7 @@ Read these only when you need the reasoning behind a decision. The current state
 
 All entries predate the 2026-07-13 rename from vid2sim-v2 to Soba and were moved verbatim on 2026-09-04: substitute `soba` / `SOBA_*` for `vid2sim-v2` / `VID2SIM_*` in any command you copy. Newest first.
 
+- [2026-09-11](2026-09-11-observability-a.md) — Observability phase A: `src/telemetry/`, JSON logs (`SOBA_LOG_JSON=1`), stage timers, gate events, `run_metrics.json` contract
 - [2026-09-05](2026-09-05-routing-ablation-benchmark-s4.md) — Routing ablation, gated tier 2 vs forced tsdf/completion/generative on 7 rooms; BENCHMARK §4 written; camera-ready at 4 pp
 - [2026-07-06](2026-07-06-room-accuracy-benchmark-s3.md) — Tier 1 + tier 2 room accuracy on all 8 Replica rooms; BENCHMARK §3 written
 - [2026-07-05](2026-07-05-part3-custom-trajectories-fill-fraction.md) — Custom `_v2` trajectories for 8 rooms; fill_fraction physics fix; full Replica GT on disk
