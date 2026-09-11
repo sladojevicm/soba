@@ -1,0 +1,91 @@
+# soba — local composition. Profiles:
+#   (none)   api only: serves ./out/<SOBA_SCENE> with the committed viewer
+#   cpu      + redis + a placeholder worker (no GPU; the job API and the
+#            queue consumer land with feat/job-api / feat/runpod-orchestration,
+#            at which point the worker command becomes `python -m orchestration.worker`)
+#   gpu      + the CUDA pipeline image as the worker (needs the NVIDIA runtime)
+#
+#   SOBA_SCENE=scene_test docker compose up api
+#   docker compose --profile cpu up
+#   docker compose --profile gpu up worker-gpu
+#
+# Every image is built from the repo root with the Dockerfiles under docker/.
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+      # args: { SOBA_EXTRAS: "serve,api" }   # once the api extra exists on develop
+    image: soba-api:local
+    ports:
+      - "8000:8000"
+    environment:
+      SOBA_SCENE_DIR: /data/${SOBA_SCENE:-scene_test}
+    volumes:
+      # scripts/make_test_scene.py writes out/scene_test on this box.
+      - ./out:/data:ro
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    profiles: [cpu, gpu]
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # CPU worker placeholder. Re-uses the API image (no CUDA). Replace the
+  # command with `python -m orchestration.worker` when feat/runpod-orchestration
+  # merges; its CPU mode runs scripts/run_assemble.py --gate-only or a mock.
+  worker:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: soba-api:local
+    profiles: [cpu]
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      SOBA_REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./out:/data
+    command:
+      - python
+      - -c
+      - |
+        import time
+        print("soba worker placeholder: src/orchestration/worker.py lands with "
+              "feat/runpod-orchestration; until then this container only idles.", flush=True)
+        while True:
+            time.sleep(3600)
+
+  worker-gpu:
+    build:
+      context: .
+      dockerfile: docker/pipeline.Dockerfile
+    image: soba-pipeline:local
+    profiles: [gpu]
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      SOBA_REDIS_URL: redis://redis:6379/0
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      # model checkouts + weights (setup_*.sh) and pipeline outputs
+      - ./workspace:/workspace
+      - ./out:/app/out
+    command: ["worker"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
