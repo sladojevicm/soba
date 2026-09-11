@@ -7,7 +7,7 @@ needed. Completes a partial object point cloud (N,3) into a dense one (~16k pts)
 which the caller meshes.
 
 The PoinTr repo lives OUTSIDE this repo (clone of github.com/yuxumin/PoinTr) at
-POINTR_HOME (default ~/projects/soba/PoinTr), with the PCN checkpoint at
+POINTR_HOME (default ~/soba/PoinTr), with the PCN checkpoint at
 pretrained/PoinTr_PCN.pth. Verified on an RTX 4060: loads in ~30 s, < 250 MB VRAM.
 
 PCN was trained on chair/sofa/table (among others) — in-domain for our furniture

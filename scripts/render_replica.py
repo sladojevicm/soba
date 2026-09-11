@@ -22,14 +22,14 @@ Usage:
   # correctness gate — render one frame from an ORIGINAL bundle's pose and
   # compare with the original rgb/depth:
   PYTHONPATH=src python scripts/render_replica.py match-test \
-      --scene-dir ~/projects/soba/data/replica/scenes/office_4 \
-      --bundle ~/projects/soba/data/replica/bundles/office_4 \
-      --frame 0 --out ~/projects/soba/data/replica/previews/frame_match_office_4.png
+      --scene-dir ~/soba/data/replica/scenes/office_4 \
+      --bundle ~/soba/data/replica/bundles/office_4 \
+      --frame 0 --out ~/soba/data/replica/previews/frame_match_office_4.png
 
   # full custom-trajectory bundle:
   PYTHONPATH=src python scripts/render_replica.py render \
-      --scene-dir ~/projects/soba/data/replica/scenes/office_4 \
-      --out ~/projects/soba/data/replica/bundles/office_4_v2 --frames 1800
+      --scene-dir ~/soba/data/replica/scenes/office_4 \
+      --out ~/soba/data/replica/bundles/office_4_v2 --frames 1800
 """
 
 from __future__ import annotations

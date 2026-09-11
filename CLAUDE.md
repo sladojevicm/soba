@@ -46,7 +46,7 @@ python scripts/make_test_scene.py        # writes out/scene_test, the only scene
 ```
 
 This WSL box has no GPU and no data. Bundles, GT and real builds live under
-`~/projects/soba/data` on the GPU machine or `/workspace` on the RunPod pod
+`~/soba/data` on the GPU machine or `/workspace` on the RunPod pod
 (`deploy/runpod/README.md`). Commands copied from STATUS.md predate the rename:
 substitute `SOBA_*` for `VID2SIM_*`.
 

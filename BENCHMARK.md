@@ -37,8 +37,8 @@ functional (pass/fail) checks are possible for stages A, C, D.
 |---|---|---|---|
 | RGB frames | 798 | 613 | 3669 |
 | RGB↔depth association rate (≤20 ms) | **100 %** | **97.2 %** | **99.9 %** |
-| Bundle frames built | 798 | 596 | 1500 (capped) |
-| Depth pixels valid in the [0.4 m, 8 m] gate | **75.6 %** | **74.6 %** | **68.9 %** |
+| Bundle frames built | 798 | 596 | 3665 (full) |
+| Depth pixels valid in the [0.4 m, 8 m] gate | **75.6 %** | **74.6 %** | **69.7 %** |
 
 Segmentation accuracy: **N/A on TUM** — the dataset has no object labels, and
 the repo's known detection gap stands (no YOLO detector is wired into
@@ -51,7 +51,7 @@ ATE = absolute trajectory error after SE(3) alignment, against mocap GT.
 
 | Sequence | Frames | Traj. length | **ATE RMSE** | mean | median | max |
 |---|---|---|---|---|---|---|
-| fr2/xyz (slow, smooth) | 1500 | 2.9 m | **2.15 cm** | 1.97 | 1.87 | 4.4 cm |
+| fr2/xyz (slow, smooth) | 3665 | 7.4 m | **4.26 cm** | 3.68 | 3.14 | 10.1 cm |
 | fr1/xyz (moderate) | 798 | 8.0 m | **4.74 cm** | 4.12 | 3.23 | 10.7 cm |
 | fr1/desk (fast sweep) | 596 | 9.3 m | **26.4 cm** | 23.3 | 22.1 | 52.5 cm |
 
@@ -66,9 +66,12 @@ specified to fix — measured below on the GPU machine.
 
 _Measured 2026-07-05 on the GPU machine (RTX 4060 8 GB, CUDA), same three
 sequences, same bundles-and-protocol as the tier-1 rows above (nearest-
-timestamp ≤20 ms, SE(3) Kabsch; fr2/xyz capped at the first 1500 associated
-pairs). Cross-machine protocol check: tier-1 odometry re-run here reproduces
-the table above exactly (2.15 / 4.74 / 26.37 cm). MASt3R runs with the 8 GB
+timestamp ≤20 ms, SE(3) Kabsch). fr2/xyz re-measured 2026-07-17 on ALL 3665
+associated pairs, both tiers (originally capped at the first 1500 for CPU
+time; the capped numbers were T1 2.15 / MASt3R 1.85 cm — the full sequence
+worsens both and flips the winner, see the reading below). Cross-machine
+protocol check: tier-1 odometry re-run here reproduces the fr1 rows exactly
+(4.74 / 26.37 cm; the fr2/xyz check predates the full re-run). MASt3R runs with the 8 GB
 anchor cap `SOBA_MAST3R_MAX_IMAGES=24` — 24 anchor frames globally aligned
 (dust3r), metric scale solved against sensor depth, all in-between poses
 SE(3)-interpolated._
@@ -82,7 +85,7 @@ as expected for the shared method.
 
 | Sequence | Tier 1 (odometry) | **Tiers 2–4 (MASt3R)** | MASt3R Sim(3) scale | RPE 1 s: T1 → T2–4 |
 |---|---|---|---|---|
-| fr2/xyz (slow, smooth) | 2.15 cm | **1.85 cm** | 1.020 | 0.89 → 1.70 cm/s |
+| fr2/xyz (slow, smooth) | **4.26 cm** | 4.79 cm | 0.988 | 1.07 → 2.41 cm/s |
 | fr1/xyz (moderate, oscillating) | **4.74 cm** | 8.78 cm | 1.075 | 2.25 → 14.1 cm/s |
 | fr1/desk (fast sweep) | 26.37 cm | **7.56 cm** | **1.0008** | 6.67 → 9.83 cm/s |
 
@@ -92,7 +95,11 @@ Reading, per regime:
   (26.4 → 7.56 cm). Global alignment bounds the error that kills incremental
   odometry; this is the measured justification for tiers 2–4 — and for NOT
   building ORB-SLAM3.
-* **Slow motion: MASt3R still edges odometry** (1.85 vs 2.15 cm).
+* **Slow motion (full 2-min fr2/xyz): odometry is slightly ahead** (4.26 vs
+  4.79 cm). Over 3665 frames the 24 anchors sit ~5 s apart, so the
+  interpolation cost (RPE 2.41 vs 1.07 cm/s) outweighs the small drift that
+  slow, smooth motion accumulates. (On the earlier 1500-frame cap MASt3R
+  still edged odometry, 1.85 vs 2.15 cm — denser anchors per unit motion.)
 * **The one regime MASt3R loses: high-frequency oscillation** (fr1/xyz,
   8.78 vs 4.74 cm). Cause is visible in the RPE column: with only 24 anchors
   over 798 frames, SE(3) interpolation smooths straight through the rapid
@@ -100,19 +107,21 @@ Reading, per regime:
   More VRAM (a higher anchor cap) directly attacks this; room-scan footage
   does not oscillate like fr1/xyz, so the walkthrough use case sits closer
   to the desk/fr2 rows.
-* **Metric scale is genuinely solved**: Sim(3)-recovered scale 1.0008–1.075
+* **Metric scale is genuinely solved**: Sim(3)-recovered scale 0.988–1.075
   (0.08–7.5 % error), i.e. `solve_metric_scale` against sensor depth works —
   the pipeline's claim of metric poses holds without any GT scale input.
 * **Runtime inverts the tiers' cost intuition**: MASt3R is ~120 s per
-  sequence regardless of length (fixed 24 anchors), while CPU odometry scales
-  with frames (~0.9 s/frame: 720 s on fr1/xyz, 1362 s on fr2/xyz-1500).
+  sequence regardless of length (fixed 24 anchors; confirmed 120.1 s on the
+  full 3665-frame fr2/xyz), while CPU odometry scales with frames
+  (~0.9 s/frame on the 8-core WSL box: 720 s on fr1/xyz; the full fr2/xyz
+  odometry pass takes hours on the laptop CPU).
 
 Reproduce:
 
 ```
 PYTHONPATH=src SOBA_MAST3R_MAX_IMAGES=24 python scripts/bench_tum_pose.py \
-    --seq  ~/projects/soba/data/tum/rgbd_dataset_freiburg1_desk \
-    --bundle ~/projects/soba/data/tum/bundle_f1desk \
+    --seq  ~/soba/data/tum/rgbd_dataset_freiburg1_desk \
+    --bundle ~/soba/data/tum/bundle_f1desk \
     --tiers 1 2 --max-frames 10000 --json results.json
 ```
 
@@ -435,7 +444,41 @@ _All four tiers produce an **empty scene**: room_1 is a walkthrough-only corrido
 
 <!-- SECTION3:END -->
 
+## 4. Routing ablation — gated tier 2 vs a single forced strategy (2026-09-05)
 
+Reviewer-requested isolation of the confidence gate for the ERK camera-ready:
+the seven non-empty `_v2` rooms rebuilt at otherwise identical tier-2 settings
+with the gate's per-object decision replaced by a constant
+(`run_assemble.py --force-strategy tsdf|completion|generative`). Everything
+downstream — drop-garbage output checks, sizing, placement, eval protocol —
+is unchanged. Driver: `scripts/ablation_routing.sh`; aggregation:
+`scripts/ablation_summary.py` (metric definitions identical to §3; macro-avg
+across the 7 rooms; scenes in `out/abl_<room>_<strategy>/`).
+
+| Strategy | Shipped | Matched/80 | Recall | Precision | mean Chamfer (cm) | mean F@5cm | mean dim-err |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **Gated routing (tier 2)** | 56 | 55 | 0.71 | 0.95 | **5.6** | **0.68** | 0.20 |
+| All TSDF + repair | 66 | 64 | 0.83 | 0.95 | 8.5 | 0.52 | 0.21 |
+| All completion | 66 | 64 | 0.83 | 0.95 | 6.6 | 0.64 | 0.20 |
+| All generative | 47 | 47 | 0.61 | 1.00 | 9.9 | 0.41 | 0.30 |
+
+Readings (all in the camera-ready §3.2/Discussion):
+- **Forced generative reproduces tier 1 to rounding** (47/0.61/1.00/9.9/0.41/0.30
+  vs tier 1's identical row) — the generation cache reuses tier-1 outputs and
+  geometry metrics don't depend on the other tier-2 stage changes, so the
+  tier-1→2 gain in §3 is attributable to the routing itself, not confounds.
+- **Gated routing has the best surface fidelity of any strategy** (Chamfer
+  5.6 cm, F@5cm 0.68) at equal precision.
+- **The fixed measured-geometry strategies buy recall (0.83 vs 0.71), not
+  quality**: both match the same 9 extra GT instances — the poorly observed
+  tail the gate sends to generation, where output checks drop it. Those 9
+  average F@5cm 0.29 (completion) / 0.22 (tsdf) vs 0.72 / 0.56 for the 55
+  objects shared with the gated scene. The gate is a fidelity↔coverage dial;
+  "all completion" is the recall-maximal setting of the same
+  measurement-first principle and the strongest fixed baseline.
+- The paper's claims were reworded accordingly (fidelity, not blanket
+  superiority): "yields more faithful surfaces than fixing any single
+  reconstruction strategy".
 
 
 
@@ -450,8 +493,9 @@ _All four tiers produce an **empty scene**: room_1 is a walkthrough-only corrido
 ## Method / reproducibility notes
 
 - TUM: sequences `rgbd_dataset_freiburg{1_xyz,1_desk,2_xyz}` from
-  cvg.cit.tum.de; fr2/xyz capped at the first 1500 associated pairs (of 3665)
-  for CPU time; odometry = `reconstruction.slam.RgbdOdometry` (Open3D hybrid
+  cvg.cit.tum.de; all three evaluated on every associated pair (fr2/xyz was
+  capped at 1500 of 3665 until the 2026-07-17 full re-run, bundle
+  `bundle_f2xyz_full`); odometry = `reconstruction.slam.RgbdOdometry` (Open3D hybrid
   RGB-D odometry), evaluation identical to `scripts/eval_pose.py`.
 - YCB: `google_16k/nontextured.ply` scans from ycb-benchmarks S3; ground-truth
   masses from the official YCB object-list PDF. Objects with no COCO

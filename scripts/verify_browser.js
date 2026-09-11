@@ -54,7 +54,7 @@ function parseArgs(argv) {
   }
   a.scene = path.resolve(REPO_ROOT, a.scene);
   a.python = a.python || process.env.SOBA_PYTHON ||
-    path.join(os.homedir(), "projects/soba/venv/bin/python");
+    path.join(os.homedir(), "soba/.venv/bin/python");
   a.screenshot = path.resolve(
     a.screenshot || path.join(os.tmpdir(), `soba_verify_${path.basename(a.scene)}.png`)
   );

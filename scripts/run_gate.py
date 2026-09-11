@@ -8,7 +8,7 @@ and prints a summary.
 
 Example:
   PYTHONPATH=src python scripts/run_gate.py \
-    --bundle ~/projects/soba/data/replica/bundle_room0 --tier 2
+    --bundle ~/soba/data/replica/bundle_room0 --tier 2
 """
 
 from __future__ import annotations

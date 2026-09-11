@@ -69,7 +69,7 @@ import numpy as np
 import yaml
 
 _REPO = Path(__file__).resolve().parents[1]
-_DATA = Path.home() / "projects/soba/data/replica"
+_DATA = Path.home() / "soba/data/replica"
 
 # Z-up -> Y-up, identical to perception.dataset_reader._REPLICA_ZUP_TO_YUP.
 ZUP_TO_YUP = np.array(
@@ -615,7 +615,7 @@ def main() -> None:
                          "(default: bundles_dense/<room>, else bundles/<room>)")
     ap.add_argument("--gt-scene", type=Path, default=None,
                     help="Replica scene assets with semantics "
-                         "(default: ~/projects/soba/data/replica/scenes/<room>)")
+                         "(default: ~/soba/data/replica/scenes/<room>)")
     ap.add_argument("--gt-traj", type=Path, default=None,
                     help="GT trajectory traj_w_c.txt "
                          "(default: .../gt_traj/<room>_traj_w_c.txt)")

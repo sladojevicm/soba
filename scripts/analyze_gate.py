@@ -19,7 +19,7 @@ from reconstruction import confidence as cf  # noqa: E402
 from reconstruction import observed_cloud, tsdf  # noqa: E402
 
 bundles = Path(sys.argv[1]) if len(sys.argv) > 1 else (
-    Path.home() / "projects/soba/data/replica/bundles")
+    Path.home() / "soba/data/replica/bundles")
 voxel = 0.004
 
 

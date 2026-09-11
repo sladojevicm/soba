@@ -28,7 +28,7 @@ def _compc_home() -> str:
     h = os.environ.get("COMPC_HOME")
     if not h:
         for cand in (os.path.join(os.environ.get("WORKDIR", "/workspace"), "ComPC"),
-                     os.path.expanduser("~/projects/soba/ComPC")):
+                     os.path.expanduser("~/soba/ComPC")):
             if os.path.isdir(cand):
                 h = cand
                 break
