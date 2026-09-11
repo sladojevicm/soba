@@ -35,6 +35,11 @@ from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
 
+# Observability hook (src/telemetry): run_assemble.py sets this to record the
+# wall time of every RunPod call as `hook(endpoint_id, seconds)`. Called on
+# success AND failure; None = no accounting.
+remote_call_hook = None
+
 
 @dataclass
 class RegenResult:
@@ -624,6 +629,7 @@ class RunPodEngine(Engine):
         """
         import json
         import os
+        import time
         import urllib.request
 
         # SOBA_RUNPOD_URL overrides the full runsync URL — for the SDK's
@@ -641,8 +647,13 @@ class RunPodEngine(Engine):
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
-            data = json.loads(resp.read().decode())
+        t0 = time.perf_counter()
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                data = json.loads(resp.read().decode())
+        finally:
+            if remote_call_hook is not None:
+                remote_call_hook(endpoint, time.perf_counter() - t0)
         if data.get("status") == "FAILED" or "error" in data:
             raise RuntimeError(f"RunPod job failed: {data.get('error') or data}")
         return data.get("output", {})
