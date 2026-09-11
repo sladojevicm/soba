@@ -32,7 +32,7 @@ separate, optional RunPod *serverless* endpoint for TripoSG/Hunyuan3D.
 
 ```bash
 cd /workspace
-git clone --depth 1 --branch fix/phase3-pose-and-eval \
+git clone --depth 1 --branch master \
   https://github.com/sladojevicm/soba.git
 bash soba/deploy/runpod/bootstrap.sh
 # optional learned completion as well:  SETUP_POINTR=1 bash .../bootstrap.sh

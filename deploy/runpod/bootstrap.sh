@@ -18,7 +18,7 @@
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/sladojevicm/soba.git}"
-REPO_BRANCH="${REPO_BRANCH:-fix/phase3-pose-and-eval}"
+REPO_BRANCH="${REPO_BRANCH:-master}"
 WORKDIR="${WORKDIR:-/workspace}"
 REPO_DIR="${REPO_DIR:-$WORKDIR/soba}"
 POINTR_HOME="${POINTR_HOME:-$WORKDIR/PoinTr}"
