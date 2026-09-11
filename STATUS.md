@@ -43,6 +43,10 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   `gate-only` spawn `scripts/run_assemble.py` and need the pod. There is **no job or
   output retention policy yet**: uploads and `out/jobs/` grow unbounded (follow-up, not
   blocking).
+- **Observability.** `scripts/run_assemble.py` emits structured logs (text, or JSON lines
+  with `SOBA_LOG_JSON=1`) with per-stage timings and one gate event per object, and writes
+  `out/<scene>/run_metrics.json` (schema in `src/telemetry/`) on every run, failures
+  included. No `/metrics` endpoint yet (phase B, after the job API).
 - **Never built or never run.** A real-sensor scene end to end (TUM through detector,
   SAM2, MASt3R, assembly); live OAK capture; a phone-capture reader; the ScanNet
   reader (stub); a Phase-12 CLI (`scripts/run_assemble.py` is the driver).

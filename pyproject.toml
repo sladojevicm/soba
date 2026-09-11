@@ -48,6 +48,9 @@ recon = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+telemetry = ["run_metrics.schema.json"]   # the run_metrics.json contract ships with the package
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
