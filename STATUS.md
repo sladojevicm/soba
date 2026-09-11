@@ -1,6 +1,6 @@
 # Soba — Status
 
-_Current state as of 2026-09-10. Measured numbers live in `BENCHMARK.md`; the
+_Current state as of 2026-09-11. Measured numbers live in `BENCHMARK.md`; the
 scene contract lives in `spec/scene.schema.json`; those two are authoritative.
 The reasoning behind past decisions lives in dated files under `docs/log/`._
 
@@ -36,10 +36,21 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   `scripts/ablation_routing.sh` and `scripts/ablation_summary.py`; gated routing
   gives the best surface fidelity, forced generative reproduces tier 1. fr2/xyz
   pose re-measured on all 3665 pairs (BENCHMARK §1).
+- **Job API (2026-09-11, `feat/job-api`).** `POST /api/jobs` takes a PerceptionBundle or
+  TUM archive and returns a job id; `GET /api/jobs/{id}` reports queued / running:<stage> /
+  done / failed; the viewer and scene routes are mirrored under `/jobs/{id}/`. On this box
+  the in-process worker runs in `mock` mode (copies `out/scene_test`); `real` and
+  `gate-only` spawn `scripts/run_assemble.py` and need the pod. There is **no job or
+  output retention policy yet**: uploads and `out/jobs/` grow unbounded (follow-up, not
+  blocking).
+- **Observability.** `scripts/run_assemble.py` emits structured logs (text, or JSON lines
+  with `SOBA_LOG_JSON=1`) with per-stage timings and one gate event per object, and writes
+  `out/<scene>/run_metrics.json` (schema in `src/telemetry/`) on every run, failures
+  included. No `/metrics` endpoint yet (phase B, after the job API).
 - **Never built or never run.** A real-sensor scene end to end (TUM through detector,
   SAM2, MASt3R, assembly); live OAK capture; a phone-capture reader; the ScanNet
   reader (stub); a Phase-12 CLI (`scripts/run_assemble.py` is the driver).
-- **Known defects.** The server's empty-scene fallback (`src/server.py:98`) omits
+- **Known defects.** The server's empty-scene fallback (`src/api/routes/scene.py`, `scene_json`) omits
   `world`, `ground` and `camera_pose` and fails the frozen schema. The eight
   cross-module disagreements are listed in `CLAUDE.md`. TUM world frames are not
   gravity-aligned, so floor snapping is wrong on real-sensor runs.

@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { selectObject, useSobaStore } from "../../store";
+import { sceneUrl } from "../../viewer/loaders";
 import { Button } from "../components/button";
 import { Panel, PanelBody, PanelRow } from "../components/panel";
 import { Table, TBody, Td, Th, THead, Tr } from "../components/table";
@@ -55,7 +56,7 @@ export function EvalReportPanel() {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch("/eval.json", { cache: "no-store" });
+        const r = await fetch(sceneUrl("/eval.json"), { cache: "no-store" });
         if (!r.ok) return;
         const ev = await r.json();
         // a real report always carries a score block; the "not available"

@@ -4,6 +4,17 @@
 import * as THREE from "three";
 import type { GLTF } from "three/addons/loaders/GLTFLoader.js";
 
+// Base-path-aware scene URL. The viewer is served both at `/` (single-scene
+// mode: /scene.json, /meshes/..., /events) and under a job prefix
+// (`/jobs/<id>/scene.json`, ...). Everything the viewer fetches goes through
+// here so the page location decides which scene the routes resolve to; the
+// bundle's own assets stay absolute (/assets/...) and are unaffected.
+const JOB_PREFIX_RE = /^\/jobs\/[^/]+/;
+export function sceneUrl(path: string): string {
+  const m = JOB_PREFIX_RE.exec(window.location.pathname);
+  return (m ? m[0] : "") + (path.startsWith("/") ? path : "/" + path);
+}
+
 // Pull a flat Float32Array of world-space vertices out of a loaded GLB (bakes
 // any node transform in, so Rapier's convex hull matches what is rendered).
 export function glbVertices(gltf: GLTF): Float32Array {

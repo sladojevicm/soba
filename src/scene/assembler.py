@@ -25,13 +25,19 @@ Per object (fix Z1 DERIVED/RENAMED, Z-H placement, Z-F/Z-O collider):
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-from . import decomp, exporter_gltf, geometric_repair, ground, lookup, mass, schema, vlm
+import telemetry
 from reconstruction import fusion
+from telemetry import stage_timer
+
+from . import decomp, exporter_gltf, geometric_repair, ground, lookup, mass, schema, vlm
+
+log = logging.getLogger(__name__)
 
 WORLD_GRAVITY = [0.0, -9.81, 0.0]
 # Gaussian smoothing (in voxels) applied to the PATCHED/unobserved surface only
@@ -179,9 +185,30 @@ def _assemble_object(obj: ObjectInput, oid: int, ground_y: float, out_dir: Path,
                      phys: vlm.Physics, tier_coacd: dict, decimate_to: int,
                      config_path: str, engine=None, smooth_iters: int = 0,
                      collider: str = "hulls") -> dict:
+    oid_str = f"{slug(obj.coco_class)}_{oid:02d}"
+    with stage_timer("assemble_object", id=oid_str, track_id=obj.track_id,
+                     cls=obj.coco_class, strategy=obj.strategy):
+        entry = _assemble_object_inner(obj, oid_str, ground_y, out_dir, phys,
+                                       tier_coacd, decimate_to, config_path,
+                                       engine, smooth_iters, collider)
+    t = entry["transform"]["translation"]
+    col = entry["collider"]
+    log.info("object assembled", extra={"fields": {
+        "event": "object", "id": oid_str, "track_id": obj.track_id,
+        "cls": obj.coco_class, "strategy": obj.strategy,
+        "mass_kg": entry["physics"]["mass_kg"], "material": phys.material,
+        "physics_origin": phys.origin, "collider": col["shape"],
+        "hulls": len(col.get("hull_paths", [])),
+        "translation": [round(v, 3) for v in t]}})
+    return entry
+
+
+def _assemble_object_inner(obj: ObjectInput, oid_str: str, ground_y: float,
+                           out_dir: Path, phys: vlm.Physics, tier_coacd: dict,
+                           decimate_to: int, config_path: str, engine, smooth_iters: int,
+                           collider: str) -> dict:
     import open3d as o3d
 
-    oid_str = f"{slug(obj.coco_class)}_{oid:02d}"
     mesh = o3d.geometry.TriangleMesh(obj.mesh)  # copy
 
     aabb = mesh.get_axis_aligned_bounding_box()
@@ -219,9 +246,10 @@ def _assemble_object(obj: ObjectInput, oid: int, ground_y: float, out_dir: Path,
     #     generated mesh.
     completed = None
     if obj.strategy == "completion" and engine is not None:
-        completed = engine.complete(
-            mesh=mesh, cloud=obj.cloud, crop_path=obj.crop_path,
-            coco_class=obj.coco_class)
+        with stage_timer("completion", id=oid_str, engine=type(engine).__name__):
+            completed = engine.complete(
+                mesh=mesh, cloud=obj.cloud, crop_path=obj.crop_path,
+                coco_class=obj.coco_class)
     if obj.strategy == "completion" and obj.vbg is not None and obj.voxel_size:
         # Option A: keep real geometry, graft only the unobserved part, then seal.
         final_mesh, vol = _fuse_and_seal(obj, center, completed)
@@ -261,10 +289,12 @@ def _assemble_object(obj: ObjectInput, oid: int, ground_y: float, out_dir: Path,
         collider_entry = {"shape": "box",
                           "half_extents": [round(float(e) / 2.0, 4) for e in ext]}
     else:
-        parts = decomp.decompose(
-            final_mesh, threshold=float(tier_coacd.get("threshold", 0.05)),
-            max_parts=int(tier_coacd.get("max_parts", 16)),
-        )
+        with stage_timer("coacd", id=oid_str):
+            parts = decomp.decompose(
+                final_mesh, threshold=float(tier_coacd.get("threshold", 0.05)),
+                max_parts=int(tier_coacd.get("max_parts", 16)),
+            )
+        log.debug("coacd %s -> %d part(s)", oid_str, len(parts))
         hull_route_paths = []
         for i, part in enumerate(parts):
             exporter_gltf.write_glb(part, obj_dir / "hulls" / f"{oid_str}_{i}.glb")
@@ -393,6 +423,15 @@ def assemble(objects: list[ObjectInput], poses: list[np.ndarray], out_dir: Path 
     The collider/mass geometry is never smoothed, so fusion's exact observed
     surface is preserved where it counts.
     """
+    with stage_timer("assemble", n_in=len(objects), collider=collider):
+        return _assemble(objects, poses, out_dir, tier_coacd=tier_coacd,
+                         decimate_to=decimate_to, vlm_backend=vlm_backend,
+                         engine=engine, smooth_iters=smooth_iters,
+                         config_path=config_path, collider=collider)
+
+
+def _assemble(objects, poses, out_dir, *, tier_coacd, decimate_to, vlm_backend,
+              engine, smooth_iters, config_path, collider) -> dict:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     tier_coacd = tier_coacd or {"threshold": 0.05, "max_parts": 16}
@@ -400,22 +439,34 @@ def assemble(objects: list[ObjectInput], poses: list[np.ndarray], out_dir: Path 
         from reconstruction.generative import LocalEngine
         engine = LocalEngine()
 
+    for o in objects:  # the two silent filters below, made visible
+        if not (len(o.cloud) and len(o.mesh.vertices)):
+            telemetry.drop("empty_input", track_id=o.track_id, cls=o.coco_class,
+                           points=len(o.cloud), vertices=len(o.mesh.vertices))
     objects = [o for o in objects if len(o.cloud) and len(o.mesh.vertices)]
     if len(objects) > 12:  # over-cap: keep best-observed (Z8)
-        objects = sorted(objects, key=lambda o: -len(o.cloud))[:12]
+        kept = sorted(objects, key=lambda o: -len(o.cloud))[:12]
+        for o in objects:
+            if o not in kept:
+                telemetry.drop("over_cap", track_id=o.track_id, cls=o.coco_class,
+                               points=len(o.cloud))
+        objects = kept
     objects = sorted(objects, key=lambda o: o.track_id)
 
-    g_y = ground.ground_y([o.cloud for o in objects], config_path=config_path)
+    with stage_timer("ground", n_objects=len(objects)):
+        g_y = ground.ground_y([o.cloud for o in objects], config_path=config_path)
+    log.info("assembling %d object(s), ground.y=%.3f", len(objects), g_y)
 
     def _longest_dim(m):
         ext = (np.asarray(m.get_axis_aligned_bounding_box().max_bound)
                - np.asarray(m.get_axis_aligned_bounding_box().min_bound))
         return float(np.max(ext))
 
-    phys_list = vlm.infer([o.coco_class for o in objects],
-                          backend=vlm_backend, config_path=config_path,
-                          crops=[o.crop_path for o in objects],
-                          dims_m=[_longest_dim(o.mesh) for o in objects])
+    with stage_timer("vlm_infer", n_objects=len(objects)):
+        phys_list = vlm.infer([o.coco_class for o in objects],
+                              backend=vlm_backend, config_path=config_path,
+                              crops=[o.crop_path for o in objects],
+                              dims_m=[_longest_dim(o.mesh) for o in objects])
 
     entries = [
         _assemble_object(o, oid, g_y, out_dir, ph, tier_coacd, decimate_to,
@@ -428,7 +479,10 @@ def assemble(objects: list[ObjectInput], poses: list[np.ndarray], out_dir: Path 
     # internal half-extents field before schema validation
     import os as _os
     if _os.environ.get("SOBA_DEOVERLAP", "1") != "0":
-        deoverlap(entries)
+        with stage_timer("deoverlap", n_objects=len(entries)):
+            n_moves = deoverlap(entries)
+        if n_moves:
+            log.info("de-overlap: %d move(s)", n_moves)
     for e in entries:
         e.pop("_half_extents", None)
 
@@ -447,4 +501,7 @@ def assemble(objects: list[ObjectInput], poses: list[np.ndarray], out_dir: Path 
     tmp = out_dir / "scene.json.tmp"
     tmp.write_text(json.dumps(scene, indent=2))
     tmp.rename(out_dir / "scene.json")  # atomic write (fix Z-C)
+    log.info("scene.json written", extra={"fields": {
+        "event": "scene_written", "path": str(out_dir / "scene.json"),
+        "n_objects": len(entries), "ground_y": round(g_y, 4)}})
     return scene
