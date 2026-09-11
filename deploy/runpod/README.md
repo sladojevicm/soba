@@ -10,6 +10,24 @@ separate, optional RunPod *serverless* endpoint for TripoSG/Hunyuan3D.
 
 ---
 
+## 0. Container images and model pins
+
+The same stack is packaged as images under `docker/` (built in CI by
+`.github/workflows/ci.yml`; Docker is not installed on the WSL box, so they are
+only ever built on the runner or on the pod):
+
+- `docker/pipeline.Dockerfile` — this host pipeline on a `pytorch/pytorch:2.6.0-cuda12.4`
+  base (`[recon,serve,dev]` + coacd + runpod). Entrypoints: `worker`
+  (`python -m orchestration.worker`, lands with the orchestration work),
+  `serverless` (`python deploy/runpod/generative_handler.py`, the endpoint in the
+  last section), `assemble <args>`, `serve`, `check` (Open3D CUDA tensor check on
+  a real GPU), `shell`. Build with `--build-arg BASE_IMAGE=...-devel` when the
+  TripoSG / Hunyuan3D setup scripts must compile CUDA extensions. Weights and
+  model checkouts are mounted under `/workspace`, never baked.
+- `docker/api.Dockerfile` — the scene server + committed viewer bundle only (no GPU).
+- `docs/model-pins.md` — which model versions produced `BENCHMARK.md`, and every
+  pin the repo does not record (git commits, checkpoint sha256, HF revisions).
+
 ## 1. Rent the pod
 
 1. Create an account at <https://runpod.io> and add credit/billing.
