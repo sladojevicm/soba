@@ -9,7 +9,6 @@ just mocked.
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from perception.bundle import Intrinsics, Manifest, PerceptionBundle
 from reconstruction import tsdf

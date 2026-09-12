@@ -190,7 +190,7 @@ def test_strip_removes_tilted_mat():
     # the mesh comes out VIEW-ALIGNED (tilted) — the mat is not axis-aligned,
     # which defeated the first (axis-band) detector. Plane RANSAC must not care.
     import numpy as np
-    import open3d as o3d
+    pytest.importorskip("open3d")
     chair = _box(0, 0.15, 0, 0.2, 0.3, 0.2)
     mat = _box(0, 0.005, 0, 1.6, 0.01, 1.6)
     m = chair + mat

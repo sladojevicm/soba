@@ -1,0 +1,128 @@
+# Soba CI. Python job per docs/ci-probe.md (Open3D imports on ubuntu-latest,
+# so the full suite runs; only the one gpu-marked test is skipped), ruff
+# (E9 + F, [tool.ruff] in pyproject.toml), the three images under docker/
+# built on the runner, and the frontend-check that must reproduce the
+# committed frontend/dist byte-for-byte (CLAUDE.md invariants 5/6).
+name: ci
+
+on:
+  push:
+  pull_request:
+    branches: [develop, master]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: pytest + ruff (ubuntu-latest, Python 3.11)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: System libraries (open3d + opencv need libGL/glib, as bootstrap.sh)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libgl1 libglib2.0-0
+      - name: Install soba [recon,serve,dev] (+ anthropic for the VLM backend test)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[recon,serve,dev]" anthropic
+          python -c "import open3d; print('open3d', open3d.__version__)"
+      - name: ruff (E9 + F)
+        run: ruff check .
+      - name: pytest (full suite; gpu-marked tests skipped, see docs/ci-probe.md)
+        env:
+          SOBA_SKIP_GPU_TESTS: "1"
+        run: pytest -q -rs
+
+  frontend-check:
+    name: frontend/dist reproduces from source (docker/frontend-check.Dockerfile)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/frontend-check.Dockerfile
+          target: check
+          push: false
+          cache-from: type=gha,scope=frontend-check
+          cache-to: type=gha,scope=frontend-check,mode=max
+
+  api-image:
+    name: docker/api.Dockerfile build + healthcheck smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/api.Dockerfile
+          tags: soba-api:ci
+          push: false
+          load: true
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
+      - name: Smoke — container reaches healthy, serves /scene.json and the viewer, runs non-root
+        run: |
+          docker run -d --name api -p 8000:8000 soba-api:ci
+          for i in $(seq 1 30); do
+            st=$(docker inspect --format '{{.State.Health.Status}}' api)
+            echo "health: $st"
+            [ "$st" = healthy ] && break
+            [ "$st" = unhealthy ] && { docker logs api; exit 1; }
+            sleep 2
+          done
+          [ "$(docker inspect --format '{{.State.Health.Status}}' api)" = healthy ] || { docker logs api; exit 1; }
+          curl -sf http://127.0.0.1:8000/scene.json | tee /dev/stderr | grep -q '"objects"'
+          curl -sf http://127.0.0.1:8000/ | grep -q 'id="root"'
+          curl -sf http://127.0.0.1:8000/eval.json | grep -q '"available"'
+          uid=$(docker exec api id -u); echo "uid=$uid"; [ "$uid" != 0 ]
+          docker logs api
+          docker rm -f api
+
+  pipeline-image:
+    name: docker/pipeline.Dockerfile build (CUDA base, no GPU at build time)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Free runner disk (the CUDA/torch base is ~7 GB)
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: false
+          swap-storage: true
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/pipeline.Dockerfile
+          tags: soba-pipeline:ci
+          push: false
+          load: true
+          cache-from: type=gha,scope=pipeline
+          cache-to: type=gha,scope=pipeline,mode=max
+      - name: Smoke — entrypoint modes (no GPU; the worker module is expected to be absent until feat/runpod-orchestration)
+        run: |
+          docker run --rm soba-pipeline:ci python -c "import open3d, cv2, trimesh, coacd, runpod, torch; print('open3d', open3d.__version__, '| torch', torch.__version__)"
+          set +e; docker run --rm soba-pipeline:ci worker; rc=$?; set -e
+          echo "worker mode exit=$rc (3 = orchestration.worker not present yet)"; [ "$rc" = 3 ]
+          docker run --rm soba-pipeline:ci python -c "import generative_handler" || true
+          docker run --rm soba-pipeline:ci shell -c 'python scripts/run_assemble.py --help | head -3'
+          df -h / | tail -1

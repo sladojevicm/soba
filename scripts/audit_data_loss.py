@@ -154,7 +154,7 @@ def main() -> None:
             line += (f" {s['tsdf_w3']:>9,} {s['tsdf_w1']:>9,} {frac:>6.2f}"
                      f"  {s.get('tsdf_dims', '-')}")
         print(line)
-    print(f"\ncloud dims (m): " + ", ".join(
+    print("\ncloud dims (m): " + ", ".join(
         f"{tid}:{s['class']}={s['cloud_dims']}" for tid, s in sorted(stats.items())))
 
     if a.json:

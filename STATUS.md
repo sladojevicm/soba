@@ -69,6 +69,9 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   `world`, `ground` and `camera_pose` and fails the frozen schema. The eight
   cross-module disagreements are listed in `CLAUDE.md`. TUM world frames are not
   gravity-aligned, so floor snapping is wrong on real-sensor runs.
+- **Packaging.** `docker/` (API, pipeline, frontend-check images), compose and
+  `.github/workflows/ci.yml` exist (2026-09-11); the frontend bundle is served by
+  the API image, CDN offload is deferred until there is real traffic.
 - **Machines.** This WSL box has no GPU and no data, and its `.venv` lacks the
   `recon` extra: `pytest` here gives 125 pass and 49 fail or error, every one a
   missing-`open3d` import (last full run: 241 pass, 2026-07-06, GPU machine). Data and builds: `~/soba/data` on the

@@ -28,7 +28,7 @@ def _l_mesh():
 def _observed_cloud(mesh, scale, yaw_deg, offset, n=4000, keep=1.0, seed=7):
     """Sample the mesh surface, apply scale/yaw/offset -> a synthetic observed
     cloud in metres. `keep` < 1 drops a contiguous chunk (partial observation)."""
-    import open3d as o3d
+    pytest.importorskip("open3d")
 
     del seed  # o3d's sampler has no seed arg; determinism isn't needed here
     pts = np.asarray(mesh.sample_points_uniformly(n).points)
