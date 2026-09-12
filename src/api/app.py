@@ -15,6 +15,8 @@ Environment (factory args win):
   SOBA_WORKER_INPROC  "0" disables the in-process worker thread (default on)
   SOBA_FIXTURE_SCENE  scene dir the mock worker copies (default out/scene_test)
   SOBA_MAX_UPLOAD_MB  upload size cap                 (default 2048)
+  SOBA_QUEUE_URL      redis://... selects the Redis JobQueue (default in-process);
+                      pair it with SOBA_WORKER_INPROC=0 and `python -m orchestration.worker`
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from starlette.routing import Mount
 from starlette.staticfiles import StaticFiles
 
 from .jobs.queue import InProcessQueue, JobQueue
+from .jobs.queue_redis import queue_from_env
 from .jobs.store import QUEUED, JobStore, SqliteJobStore
 from .jobs.worker_local import LocalWorker
 from .routes.jobs import (
@@ -92,10 +95,14 @@ def create_app(
             float(os.environ.get("SOBA_MAX_UPLOAD_MB", "0")) * 1024 ** 2
         ) or DEFAULT_MAX_UPLOAD_BYTES
 
+    if queue is None:  # explicit None checks: an EMPTY queue is falsy (__len__)
+        queue = queue_from_env()  # SOBA_QUEUE_URL -> Redis, else None
+    if queue is None:
+        queue = InProcessQueue()
     ctx = JobsContext(
         jobs_dir=jobs_dir,
         store=store or _LazySqliteStore(jobs_dir / "jobs.sqlite"),
-        queue=queue or InProcessQueue(),
+        queue=queue,
         max_upload_bytes=max_upload_bytes,
     )
     ctx.worker = LocalWorker(
