@@ -43,6 +43,11 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   `gate-only` spawn `scripts/run_assemble.py` and need the pod. There is **no job or
   output retention policy yet**: uploads and `out/jobs/` grow unbounded (follow-up, not
   blocking).
+- **API security (2026-09-12, `feat/security-hardening`).** Bearer-key auth, per-key/per-IP
+  rate limiting, a CORS allow-list, security headers, an SSE connection cap and upload
+  validation (decompression-bomb, size, manifest, frame-count and depth-dtype checks) live
+  in `src/api/security/`; the API stays open by default until `SOBA_API_KEYS` is set (one
+  startup warning). Rate-limit buckets are per-process (Redis-backed limiting is a follow-up).
 - **Observability.** `scripts/run_assemble.py` emits structured logs (text, or JSON lines
   with `SOBA_LOG_JSON=1`) with per-stage timings and one gate event per object, and writes
   `out/<scene>/run_metrics.json` (schema in `src/telemetry/`) on every run, failures
