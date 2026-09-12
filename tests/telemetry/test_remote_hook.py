@@ -8,8 +8,18 @@ import json
 
 import pytest
 
-from reconstruction import generative
+from reconstruction import generative, runpod_policy
 from telemetry import RunMetrics
+
+
+@pytest.fixture(autouse=True)
+def _isolated_runpod(monkeypatch):
+    # the breaker is process-wide per endpoint id; no backoff sleeps in tests
+    runpod_policy.reset_breakers()
+    monkeypatch.setattr(generative, "_sleep", lambda s: None)
+    monkeypatch.delenv("SOBA_RUNPOD_URL", raising=False)
+    yield
+    runpod_policy.reset_breakers()
 
 
 class _FakeResponse(io.BytesIO):
@@ -46,7 +56,8 @@ def test_runsync_calls_hook_with_endpoint_and_duration(monkeypatch, hook_calls):
     eng = generative.RunPodEngine("key", gen_endpoint="ep123", timeout_s=5)
     out = eng._runsync("ep123", {"mode": "regenerate"})
     assert out == {"ok": 1}
-    assert seen["url"].endswith("/ep123/runsync") and seen["timeout"] == 5
+    # default transport is /run (+ /status polling when the reply is not terminal)
+    assert seen["url"].endswith("/ep123/run") and seen["timeout"] == 5
     assert len(hook_calls) == 1
     endpoint, seconds = hook_calls[0]
     assert endpoint == "ep123" and seconds >= 0.0
@@ -66,9 +77,12 @@ def test_runsync_calls_hook_when_transport_raises(monkeypatch, hook_calls):
 
     monkeypatch.setattr("urllib.request.urlopen", boom)
     eng = generative.RunPodEngine("key", timeout_s=5)
-    with pytest.raises(OSError):
+    # a transport error is transient: retried per config, then raised as a
+    # RunPodError (still a RuntimeError); the hook sees EVERY attempt
+    with pytest.raises(generative.RunPodTransient, match="timed out"):
         eng._runsync("ep", {})
-    assert len(hook_calls) == 1
+    assert len(hook_calls) == eng.retry.max_attempts
+    assert all(ep == "ep" and s >= 0.0 for ep, s in hook_calls)
 
 
 def test_no_hook_is_a_no_op(monkeypatch):
