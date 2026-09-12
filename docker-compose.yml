@@ -6,10 +6,15 @@
 #            GPU, each job copies ./out/scene_test). The API enqueues to Redis
 #            and runs no in-process worker.
 #   gpu      + the CUDA pipeline image as the worker (needs the NVIDIA runtime)
+#   loadtest k6 (grafana/k6, pinned) + a stdlib-Python SSE probe, both on the
+#            compose network against http://api:8000, ./loadtest mounted and
+#            summaries written to ./loadtest/results. Driven by
+#            loadtest/run.sh (`make loadtest`); never started by `up`.
 #
 #   SOBA_SCENE=scene_test docker compose up api
 #   docker compose --profile cpu up --build          (make up)
 #   docker compose --profile gpu up worker-gpu
+#   docker compose --profile loadtest run --rm k6 run mixed.js
 #
 # ./out is bind-mounted at /data and must be writable by the container user,
 # so api and worker run as the host uid/gid (override with SOBA_UID/SOBA_GID).
@@ -28,6 +33,9 @@ services:
       SOBA_JOBS_DIR: /data/jobs
       SOBA_FIXTURE_SCENE: /data/scene_test
       SOBA_WORKER_MODE: ${SOBA_WORKER_MODE:-mock}
+      # mock mode only: seconds the assembling stage sleeps (load tests use it
+      # to build queue depth; 0 = instant).
+      SOBA_MOCK_DELAY_S: ${SOBA_MOCK_DELAY_S:-0}
       # cpu/gpu profiles: the external worker consumes the queue, so the API
       # must enqueue to Redis and not start its own worker thread.
       SOBA_QUEUE_URL: ${SOBA_QUEUE_URL:-}
@@ -67,6 +75,7 @@ services:
       SOBA_JOBS_DIR: /data/jobs
       SOBA_FIXTURE_SCENE: /data/scene_test
       SOBA_QUEUE_URL: redis://redis:6379/0
+      SOBA_MOCK_DELAY_S: ${SOBA_MOCK_DELAY_S:-0}
       SOBA_LOG_JSON: ${SOBA_LOG_JSON:-0}
     volumes:
       - ./out:/data
@@ -100,3 +109,46 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+  # ---- loadtest profile (loadtest/run.sh, `make loadtest`) -------------------
+  # k6 pinned to the version recorded in docs/loadtest.md; runs as the host
+  # uid so the summaries under ./loadtest/results are host-owned. Scripts and
+  # the fixture archive come from the read-only ./loadtest mount; results go
+  # to RESULTS_DIR (a subdirectory of /results created by run.sh).
+  k6:
+    image: grafana/k6:2.2.0
+    profiles: [loadtest]
+    user: "${SOBA_UID:-1000}:${SOBA_GID:-1000}"
+    depends_on:
+      - api
+    working_dir: /loadtest
+    environment:
+      BASE_URL: http://api:8000
+      RESULTS_DIR: ${RESULTS_DIR:-/results}
+      API_KEY: ${API_KEY:-}
+    volumes:
+      - ./loadtest:/loadtest:ro
+      - ./loadtest/results:/results
+    entrypoint: ["k6"]
+    command: ["run", "mixed.js"]
+
+  # SSE probe: k6 cannot read event streams, so loadtest/sse_clients.py
+  # (standard library only) opens N concurrent /events clients, checks the
+  # replayed events and proves the per-IP cap. Same base image as soba-api.
+  sse-probe:
+    image: python:3.11-slim
+    profiles: [loadtest]
+    user: "${SOBA_UID:-1000}:${SOBA_GID:-1000}"
+    depends_on:
+      - api
+    working_dir: /loadtest
+    environment:
+      BASE_URL: http://api:8000
+      RESULTS_DIR: ${RESULTS_DIR:-/results}
+      API_KEY: ${API_KEY:-}
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ./loadtest:/loadtest:ro
+      - ./loadtest/results:/results
+    entrypoint: ["python", "sse_clients.py"]
+    command: ["--help"]
