@@ -40,6 +40,7 @@ from .routes.jobs import (
     jobs_routes,
 )
 from .routes.scene import scene_routes
+from .security import security_middleware
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_SCENE_DIR = REPO_ROOT / "out" / "scene_office_3"
@@ -143,7 +144,8 @@ def create_app(
             ctx.store.close()
 
     app = Starlette(routes=routes,
-                    middleware=[Middleware(BaseHTTPMiddleware, dispatch=_no_store)],
+                    middleware=[*security_middleware(),
+                                Middleware(BaseHTTPMiddleware, dispatch=_no_store)],
                     lifespan=lifespan)
     app.state.jobs = ctx
     app.state.scene_dir = scene_dir
