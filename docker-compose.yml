@@ -1,29 +1,42 @@
 # soba — local composition. Profiles:
-#   (none)   api only: serves ./out/<SOBA_SCENE> with the committed viewer
-#   cpu      + redis + a placeholder worker (no GPU; the job API and the
-#            queue consumer land with feat/job-api / feat/runpod-orchestration,
-#            at which point the worker command becomes `python -m orchestration.worker`)
+#   (none)   api only: job API + viewer, in-process mock worker (no Redis).
+#            Serves ./out/<SOBA_SCENE> at the legacy root routes and writes
+#            jobs to ./out/jobs.
+#   cpu      api + redis + `python -m orchestration.worker` (mock mode: no
+#            GPU, each job copies ./out/scene_test). The API enqueues to Redis
+#            and runs no in-process worker.
 #   gpu      + the CUDA pipeline image as the worker (needs the NVIDIA runtime)
 #
 #   SOBA_SCENE=scene_test docker compose up api
-#   docker compose --profile cpu up
+#   docker compose --profile cpu up --build          (make up)
 #   docker compose --profile gpu up worker-gpu
 #
+# ./out is bind-mounted at /data and must be writable by the container user,
+# so api and worker run as the host uid/gid (override with SOBA_UID/SOBA_GID).
 # Every image is built from the repo root with the Dockerfiles under docker/.
 services:
   api:
     build:
       context: .
       dockerfile: docker/api.Dockerfile
-      # args: { SOBA_EXTRAS: "serve,api" }   # once the api extra exists on develop
     image: soba-api:local
+    user: "${SOBA_UID:-1000}:${SOBA_GID:-1000}"
     ports:
       - "8000:8000"
     environment:
       SOBA_SCENE_DIR: /data/${SOBA_SCENE:-scene_test}
+      SOBA_JOBS_DIR: /data/jobs
+      SOBA_FIXTURE_SCENE: /data/scene_test
+      SOBA_WORKER_MODE: ${SOBA_WORKER_MODE:-mock}
+      # cpu/gpu profiles: the external worker consumes the queue, so the API
+      # must enqueue to Redis and not start its own worker thread.
+      SOBA_QUEUE_URL: ${SOBA_QUEUE_URL:-}
+      SOBA_WORKER_INPROC: ${SOBA_WORKER_INPROC:-1}
+      SOBA_API_KEYS: ${SOBA_API_KEYS:-}
+      SOBA_LOG_JSON: ${SOBA_LOG_JSON:-0}
     volumes:
       # scripts/make_test_scene.py writes out/scene_test on this box.
-      - ./out:/data:ro
+      - ./out:/data
     restart: unless-stopped
 
   redis:
@@ -37,31 +50,28 @@ services:
       timeout: 3s
       retries: 5
 
-  # CPU worker placeholder. Re-uses the API image (no CUDA). Replace the
-  # command with `python -m orchestration.worker` when feat/runpod-orchestration
-  # merges; its CPU mode runs scripts/run_assemble.py --gate-only or a mock.
+  # CPU worker: the external queue consumer from the API image (no CUDA).
+  # Mock mode copies the fixture scene; `--mode real` needs the pipeline
+  # image (see worker-gpu).
   worker:
     build:
       context: .
       dockerfile: docker/api.Dockerfile
     image: soba-api:local
+    user: "${SOBA_UID:-1000}:${SOBA_GID:-1000}"
     profiles: [cpu]
     depends_on:
       redis:
         condition: service_healthy
     environment:
-      SOBA_REDIS_URL: redis://redis:6379/0
+      SOBA_JOBS_DIR: /data/jobs
+      SOBA_FIXTURE_SCENE: /data/scene_test
+      SOBA_QUEUE_URL: redis://redis:6379/0
+      SOBA_LOG_JSON: ${SOBA_LOG_JSON:-0}
     volumes:
       - ./out:/data
-    command:
-      - python
-      - -c
-      - |
-        import time
-        print("soba worker placeholder: src/orchestration/worker.py lands with "
-              "feat/runpod-orchestration; until then this container only idles.", flush=True)
-        while True:
-            time.sleep(3600)
+    command: ["python", "-m", "orchestration.worker", "--mode", "mock", "--poll-s", "1"]
+    restart: unless-stopped
 
   worker-gpu:
     build:
@@ -73,7 +83,8 @@ services:
       redis:
         condition: service_healthy
     environment:
-      SOBA_REDIS_URL: redis://redis:6379/0
+      SOBA_JOBS_DIR: /app/out/jobs
+      SOBA_QUEUE_URL: redis://redis:6379/0
     env_file:
       - path: .env
         required: false

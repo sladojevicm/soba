@@ -12,14 +12,15 @@
 # container; this image serves frontend/dist itself. CDN offload is deferred
 # until there is real traffic (STATUS.md).
 #
-# SOBA_EXTRAS: the pyproject extras to install. `serve` today; switch the
-# default to `serve,api` once the `api` extra (python-multipart, aiofiles)
-# lands on develop from feat/job-api. Overridable at build time:
-#   docker build --build-arg SOBA_EXTRAS=serve,api ...
+# SOBA_EXTRAS: the pyproject extras to install. Default covers the scene
+# server, the job API, /metrics and the Redis queue (used by both the API and
+# `python -m orchestration.worker`, which runs from this same image in CPU
+# mode). Overridable at build time:
+#   docker build --build-arg SOBA_EXTRAS=serve ...
 # ---------------------------------------------------------------------------
 FROM python:3.11-slim
 
-ARG SOBA_EXTRAS=serve
+ARG SOBA_EXTRAS=serve,api,telemetry,worker
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

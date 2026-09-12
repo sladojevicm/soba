@@ -11,7 +11,7 @@ help:
 	@echo "build-api       docker/api.Dockerfile      -> soba-api:$(TAG)"
 	@echo "build-pipeline  docker/pipeline.Dockerfile -> soba-pipeline:$(TAG) (CUDA base, ~7 GB)"
 	@echo "frontend-check  rebuild frontend/dist in node:20 and diff against the committed bundle"
-	@echo "up / down       docker compose --profile cpu (api + redis + placeholder worker)"
+	@echo "up / down       docker compose --profile cpu (api + redis + orchestration worker, mock mode)"
 	@echo "test            pytest (full suite; open3d-dependent tests fail without the recon extra)"
 	@echo "lint            ruff check (E9 + F only, see [tool.ruff] in pyproject.toml)"
 	@echo "loadtest        k6 scenarios — lands with feat/load-testing"
@@ -28,7 +28,7 @@ frontend-check:
 	docker build -f docker/frontend-check.Dockerfile --target check -t soba-frontend-check:$(TAG) .
 
 up:
-	$(COMPOSE) --profile cpu up --build
+	SOBA_QUEUE_URL=redis://redis:6379/0 SOBA_WORKER_INPROC=0 $(COMPOSE) --profile cpu up --build
 
 down:
 	$(COMPOSE) --profile cpu --profile gpu down
