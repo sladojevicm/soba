@@ -117,9 +117,12 @@ class OrchestrationWorker(LocalWorker):
     # -- state transitions -> log events --------------------------------------
     def _set(self, job_id, state, stage=None, error=None) -> bool:
         ok = super()._set(job_id, state, stage=stage, error=error)
-        status = f"{state}:{stage}" if state == _store.RUNNING and stage else state
-        log_event(log, logging.INFO if ok else logging.WARNING, f"job {job_id} {status}",
-                  event="job_state", job_id=job_id, status=status, error=error, ok=ok)
+        # Accepted transitions are logged once, by JobStore itself (event
+        # "job_state", logger "api.jobs"). Only a refused one is ours to report.
+        if not ok:
+            status = f"{state}:{stage}" if state == _store.RUNNING and stage else state
+            log_event(log, logging.WARNING, f"job {job_id} refused transition to {status}",
+                      event="job_state_refused", job_id=job_id, status=status, error=error)
         return ok
 
     # -- one job + its cost record --------------------------------------------

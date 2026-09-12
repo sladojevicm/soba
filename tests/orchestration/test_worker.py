@@ -216,12 +216,15 @@ def test_signal_handlers_request_stop(env, monkeypatch):
 def test_state_transitions_are_logged_as_events(env, tmp_path, caplog):
     jid = env["add"]()
     w = env["make"](mode="mock", fixture_scene=tmp_path / "none")
-    with caplog.at_level("INFO", logger="orchestration.worker"):
+    with caplog.at_level("INFO"):
         w.serve(once=True, poll_s=0.1)
-    events = [r.fields for r in caplog.records if getattr(r, "fields", {}).get("event") == "job_state"]
+    fields = [getattr(r, "fields", {}) for r in caplog.records]
+    # Accepted transitions are emitted once each, by JobStore (logger "api.jobs").
+    events = [f for f in fields if f.get("event") == "job_state"]
     assert [e["status"] for e in events] == ["running:validating", "running:assembling", "done"]
-    assert all(e["job_id"] == jid and e["ok"] for e in events)
-    assert any(getattr(r, "fields", {}).get("event") == "job_cost" for r in caplog.records)
+    assert all(e["job_id"] == jid for e in events)
+    assert not [f for f in fields if f.get("event") == "job_state_refused"]
+    assert any(f.get("event") == "job_cost" for f in fields)
 
 
 # --- CLI -------------------------------------------------------------------------
