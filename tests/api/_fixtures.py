@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import io
 import json
+import struct
 import tarfile
 import zipfile
+import zlib
 from pathlib import Path
 
 import pytest
@@ -24,6 +26,17 @@ from api.app import create_app
 # 12-byte GLB header (magic, version 2, length) — enough for the byte checks.
 FAKE_GLB = b"glTF" + (2).to_bytes(4, "little") + (12).to_bytes(4, "little")
 OBJ_ID = "crate_00"
+
+
+def png_header(width: int = 4, height: int = 3, bit_depth: int = 16, colour_type: int = 0) -> bytes:
+    """PNG signature + IHDR chunk only (no pixels): what the upload validator
+    inspects. Defaults describe a uint16 greyscale depth frame."""
+    ihdr = struct.pack(">IIBBBBB", width, height, bit_depth, colour_type, 0, 0, 0)
+    crc = zlib.crc32(b"IHDR" + ihdr) & 0xFFFFFFFF
+    return b"\x89PNG\r\n\x1a\n" + struct.pack(">I", len(ihdr)) + b"IHDR" + ihdr + struct.pack(">I", crc)
+
+
+DEPTH_PNG = png_header()
 
 
 @pytest.fixture(autouse=True)
@@ -42,7 +55,7 @@ def make_bundle(root: Path, frames: int = 2) -> Path:
         d = root / "frames" / f"{i:05d}"
         d.mkdir(parents=True)
         (d / "rgb.jpg").write_bytes(b"\xff\xd8\xff\xd9")
-        (d / "depth.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        (d / "depth.png").write_bytes(DEPTH_PNG)
         (d / "objects.json").write_text("[]")
     return root
 

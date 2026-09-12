@@ -1,29 +1,39 @@
 """Upload archive validation + extraction.
 
-``validate_and_extract`` is the ONE entry point every upload goes through;
-security-agent (phase B) extends it (MIME/magic policy, manifest field
-checks, frame-count and depth-dtype checks). What it guarantees today:
+``validate_and_extract`` is the ONE entry point every upload goes through.
+The listing-time budget, the write-time target check and the post-extraction
+content checks live in ``api.security.upload_validation`` (security phase B);
+this module owns the format sniffing, the extraction loop and the layout
+detection. What it guarantees:
 
 * format sniffed from magic bytes, not the file name: zip, gzip'd tar, plain
   tar; anything else -> ``UnsupportedArchive`` (415);
 * no member may escape ``dest``: absolute paths, ``..`` segments, drive
   letters and backslashes are rejected; tar symlinks / hardlinks / devices /
   fifos are rejected (zip-slip guard) -> ``InvalidUpload`` (422);
-* caps on uncompressed size and member count -> ``UploadTooLarge`` (413);
+* caps on uncompressed size and member count -> ``UploadTooLarge`` (413),
+  on any single member -> ``MemberTooLarge`` (413), on the decompression
+  ratio -> ``DecompressionRatio`` (422); nested archives -> ``NestedArchive``
+  (422); every write target is re-resolved against the filesystem and must
+  stay inside ``dest``;
 * layout detection after extraction: a PerceptionBundle (``manifest.json`` +
   ``intrinsics.json``, at the archive root or inside a single top-level dir)
   is opened with ``PerceptionBundle.open`` and must hold >= 1 frame; a TUM
   sequence (``rgb.txt`` + ``depth.txt``) is accepted only when an imaging
   backend (OpenCV / imageio) is importable, because the worker converts it
   with ``TUMReader.to_bundle`` which decodes PNGs. Otherwise 422 with a
-  message that says so. MP4 is never accepted (maintainer decision 1).
+  message that says so. MP4 is never accepted (maintainer decision 1);
+* bundle contents: ``manifest.json`` through ``Manifest.from_dict``
+  (``BadManifest``), frame-count cap (``TooManyFrames``), a sample of
+  ``depth.png`` files must be 16-bit greyscale PNGs (``BadDepthDtype`` /
+  ``FrameTooLarge``). All 422. Limits come from ``UploadLimits.from_env``
+  (``SOBA_MAX_*`` variables, see ``api.security.upload_validation``).
 """
 
 from __future__ import annotations
 
 import json
 import os
-import shutil
 import tarfile
 import zipfile
 from dataclasses import dataclass
@@ -31,33 +41,41 @@ from pathlib import Path, PurePosixPath
 
 from perception.bundle import PerceptionBundle
 
-DEFAULT_MAX_EXTRACTED_BYTES = 8 * 1024 ** 3  # 8 GiB
-DEFAULT_MAX_MEMBERS = 200_000
+from ..security.upload_validation import (
+    Budget,
+    UploadLimits,
+    check_member_name,
+    check_target_inside,
+    check_tum_contents,
+    check_zip_member,
+    validate_frames,
+    validate_manifest,
+)
+from .upload_errors import (
+    BadDepthDtype,
+    BadManifest,
+    DecompressionRatio,
+    FrameTooLarge,
+    InvalidUpload,
+    MemberTooLarge,
+    NestedArchive,
+    TooManyFrames,
+    UnsupportedArchive,
+    UploadError,
+    UploadTooLarge,
+)
+
+DEFAULT_MAX_EXTRACTED_BYTES = UploadLimits.max_extracted_bytes
+DEFAULT_MAX_MEMBERS = UploadLimits.max_members
 _IGNORED_TOP_LEVEL = {"__MACOSX"}
 
-
-class UploadError(Exception):
-    status = 400
-    code = "bad_upload"
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
-        self.message = message
-
-
-class UnsupportedArchive(UploadError):
-    status = 415
-    code = "unsupported_archive"
-
-
-class UploadTooLarge(UploadError):
-    status = 413
-    code = "upload_too_large"
-
-
-class InvalidUpload(UploadError):
-    status = 422
-    code = "invalid_upload"
+__all__ = [
+    "BadDepthDtype", "BadManifest", "DecompressionRatio", "ExtractResult",
+    "FrameTooLarge", "InvalidUpload", "MemberTooLarge", "NestedArchive",
+    "TooManyFrames", "UnsupportedArchive", "UploadError", "UploadTooLarge",
+    "detect_layout", "ext_for", "imaging_available", "sniff_format",
+    "validate_and_extract",
+]
 
 
 @dataclass(frozen=True)
@@ -102,40 +120,32 @@ def _safe_relpath(name: str) -> PurePosixPath | None:
     return p if p.parts else None
 
 
-def _check_budget(total: int, count: int, max_bytes: int, max_members: int) -> None:
-    if total > max_bytes:
-        raise UploadTooLarge(
-            f"archive expands to more than {max_bytes // 1024 ** 2} MiB")
-    if count > max_members:
-        raise UploadTooLarge(f"archive has more than {max_members} members")
-
-
-def _extract_zip(path: Path, dest: Path, max_bytes: int, max_members: int) -> None:
+def _extract_zip(path: Path, dest: Path, limits: UploadLimits) -> None:
     try:
         with zipfile.ZipFile(path) as zf:
-            total = count = 0
+            budget = Budget(limits, path.stat().st_size)
             plan: list[tuple[zipfile.ZipInfo, PurePosixPath]] = []
             for info in zf.infolist():
                 rel = _safe_relpath(info.filename)
                 if rel is None or info.is_dir():
                     continue
-                total += info.file_size
-                count += 1
-                _check_budget(total, count, max_bytes, max_members)
+                check_zip_member(info)
+                check_member_name(info.filename)
+                budget.add(info.filename, info.file_size, info.compress_size)
                 plan.append((info, rel))
             for info, rel in plan:
-                target = dest / rel
+                target = check_target_inside(dest, rel)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with zf.open(info) as src, target.open("wb") as dst:
-                    shutil.copyfileobj(src, dst)
+                    _copy_capped(src, dst, info.file_size, info.filename)
     except zipfile.BadZipFile as exc:
         raise InvalidUpload(f"corrupt zip: {exc}") from exc
 
 
-def _extract_tar(path: Path, dest: Path, max_bytes: int, max_members: int) -> None:
+def _extract_tar(path: Path, dest: Path, limits: UploadLimits) -> None:
     try:
         with tarfile.open(path, "r:*") as tf:
-            total = count = 0
+            budget = Budget(limits, path.stat().st_size)
             plan: list[tuple[tarfile.TarInfo, PurePosixPath]] = []
             for m in tf:
                 rel = _safe_relpath(m.name)
@@ -145,20 +155,37 @@ def _extract_tar(path: Path, dest: Path, max_bytes: int, max_members: int) -> No
                     raise InvalidUpload(
                         f"archive member {m.name!r} is not a regular file "
                         "(links and special files are rejected)")
-                total += m.size
-                count += 1
-                _check_budget(total, count, max_bytes, max_members)
+                check_member_name(m.name)
+                budget.add(m.name, m.size)
                 plan.append((m, rel))
             for m, rel in plan:
-                target = dest / rel
+                target = check_target_inside(dest, rel)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 src = tf.extractfile(m)
                 if src is None:
                     continue
                 with src, target.open("wb") as dst:
-                    shutil.copyfileobj(src, dst)
+                    _copy_capped(src, dst, m.size, m.name)
     except tarfile.TarError as exc:
         raise InvalidUpload(f"corrupt tar: {exc}") from exc
+
+
+def _copy_capped(src, dst, declared: int, name: str, chunk: int = 1 << 20) -> None:
+    """copyfileobj that trusts the header size only up to the byte.
+
+    A zip whose local header lies about ``file_size`` would otherwise stream
+    past the budget the listing was checked against.
+    """
+    written = 0
+    while True:
+        buf = src.read(chunk)
+        if not buf:
+            break
+        written += len(buf)
+        if written > declared:
+            raise InvalidUpload(
+                f"archive member {name!r} is larger than its declared size")
+        dst.write(buf)
 
 
 # --- layout detection -------------------------------------------------------
@@ -189,7 +216,8 @@ def imaging_available() -> bool:
         return False
 
 
-def _validate_bundle(root: Path) -> None:
+def _validate_bundle(root: Path, limits: UploadLimits) -> None:
+    validate_manifest(root, limits)  # specific bad_manifest / too_many_frames first
     try:
         b = PerceptionBundle.open(root)
     except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError) as exc:
@@ -198,12 +226,14 @@ def _validate_bundle(root: Path) -> None:
         raise InvalidUpload("bundle has no frames/ directory")
     if next(b.iter_frame_ids(), None) is None:
         raise InvalidUpload("bundle has no frames")
+    validate_frames(root, limits)
 
 
-def detect_layout(dest: Path) -> tuple[Path, str]:
+def detect_layout(dest: Path, limits: UploadLimits | None = None) -> tuple[Path, str]:
+    limits = limits or UploadLimits.from_env()
     for cand in _candidates(dest):
         if _is_bundle(cand):
-            _validate_bundle(cand)
+            _validate_bundle(cand, limits)
             return cand, "bundle"
         if _is_tum(cand):
             if not imaging_available():
@@ -224,24 +254,34 @@ def validate_and_extract(
     archive_path: Path | str,
     dest: Path | str,
     *,
-    max_extracted_bytes: int = DEFAULT_MAX_EXTRACTED_BYTES,
-    max_members: int = DEFAULT_MAX_MEMBERS,
+    max_extracted_bytes: int | None = None,
+    max_members: int | None = None,
+    limits: UploadLimits | None = None,
 ) -> ExtractResult:
     """Sniff, safely extract into ``dest`` and identify the layout.
 
-    Raises an ``UploadError`` subclass (carrying ``.status`` and ``.code``)
-    on any rejection; ``dest`` may then contain a partial extraction and the
-    caller removes the job dir.
+    ``limits`` defaults to ``UploadLimits.from_env()``; the two keyword caps
+    override the matching field (they predate ``UploadLimits``). Raises an
+    ``UploadError`` subclass (carrying ``.status`` and ``.code``) on any
+    rejection; ``dest`` may then contain a partial extraction and the caller
+    removes the job dir.
     """
     archive_path, dest = Path(archive_path), Path(dest)
+    limits = limits or UploadLimits.from_env()
+    if max_extracted_bytes is not None or max_members is not None:
+        limits = limits.replace(
+            max_extracted_bytes=max_extracted_bytes or limits.max_extracted_bytes,
+            max_members=max_members or limits.max_members)
     fmt = sniff_format(archive_path)
     dest.mkdir(parents=True, exist_ok=True)
     if fmt == "zip":
-        _extract_zip(archive_path, dest, max_extracted_bytes, max_members)
+        _extract_zip(archive_path, dest, limits)
     else:
-        _extract_tar(archive_path, dest, max_extracted_bytes, max_members)
-    root, layout = detect_layout(dest)
+        _extract_tar(archive_path, dest, limits)
+    root, layout = detect_layout(dest, limits)
     # belt and braces: the resolved root must still be inside dest
     if os.path.commonpath([root.resolve(), dest.resolve()]) != str(dest.resolve()):
         raise InvalidUpload("archive root resolved outside the extraction dir")
+    if layout == "tum":
+        check_tum_contents(root, limits)
     return ExtractResult(root=root, format=layout, archive_format=fmt)
