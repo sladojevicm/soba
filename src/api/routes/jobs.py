@@ -37,9 +37,11 @@ from ..jobs.paths import JOB_ID_RE, JobPaths
 from ..jobs.queue import JobQueue
 from ..jobs.store import JobRecord, JobStore
 from ..jobs.worker_local import LocalWorker
+from ..security.upload_validation import capped_receive
 
 DEFAULT_MAX_UPLOAD_BYTES = 2 * 1024 ** 3  # 2 GiB
 _CHUNK = 1 << 20
+_MULTIPART_SLACK = 64 * 1024  # boundaries + the tier field on top of the archive
 TIERS = (1, 2, 3, 4)
 
 
@@ -98,8 +100,16 @@ def jobs_routes(ctx: JobsContext) -> list[Route]:
         if cl and cl.isdigit() and int(cl) > ctx.max_upload_bytes:
             return api_error(413, "upload_too_large",
                              f"upload exceeds {ctx.max_upload_bytes // 1024 ** 2} MiB")
+        # Streaming cap: the multipart parser pulls the body through this
+        # receive, so an oversized (or chunked, Content-Length-less) upload is
+        # cut off as it arrives, not after it was spooled to disk (audit G4).
+        request = Request(request.scope,
+                          capped_receive(request.receive,
+                                         ctx.max_upload_bytes + _MULTIPART_SLACK))
         try:
             form = await request.form()
+        except UploadTooLarge as exc:
+            return api_error(exc.status, exc.code, exc.message)
         except AssertionError as exc:  # starlette: python-multipart missing
             return api_error(500, "multipart_unavailable",
                              f"server cannot parse multipart uploads: {exc}")
