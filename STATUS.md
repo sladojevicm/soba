@@ -78,6 +78,22 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   RTX 4060 machine; `/workspace` on the RunPod pod holds tier 3/4 outputs, and the
   tier 1/2 output folders may be gone with the old pod. The pod bills hourly.
 
+## Known limitations (2026-09-12)
+
+- **Bearer-only auth blocks the browser viewer once `SOBA_API_KEYS` is set.** A browser
+  cannot attach an `Authorization` header to `/jobs/{id}/`, so the viewer needs a
+  header-injecting proxy in front of it. A cookie/session scheme is a future follow-up.
+- **`/metrics` sits outside the protected prefixes** (`/api/*`, `/jobs/*`); put it behind
+  the reverse proxy or a network ACL until it is gated.
+- **Rate limiting is per-process, not Redis-shared.** Several API replicas each keep
+  their own buckets, so the effective limit scales with the replica count.
+- **No model version pins exist for MASt3R, TripoSG, Hunyuan3D or PatchComplete.**
+  No git commit, checkpoint sha256 or HuggingFace revision is recorded anywhere in the
+  repo, so BENCHMARK.md numbers are not reproducible from the repo alone. Recovery
+  commands for the GPU machine and the pod volume are in `docs/model-pins.md`.
+- **`coacd` is missing from the `pyproject.toml` extras** although every hull collider
+  in BENCHMARK.md depends on it; the pipeline image installs it explicitly.
+
 ## Durable gotchas (still true)
 
 - Replica: depth PNG is already millimetres; `traj_w_c.txt` is camera-to-world; the
