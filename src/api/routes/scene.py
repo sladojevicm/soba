@@ -57,6 +57,26 @@ Resolver = Callable[[Request], "Path | Response"]
 Watcher = Callable[[Request], "Any | None"]  # -> object with .status/.terminal
 
 
+def served_file(scene_dir: Path, *parts: str) -> Path | None:
+    """``scene_dir/parts`` if it is a regular file that really lives under
+    ``scene_dir`` once symlinks are resolved, else None.
+
+    The ``_ID_RE`` / ``_HULL_RE`` allow-lists already keep dots and slashes
+    out of the URL; this is the second, filesystem-level check the audit
+    asked for (G5), so a symlink dropped into a scene dir cannot serve a
+    file from outside it.
+    """
+    base = scene_dir.resolve()
+    path = scene_dir.joinpath(*parts)
+    try:
+        real = path.resolve(strict=True)
+    except OSError:
+        return None
+    if not real.is_relative_to(base) or not real.is_file():
+        return None
+    return path
+
+
 def replay_delay_s() -> float:
     """Spacing between replayed object_added events (SOBA_SSE_DELAY, s).
 
@@ -66,8 +86,8 @@ def replay_delay_s() -> float:
 
 
 def read_scene(scene_dir: Path) -> dict | None:
-    p = scene_dir / "scene.json"
-    if not p.is_file():
+    p = served_file(scene_dir, "scene.json")
+    if p is None:
         return None
     with p.open() as fh:
         return json.load(fh)
@@ -103,8 +123,8 @@ def scene_routes(resolve: Resolver, frontend_dir: Path, *, prefix: str = "",
         oid = request.path_params["id"]
         if not _ID_RE.match(oid):
             return Response("bad object id", status_code=400)
-        path = d / "objects" / oid / "mesh.glb"
-        if not path.is_file():
+        path = served_file(d, "objects", oid, "mesh.glb")
+        if path is None:
             return Response("mesh not found", status_code=404)
         return FileResponse(path, media_type=GLB_MEDIA_TYPE)
 
@@ -119,8 +139,8 @@ def scene_routes(resolve: Resolver, frontend_dir: Path, *, prefix: str = "",
         if not m:
             return Response("bad hull name", status_code=400)
         oid, i = m.group("id"), m.group("i")
-        path = d / "objects" / oid / "hulls" / f"{oid}_{i}.glb"
-        if not path.is_file():
+        path = served_file(d, "objects", oid, "hulls", f"{oid}_{i}.glb")
+        if path is None:
             return Response("hull not found", status_code=404)
         return FileResponse(path, media_type=GLB_MEDIA_TYPE)
 
@@ -131,8 +151,8 @@ def scene_routes(resolve: Resolver, frontend_dir: Path, *, prefix: str = "",
         # Scenes without a report are the NORMAL case, so answer 200 with a
         # "not available" marker instead of a 404 — the browser logs every 404
         # as a console error, which would fail the headless check.
-        p = d / "eval.json"
-        if not p.is_file():
+        p = served_file(d, "eval.json")
+        if p is None:
             return JSONResponse({"available": False})
         return FileResponse(p, media_type="application/json")
 
