@@ -4,6 +4,7 @@ Read these only when you need the reasoning behind a decision. The current state
 
 All entries predate the 2026-07-13 rename from vid2sim-v2 to Soba and were moved verbatim on 2026-09-04: substitute `soba` / `SOBA_*` for `vid2sim-v2` / `VID2SIM_*` in any command you copy. Newest first.
 
+- [2026-09-12](2026-09-12-runpod-orchestration.md) — RunPod orchestration: `runpod:` config live, RunPodEngine retry/backoff, `/run`+`/status` polling, breaker, per-job budget, kill switch, https rule; Redis `JobQueue`; `python -m orchestration.worker` + per-job `cost.json`
 - [2026-09-12](2026-09-12-observability-b.md) — Observability phase B: `GET /metrics` (Prometheus, `telemetry` extra), request log with job-id correlation, job-state events, `run_metrics.json` ingestion
 - [2026-09-12](2026-09-12-security-b.md) — Security phase B: bearer API keys (open until `SOBA_API_KEYS`), per-key/per-IP rate limiting, CORS allow-list, security headers, SSE cap, upload hardening (bomb/size/manifest/depth checks)
 - [2026-09-11](2026-09-11-security-audit.md) — Security phase A: secrets + env-var audit, gitleaks/pip-audit/npm audit all clean, root `env.example`, pre-commit (gitleaks + ruff), phase-B threat model

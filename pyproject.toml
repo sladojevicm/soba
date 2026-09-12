@@ -33,6 +33,12 @@ api = [
     "python-multipart>=0.0.9",
     "aiofiles>=23.2",
 ]
+# External queue consumer (src/orchestration/worker.py) and the Redis
+# JobQueue (src/api/jobs/queue_redis.py): `pip install -e ".[serve,api,worker]"`
+# on the worker host; the API needs it too when SOBA_QUEUE_URL is set.
+worker = [
+    "redis>=5.0",
+]
 # Observability phase B: GET /metrics in Prometheus text format. Without it
 # the route answers 501; structured logs and run_metrics.json need no extra.
 telemetry = [

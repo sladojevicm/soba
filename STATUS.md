@@ -1,6 +1,6 @@
 # Soba — Status
 
-_Current state as of 2026-09-11. Measured numbers live in `BENCHMARK.md`; the
+_Current state as of 2026-09-12. Measured numbers live in `BENCHMARK.md`; the
 scene contract lives in `spec/scene.schema.json`; those two are authoritative.
 The reasoning behind past decisions lives in dated files under `docs/log/`._
 
@@ -48,6 +48,13 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   validation (decompression-bomb, size, manifest, frame-count and depth-dtype checks) live
   in `src/api/security/`; the API stays open by default until `SOBA_API_KEYS` is set (one
   startup warning). Rate-limit buckets are per-process (Redis-backed limiting is a follow-up).
+- **RunPod orchestration (2026-09-12, `feat/runpod-orchestration`).** `RunPodEngine` retries
+  transient failures with backoff, polls `/run` + `/status/{id}`, honours a per-endpoint circuit
+  breaker and a per-job budget from the now-live `config/pipeline.yaml` `runpod:` block, refuses
+  non-https URL overrides, and `SOBA_RUNPOD_DISABLED=1` drops every generative object unsent; a
+  RunPod failure drops one object, never the run. `SOBA_QUEUE_URL=redis://` swaps in a Redis
+  `JobQueue`; `python -m orchestration.worker` consumes it and writes `out/jobs/<id>/scene/cost.json`.
+  Verified only against a fake endpoint on this box; the real endpoint path needs the pod.
 - **Observability.** `scripts/run_assemble.py` emits structured logs (text, or JSON lines
   with `SOBA_LOG_JSON=1`) with per-stage timings and one gate event per object, and writes
   `out/<scene>/run_metrics.json` (schema in `src/telemetry/`) on every run, failures
