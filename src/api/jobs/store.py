@@ -14,12 +14,17 @@ safe to call from the request thread and the worker thread at once.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+from telemetry import log_event
+
+log = logging.getLogger("api.jobs")
 
 QUEUED, RUNNING, DONE, FAILED = "queued", "running", "done", "failed"
 STATES = (QUEUED, RUNNING, DONE, FAILED)
@@ -84,11 +89,18 @@ def _apply_transition(rec: JobRecord, state: str, stage: str | None,
         raise InvalidTransition(f"{rec.status} -> {state}")
     if state == RUNNING and rec.state == RUNNING and stage == rec.stage:
         return rec  # no-op: same stage twice
+    prev = rec.status
     rec.state = state
     rec.stage = stage if state == RUNNING else None
     rec.error = error if state == FAILED else None
     rec.updated_at = time.time()
     rec.history.append({"status": rec.status, "at": rec.updated_at})
+    # one structured event per accepted transition (job_id correlates with
+    # the request log; the worker thread and an external consumer both pass
+    # through here)
+    log_event(log, logging.WARNING if state == FAILED else logging.INFO, "job state",
+              event="job_state", job_id=rec.id, state=rec.state, stage=rec.stage,
+              status=rec.status, prev=prev, error=rec.error)
     return rec
 
 

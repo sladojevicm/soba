@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "started_at": "2026-09-11T14:40:02.113+00:00",
+  "finished_at": "2026-09-11T14:41:09.870+00:00",
+  "run": {"status": "ok", "error": null, "bundle": "bundles/office_3", "out": "out/scene_office_3",
+          "tier": 2, "force_strategy": null, "gate_only": false},
+  "stages": {
+    "run": {"seconds": 67.5, "count": 1},
+    "bundle_open": {"seconds": 0.41, "count": 1},
+    "observed_cloud": {"seconds": 6.9, "count": 4},
+    "gate": {"seconds": 0.32, "count": 4},
+    "generation": {"seconds": 40.0, "count": 1},
+    "generate_object": {"seconds": 39.5, "count": 1},
+    "tsdf_fuse": {"seconds": 12.0, "count": 1},
+    "assemble": {"seconds": 8.25, "count": 1}
+  },
+  "gate": {
+    "counts": {"tsdf": 0, "completion": 2, "generative": 1},
+    "per_object": [
+      {"track_id": 3, "class": "chair", "tier": 2, "strategy": "completion",
+       "angular_coverage_deg": 121.3, "completeness_ratio": 0.52, "routed": "completion", "cached": false},
+      {"track_id": 5, "class": "couch", "tier": 2, "strategy": "completion",
+       "angular_coverage_deg": 98.0, "completeness_ratio": 0.41, "routed": "completion", "cached": true},
+      {"track_id": 8, "class": "tv", "tier": 2, "strategy": "generative",
+       "angular_coverage_deg": 33.0, "completeness_ratio": 0.11, "routed": "generative", "cached": false}
+    ]
+  },
+  "drops": {"cloud_too_small": 1},
+  "remote": {"calls": 2, "seconds": 39.5, "est_usd": 0.03,
+             "by_kind": {"runpod/gen": {"calls": 1, "seconds": 38.0, "est_usd": 0.03},
+                         "runpod/complete": {"calls": 1, "seconds": 1.5, "est_usd": null}}}
+}

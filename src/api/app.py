@@ -3,6 +3,7 @@
 Route order (first match wins):
   legacy root      GET /  /scene.json  /eval.json  /meshes/{id}.glb  /hulls/{stem}.glb  /events
   jobs API         POST|GET /api/jobs   GET|DELETE /api/jobs/{id}
+  metrics          GET /metrics  (Prometheus text; 501 without the `telemetry` extra)
   job-scoped       GET /jobs/{id}/  + the same six scene routes under that prefix
   static mount     everything else from frontend/dist (index assets)
 
@@ -39,6 +40,7 @@ from .routes.jobs import (
     job_watcher,
     jobs_routes,
 )
+from .routes.metrics import ApiTelemetry, metrics_routes, telemetry_middleware
 from .routes.scene import scene_routes
 from .security import security_middleware
 
@@ -106,9 +108,11 @@ def create_app(
         mock_delay_s=float(os.environ.get("SOBA_MOCK_DELAY_S", "0")),
     )
 
+    tel = ApiTelemetry(ctx)  # GET /metrics + request log (src/api/routes/metrics.py)
     routes = []
     routes += scene_routes(lambda request: scene_dir, frontend_dir)
     routes += jobs_routes(ctx)
+    routes += metrics_routes(tel)
     routes += scene_routes(job_scene_resolver(ctx), frontend_dir,
                            prefix="/jobs/{job_id}", watch=job_watcher(ctx))
     # Static frontend assets (index-*.js/css). Mounted last so the routes
@@ -144,10 +148,12 @@ def create_app(
             ctx.store.close()
 
     app = Starlette(routes=routes,
-                    middleware=[*security_middleware(),
+                    middleware=[*telemetry_middleware(tel),
+                                *security_middleware(),
                                 Middleware(BaseHTTPMiddleware, dispatch=_no_store)],
                     lifespan=lifespan)
     app.state.jobs = ctx
+    app.state.telemetry = tel
     app.state.scene_dir = scene_dir
     app.state.frontend_dir = frontend_dir
     return app
