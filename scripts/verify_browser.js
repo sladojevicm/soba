@@ -19,6 +19,12 @@
 //   NODE_PATH=/path/to/node_modules node scripts/verify_browser.js \
 //     --scene out/scene_chairs [--screenshot /tmp/chairs.png] [--settle 3000]
 //
+// --path <url path> (default "/") opens the viewer at another page path on the
+// same server, e.g. `--path /jobs/<id>/` with `--scene out/jobs/<id>/scene`:
+// the scene dir is what the checks compare against, the path is what the
+// browser loads (the job store under out/jobs is reopened by the spawned
+// server). With the default path the behaviour is unchanged.
+//
 // Known artifact: swiftshader logs a WebGL "context lost" style warning; it is
 // cosmetic (rendering still works) and is filtered from check 1.
 
@@ -37,10 +43,11 @@ const REPO_ROOT = path.resolve(__dirname, "..");
 // CLI
 // --------------------------------------------------------------------------
 function parseArgs(argv) {
-  const a = { settle: 3000, timeout: 90000 };
+  const a = { settle: 3000, timeout: 90000, path: "/" };
   for (let i = 2; i < argv.length; i++) {
     const k = argv[i];
     if (k === "--scene") a.scene = argv[++i];
+    else if (k === "--path") a.path = argv[++i];
     else if (k === "--screenshot") a.screenshot = argv[++i];
     else if (k === "--python") a.python = argv[++i];
     else if (k === "--settle") a.settle = Number(argv[++i]);
@@ -48,11 +55,13 @@ function parseArgs(argv) {
     else { console.error(`unknown arg: ${k}`); process.exit(2); }
   }
   if (!a.scene) {
-    console.error("usage: node scripts/verify_browser.js --scene <dir> " +
+    console.error("usage: node scripts/verify_browser.js --scene <dir> [--path </jobs/<id>/>] " +
       "[--screenshot <png>] [--python <bin>] [--settle <ms>] [--timeout <ms>]");
     process.exit(2);
   }
   a.scene = path.resolve(REPO_ROOT, a.scene);
+  if (!a.path.startsWith("/")) a.path = "/" + a.path;
+  if (!a.path.endsWith("/")) a.path += "/";
   a.python = a.python || process.env.SOBA_PYTHON ||
     path.join(os.homedir(), "soba/.venv/bin/python");
   a.screenshot = path.resolve(
@@ -130,7 +139,7 @@ async function main() {
   let browser;
 
   try {
-    await waitForHttp(`http://127.0.0.1:${port}/scene.json`, 15000);
+    await waitForHttp(`http://127.0.0.1:${port}${args.path}scene.json`, 15000);
 
     browser = await puppeteer.launch({
       headless: true,
@@ -150,7 +159,7 @@ async function main() {
       if (r.status() >= 400) pageErrors.push(`http ${r.status()}: ${r.url()}`);
     });
 
-    await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "domcontentloaded" });
+    await page.goto(`http://127.0.0.1:${port}${args.path}`, { waitUntil: "domcontentloaded" });
 
     // Wait until every scene.json object is registered in the viewer.
     await page.waitForFunction(
@@ -221,7 +230,7 @@ async function main() {
     check("screenshot written", fs.existsSync(args.screenshot), args.screenshot);
 
     // ---- report ------------------------------------------------------------
-    console.log(`\nscene: ${args.scene}  (${expected.length} objects, port ${port})`);
+    console.log(`\nscene: ${args.scene}  (${expected.length} objects, port ${port}, path ${args.path})`);
     console.log("mass table (scene.json vs live Rapier body):");
     for (const r of massRows) {
       console.log(`  ${r.ok ? "ok  " : "FAIL"} ${r.id.padEnd(28)} want ${String(r.want).padEnd(10)} got ${r.got}`);

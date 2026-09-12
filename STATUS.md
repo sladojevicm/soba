@@ -1,6 +1,6 @@
 # Soba — Status
 
-_Current state as of 2026-09-10. Measured numbers live in `BENCHMARK.md`; the
+_Current state as of 2026-09-12. Measured numbers live in `BENCHMARK.md`; the
 scene contract lives in `spec/scene.schema.json`; those two are authoritative.
 The reasoning behind past decisions lives in dated files under `docs/log/`._
 
@@ -36,10 +36,36 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   `scripts/ablation_routing.sh` and `scripts/ablation_summary.py`; gated routing
   gives the best surface fidelity, forced generative reproduces tier 1. fr2/xyz
   pose re-measured on all 3665 pairs (BENCHMARK §1).
+- **Job API (2026-09-11, `feat/job-api`).** `POST /api/jobs` takes a PerceptionBundle or
+  TUM archive and returns a job id; `GET /api/jobs/{id}` reports queued / running:<stage> /
+  done / failed; the viewer and scene routes are mirrored under `/jobs/{id}/`. On this box
+  the in-process worker runs in `mock` mode (copies `out/scene_test`); `real` and
+  `gate-only` spawn `scripts/run_assemble.py` and need the pod. There is **no job or
+  output retention policy yet**: uploads and `out/jobs/` grow unbounded (follow-up, not
+  blocking).
+- **API security (2026-09-12, `feat/security-hardening`).** Bearer-key auth, per-key/per-IP
+  rate limiting, a CORS allow-list, security headers, an SSE connection cap and upload
+  validation (decompression-bomb, size, manifest, frame-count and depth-dtype checks) live
+  in `src/api/security/`; the API stays open by default until `SOBA_API_KEYS` is set (one
+  startup warning). Rate-limit buckets are per-process (Redis-backed limiting is a follow-up).
+- **RunPod orchestration (2026-09-12, `feat/runpod-orchestration`).** `RunPodEngine` retries
+  transient failures with backoff, polls `/run` + `/status/{id}`, honours a per-endpoint circuit
+  breaker and a per-job budget from the now-live `config/pipeline.yaml` `runpod:` block, refuses
+  non-https URL overrides, and `SOBA_RUNPOD_DISABLED=1` drops every generative object unsent; a
+  RunPod failure drops one object, never the run. `SOBA_QUEUE_URL=redis://` swaps in a Redis
+  `JobQueue`; `python -m orchestration.worker` consumes it and writes `out/jobs/<id>/scene/cost.json`.
+  Verified only against a fake endpoint on this box; the real endpoint path needs the pod.
+- **Observability.** `scripts/run_assemble.py` emits structured logs (text, or JSON lines
+  with `SOBA_LOG_JSON=1`) with per-stage timings and one gate event per object, and writes
+  `out/<scene>/run_metrics.json` (schema in `src/telemetry/`) on every run, failures
+  included. The API serves `GET /metrics` (Prometheus text, optional `telemetry` extra,
+  501 without it): request count/latency by route, job-state gauges, and gate / stage /
+  drop / RunPod counters ingested from each finished job's `run_metrics.json`; every
+  request and job-state transition is logged with the job id.
 - **Never built or never run.** A real-sensor scene end to end (TUM through detector,
   SAM2, MASt3R, assembly); live OAK capture; a phone-capture reader; the ScanNet
   reader (stub); a Phase-12 CLI (`scripts/run_assemble.py` is the driver).
-- **Known defects.** The server's empty-scene fallback (`src/server.py:98`) omits
+- **Known defects.** The server's empty-scene fallback (`src/api/routes/scene.py`, `scene_json`) omits
   `world`, `ground` and `camera_pose` and fails the frozen schema. The eight
   cross-module disagreements are listed in `CLAUDE.md`. TUM world frames are not
   gravity-aligned, so floor snapping is wrong on real-sensor runs.

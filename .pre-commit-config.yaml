@@ -1,0 +1,20 @@
+# One-time setup (see docs/security/secrets-audit.md, "Pre-commit"):
+#   uv pip install --python .venv/bin/python pre-commit   # or: pip install pre-commit
+#   .venv/bin/pre-commit install
+#
+# Hooks are deliberately non-mutating: gitleaks only reports, ruff runs
+# without --fix, and there is no ruff-format hook because the codebase is not
+# yet ruff-format clean (64 files would change as of 2026-09-11).
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Pinned to the ruff in .venv (pyproject dev extra) so hook and local
+    # `ruff check` agree.
+    rev: v0.16.3
+    hooks:
+      - id: ruff
+        args: [--no-fix]

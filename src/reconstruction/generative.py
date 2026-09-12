@@ -31,9 +31,76 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import dataclass
 
+from reconstruction import runpod_policy
+
 log = logging.getLogger(__name__)
+
+# Observability hook (src/telemetry): run_assemble.py sets this to record the
+# wall time of every RunPod call as `hook(endpoint_id, seconds)`. Called on
+# success AND failure; None = no accounting.
+remote_call_hook = None
+
+# The seconds reported to the hook are BILLABLE seconds: RunPod's
+# `executionTime` (ms) when the response carries it, else the request's wall
+# time. Reported once per HTTP submission, retries included.
+
+_sleep = time.sleep  # retry backoff; tests replace it
+
+# Terminal RunPod job states (the rest — IN_QUEUE, IN_PROGRESS — are polled).
+_TERMINAL_STATUS = frozenset({"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"})
+
+
+class RunPodError(RuntimeError):
+    """A RunPod call failed for good: a permanent failure, or retries exhausted.
+    scripts/run_assemble.py turns this into a `runpod_failed` drop of the one
+    object and carries on."""
+
+
+class RunPodTransient(RunPodError):
+    """Retryable: network error / socket timeout, HTTP 429 or 5xx, an
+    IN_QUEUE / IN_PROGRESS stall, a non-terminal reply that cannot be polled."""
+
+
+class RunPodJobFailed(RunPodError):
+    """The handler ran and reported FAILED / an `error` field. Not retried:
+    the input is most likely the problem, and a retry costs GPU time."""
+
+
+class RunPodConfigError(RunPodError):
+    """Misconfiguration (a plain-http URL override without
+    SOBA_RUNPOD_ALLOW_HTTP=1). Raised before any request; never swallowed."""
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _billable_seconds(data, wall: float) -> float:
+    if isinstance(data, dict):
+        et = data.get("executionTime")
+        if isinstance(et, (int, float)) and not isinstance(et, bool) and et >= 0:
+            return float(et) / 1000.0
+    return float(wall)
+
+
+def _error_body(exc) -> str:
+    try:
+        return exc.read().decode(errors="replace")[:200]
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+def _record_drop(reason: str, **fields) -> None:
+    """Record a no-call drop on the active run (telemetry) — or only log it."""
+    try:
+        from telemetry import drop
+    except ImportError:  # the pod-side handler imports this module without telemetry
+        log.info("drop: %s %s", reason, fields)
+        return
+    drop(reason, **fields)
 
 
 @dataclass
@@ -610,42 +677,187 @@ class RunPodEngine(Engine):
         self.completion_endpoint = completion_endpoint
         self.gen_model = gen_model
         self.completion_model = completion_model
-        # shape ~2.5 min + paint ~2 min per object, plus cold model loads on
-        # the first request — 600 s is tight there; env-tunable for paint runs
-        self.timeout_s = float(timeout_s if timeout_s is not None
-                               else os.environ.get("SOBA_RUNPOD_TIMEOUT", "900"))
+        # Every resilience / cost number comes from config/pipeline.yaml
+        # `runpod:` (reconstruction.runpod_policy); the attributes below are
+        # the per-engine (= per job) copies a caller or a test may replace.
+        cfg = runpod_policy.load_runpod_config()
+        self.config = cfg
+        # one request's socket timeout: arg > SOBA_RUNPOD_TIMEOUT > config. In
+        # runsync mode (the SDK test server) this is the whole job — shape
+        # ~2.5 min + paint ~2 min per object plus cold model loads.
+        env_timeout = os.environ.get("SOBA_RUNPOD_TIMEOUT")
+        self.timeout_s = float(
+            timeout_s if timeout_s is not None
+            else env_timeout if env_timeout else cfg["request_timeout_s"])
+        self.transport = str(cfg["transport"])
+        self.job_timeout_s = float(cfg["job_timeout_s"])
+        self.poll_interval_s = float(cfg["poll_interval_s"])
+        self.stall_timeout_s = float(cfg["stall_timeout_s"])
+        self.retry = runpod_policy.RetryPolicy.from_config(cfg)
+        self.budget = runpod_policy.Budget.from_config(cfg)
 
-    # --- transport (generic RunPod serverless runsync) ------------------
+    # --- transport (RunPod serverless: /run + /status polling, or /runsync) --
+    def _check_scheme(self, url: str, var: str) -> None:
+        if url.lower().startswith("https://") or _env_flag("SOBA_RUNPOD_ALLOW_HTTP"):
+            return
+        raise RunPodConfigError(
+            f"{var}={url!r} is not https://; the bearer key would travel in clear. "
+            "Set SOBA_RUNPOD_ALLOW_HTTP=1 only for a local tunnel / test server.")
+
+    def _urls(self, endpoint: str) -> tuple[str, str | None]:
+        """(submit URL, base URL for /status + /cancel, or None if unknown)."""
+        override = os.environ.get("SOBA_RUNPOD_URL")
+        if override:
+            # The SDK's local test server (`python generative_handler.py
+            # --rp_serve_api`) through a tunnel: one blocking POST to the
+            # given URL; polling only if we can see where /status lives.
+            self._check_scheme(override, "SOBA_RUNPOD_URL")
+            trimmed = override.rstrip("/")
+            for suffix in ("/runsync", "/run"):
+                if trimmed.endswith(suffix):
+                    return override, trimmed[: -len(suffix)]
+            return override, None
+        root = os.environ.get("SOBA_RUNPOD_BASE_URL") or self.BASE_URL
+        self._check_scheme(root, "SOBA_RUNPOD_BASE_URL")
+        base = f"{root.rstrip('/')}/{endpoint}"
+        op = "runsync" if self.transport == "runsync" else "run"
+        return f"{base}/{op}", base
+
+    def _http(self, method: str, url: str, body: bytes | None = None) -> dict:
+        """One authenticated request -> parsed JSON. Classifies failures."""
+        import http.client
+        import json
+        import urllib.error
+        import urllib.request
+
+        req = urllib.request.Request(
+            url, data=body, method=method,
+            headers={"Authorization": f"Bearer {self.api_key}",
+                     "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                raw = resp.read().decode()
+        except urllib.error.HTTPError as exc:  # before URLError: it is a subclass
+            detail = _error_body(exc)
+            if exc.code == 429 or exc.code >= 500:
+                raise RunPodTransient(f"HTTP {exc.code} from {url}: {detail}") from exc
+            raise RunPodError(f"HTTP {exc.code} from {url}: {detail}") from exc
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError,
+                http.client.HTTPException) as exc:
+            raise RunPodTransient(f"{type(exc).__name__}: {exc}") from exc
+        try:
+            data = json.loads(raw)
+        except ValueError as exc:
+            raise RunPodError(f"non-JSON reply from {url}: {raw[:120]!r}") from exc
+        if not isinstance(data, dict):
+            raise RunPodError(f"unexpected reply from {url}: {raw[:120]!r}")
+        return data
+
+    def _cancel(self, base: str, job_id: str) -> None:
+        try:
+            self._http("POST", f"{base}/cancel/{job_id}")
+        except RunPodError as exc:  # best effort; the job may already be gone
+            log.info("runpod cancel %s: %s", job_id, exc)
+
+    def _poll(self, base: str, job_id: str, status: str | None) -> dict:
+        """GET /status/{id} until terminal. A job stuck in one non-terminal
+        state past `stall_timeout_s` is cancelled and retried (transient); one
+        still running past `job_timeout_s` is cancelled for good."""
+        started = last_change = runpod_policy._now()
+        while True:
+            now = runpod_policy._now()
+            if now - started > self.job_timeout_s:
+                self._cancel(base, job_id)
+                raise RunPodError(f"job {job_id} not finished after "
+                                  f"{self.job_timeout_s:.0f}s (last {status}); cancelled")
+            if now - last_change > self.stall_timeout_s:
+                self._cancel(base, job_id)
+                raise RunPodTransient(f"job {job_id} stalled in {status} for "
+                                      f"{self.stall_timeout_s:.0f}s; cancelled")
+            _sleep(self.poll_interval_s)
+            data = self._http("GET", f"{base}/status/{job_id}")
+            new_status = data.get("status")
+            if new_status in _TERMINAL_STATUS:
+                return data
+            if new_status != status:
+                status, last_change = new_status, runpod_policy._now()
+
+    def _submit_and_wait(self, endpoint: str, body: bytes) -> dict:
+        submit_url, base = self._urls(endpoint)
+        data = self._http("POST", submit_url, body)
+        status = data.get("status")
+        if status in _TERMINAL_STATUS or (status is None and "id" not in data):
+            return data  # runsync finished in one go (or a bare {output} reply)
+        job_id = data.get("id")
+        if not base or not job_id:
+            raise RunPodTransient(f"non-terminal reply {status!r} from {submit_url} "
+                                  "and no status URL to poll")
+        return self._poll(base, str(job_id), status)
+
     def _runsync(self, endpoint: str, payload: dict) -> dict:
         """POST {"input": payload} to `endpoint`, return the `output` dict.
 
-        Synchronous RunPod call: blocks until the job finishes. Raises on a
-        non-200 status or a RunPod-level error field.
+        Blocks until the job finishes: `/run` then `/status/{id}` polling (or a
+        single `/runsync` when configured / when SOBA_RUNPOD_URL is set).
+        Transient failures are retried with exponential backoff + jitter; every
+        submission is charged to the per-job budget, reported to the breaker
+        and to `remote_call_hook`. Raises `RunPodError` (a RuntimeError) when
+        the call is given up: FAILED / `error` from the handler, a non-retryable
+        HTTP status, or the retry policy exhausted.
         """
         import json
-        import os
-        import urllib.request
 
-        # SOBA_RUNPOD_URL overrides the full runsync URL — for the SDK's
-        # local test server (`python generative_handler.py --rp_serve_api`) on
-        # a plain SSH pod, reached through a tunnel (no serverless endpoint).
-        url = os.environ.get("SOBA_RUNPOD_URL") or \
-            f"{self.BASE_URL}/{endpoint}/runsync"
         body = json.dumps({"input": payload}).encode()
-        req = urllib.request.Request(
-            url,
-            data=body,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
-            data = json.loads(resp.read().decode())
-        if data.get("status") == "FAILED" or "error" in data:
-            raise RuntimeError(f"RunPod job failed: {data.get('error') or data}")
-        return data.get("output", {})
+        breaker = runpod_policy.breaker_for(endpoint, self.config)
+        n = max(1, self.retry.max_attempts)
+        last: RunPodError | None = None
+        for attempt in range(1, n + 1):
+            t0 = time.perf_counter()
+            data, exc = None, None
+            try:
+                data = self._submit_and_wait(endpoint, body)
+            except RunPodConfigError:
+                raise  # nothing was sent: not a call, not a failure
+            except RunPodError as e:
+                exc = e
+            billable = _billable_seconds(data, time.perf_counter() - t0)
+            self.budget.charge(
+                billable, runpod_policy.estimate_usd(billable, endpoint, self.config),
+                endpoint)
+            if remote_call_hook is not None:
+                remote_call_hook(endpoint, billable)
+            if exc is None:
+                status = data.get("status")
+                if status == "FAILED" or "error" in data:
+                    exc = RunPodJobFailed(f"RunPod job failed: {data.get('error') or data}")
+                elif status in ("CANCELLED", "TIMED_OUT"):
+                    exc = RunPodError(f"RunPod job {status}: {data}")
+                else:
+                    breaker.record_success()
+                    return data.get("output", {})
+            breaker.record_failure()
+            last = exc
+            log.warning("runpod %s attempt %d/%d failed: %s", endpoint, attempt, n, exc)
+            if not isinstance(exc, RunPodTransient) or attempt == n:
+                break
+            if not breaker.allow():
+                log.warning("runpod %s: circuit breaker open, no more retries", endpoint)
+                break
+            _sleep(self.retry.sleep_for(attempt))
+        assert last is not None
+        raise last
+
+    def _guard(self, endpoint: str) -> str | None:
+        """Why NOT to call `endpoint` now (a drop reason), or None to proceed.
+        Order matters: the breaker's half-open probe slot is only taken when
+        the kill switch and the budget already allow the call."""
+        if runpod_policy.disabled():
+            return runpod_policy.DROP_DISABLED
+        if self.budget.exhausted():
+            return runpod_policy.DROP_BUDGET
+        if not runpod_policy.breaker_for(endpoint, self.config).allow():
+            return runpod_policy.DROP_BREAKER_OPEN
+        return None
 
     # --- endpoint-specific seams (contract shared with the serverless handler,
     #     deploy/runpod/generative_handler.py) ------------------------------
@@ -692,19 +904,21 @@ class RunPodEngine(Engine):
         import base64
         import tempfile
 
-        import open3d as o3d
-
         fmt = (output or {}).get("format", "obj").lower()
         data = (output or {}).get("mesh_b64")
         if not data:
-            raise RuntimeError(f"RunPod returned no mesh (output keys: {list((output or {}).keys())})")
+            raise RunPodJobFailed(
+                f"RunPod returned no mesh (output keys: {list((output or {}).keys())})")
+
+        import open3d as o3d
+
         raw = base64.b64decode(data)
         with tempfile.NamedTemporaryFile(suffix=f".{fmt}", delete=True) as tf:
             tf.write(raw)
             tf.flush()
             m = o3d.io.read_triangle_mesh(tf.name)
         if len(m.vertices) == 0:
-            raise RuntimeError("RunPod mesh decoded to zero vertices")
+            raise RunPodJobFailed("RunPod mesh decoded to zero vertices")
         m.compute_vertex_normals()
         return m
 
@@ -715,10 +929,22 @@ class RunPodEngine(Engine):
         # local Poisson repair.
         if not self.completion_endpoint:
             return None
+        reason = self._guard(self.completion_endpoint)
+        if reason:
+            log.info("completion via RunPod skipped (%s); local Poisson fallback", reason)
+            return None
         payload = self._build_input(
             mode="complete", model=self.completion_model, crop_path=crop_path,
             coco_class=coco_class, cloud=cloud, mesh=mesh)
-        return self._decode_mesh(self._runsync(self.completion_endpoint, payload))
+        try:
+            return self._decode_mesh(self._runsync(self.completion_endpoint, payload))
+        except RunPodConfigError:
+            raise
+        except RunPodError as exc:
+            # The object is NOT dropped: the assembler seals the partial mesh
+            # locally. One endpoint outage must not abort the assembly.
+            log.warning("completion via RunPod failed (%s); local Poisson fallback", exc)
+            return None
 
     def regenerate(self, *, cloud, crop_path, coco_class):
         # BOTTOM band: image-to-3D (image-conditioned). No gen endpoint -> None
@@ -728,9 +954,22 @@ class RunPodEngine(Engine):
         # raise that kills the whole assembly.
         if not self.gen_endpoint or crop_path is None:
             return None
+        # Kill switch / budget / open breaker: no request, the object is
+        # dropped and the reason recorded on the run (telemetry drops).
+        reason = self._guard(self.gen_endpoint)
+        if reason:
+            fields = {"band": "generative", "endpoint": self.gen_endpoint,
+                      "coco_class": coco_class}
+            if reason == runpod_policy.DROP_BUDGET:
+                fields["limit"] = self.budget.exhausted()
+            log.info("regeneration via RunPod skipped: %s", reason)
+            _record_drop(reason, **fields)
+            return None
         payload = self._build_input(
             mode="regenerate", model=self.gen_model, crop_path=crop_path,
             coco_class=coco_class, cloud=cloud)
+        # A RunPodError from here propagates: scripts/run_assemble.py records
+        # the `runpod_failed` drop for this one object and continues.
         gen_mesh = self._decode_mesh(self._runsync(self.gen_endpoint, payload))
         # The model returns a unit-cube mesh; scale it to a class-size prior and
         # place it on the observed cloud (precise FPFH+ICP is Phase 8).

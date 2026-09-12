@@ -22,7 +22,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import RAPIER, { type RigidBody } from "@dimforge/rapier3d-compat";
 import type { World } from "@dimforge/rapier3d-compat";
 import type { ObjectInfo, SceneJson, SceneObject, SobaDebug, ViewerEventMap } from "./types";
-import { glbVertices, enableShadows, makeLabel } from "./loaders";
+import { glbVertices, enableShadows, makeLabel, sceneUrl } from "./loaders";
 import { boundsOf, framePlacement } from "./framing";
 import { initWorld, createGroundCollider, createObjectBody, attachColliders } from "./physics";
 
@@ -160,7 +160,7 @@ export class SobaViewer {
 
   // ---- helpers ------------------------------------------------------------
   private async getScene(): Promise<SceneJson> {
-    const r = await fetch("/scene.json", { cache: "no-store" });
+    const r = await fetch(sceneUrl("/scene.json"), { cache: "no-store" });
     return r.json();
   }
 
@@ -204,7 +204,7 @@ export class SobaViewer {
     const q = entry.transform.rotation_quat; // [x,y,z,w]
 
     // 1. Render mesh (do NOT collapse to one mesh — that strips PBR materials).
-    const gltf = await this.gltfLoader.loadAsync(`/meshes/${id}.glb`);
+    const gltf = await this.gltfLoader.loadAsync(sceneUrl(`/meshes/${id}.glb`));
     if (this.disposed) return;
     const obj3d = gltf.scene;
     // Render DOUBLE-SIDED: these are TSDF / marching-cubes / completion meshes
@@ -246,7 +246,7 @@ export class SobaViewer {
       // hull_paths are scene-relative ("hulls/{id}_{i}.glb"); the server
       // remaps /hulls/{id}_{i}.glb -> objects/{id}/hulls/{id}_{i}.glb.
       const hullGltfs = await Promise.all(
-        (entry.collider.hull_paths ?? []).map((p) => this.gltfLoader.loadAsync("/" + p))
+        (entry.collider.hull_paths ?? []).map((p) => this.gltfLoader.loadAsync(sceneUrl(p)))
       );
       hullVerts = hullGltfs.map(glbVertices);
     }
@@ -360,7 +360,7 @@ export class SobaViewer {
     if (this.disposed) return;
 
     // SSE: on each object_added, re-GET scene.json and look up by id (fix Z-C).
-    this.es = new EventSource("/events");
+    this.es = new EventSource(sceneUrl("/events"));
     this.es.addEventListener("object_added", async (ev) => {
       const id = JSON.parse((ev as MessageEvent).data).id;
       const fresh = await this.getScene();
