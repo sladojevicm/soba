@@ -27,7 +27,7 @@ import numpy as np
 import telemetry
 from perception.bundle import PerceptionBundle
 from reconstruction import confidence as cf
-from reconstruction import gate_cache, generative, observed_cloud, tsdf
+from reconstruction import gate_cache, generative, observed_cloud, runpod_policy, tsdf
 from scene import assembler, lookup
 from telemetry import stage_timer
 
@@ -239,8 +239,20 @@ def _run(args, metrics: telemetry.RunMetrics) -> None:
                     _os.environ[var] = str(seed)
                 with stage_timer("generate_object", track_id=tid,
                                  cls=classes.get(tid, "obj"), seed=seed):
-                    r = engine.regenerate(cloud=cloud, crop_path=crop,
-                                          coco_class=classes.get(tid, "obj"))
+                    try:
+                        r = engine.regenerate(cloud=cloud, crop_path=crop,
+                                              coco_class=classes.get(tid, "obj"))
+                    except generative.RunPodConfigError:
+                        raise  # misconfiguration is loud, never a per-object drop
+                    except generative.RunPodError as exc:
+                        # One endpoint failure (retries exhausted, FAILED, bad
+                        # reply) drops THIS object and the run goes on. Not
+                        # cached as a rejection: the next run may succeed.
+                        log.warning("  #%d regeneration failed on RunPod: %s", tid, exc)
+                        n_dropped += 1
+                        metrics.record_drop(runpod_policy.DROP_FAILED, track_id=tid,
+                                            error=str(exc)[:200])
+                        continue
                 if r is None:
                     meta.write_text(_json.dumps({"rejected": True}))
                     n_dropped += 1
@@ -361,9 +373,12 @@ def main(argv: list[str] | None = None) -> None:
     metrics = telemetry.start_run(
         bundle=str(args.bundle), out=str(args.out), tier=args.tier,
         force_strategy=args.force_strategy, gate_only=args.gate_only)
+    # billable seconds per RunPod submission -> run_metrics.json `remote`,
+    # priced with the config/pipeline.yaml `runpod.price` assumption
     generative.remote_call_hook = (
         lambda endpoint, seconds: metrics.record_remote_call(
-            f"runpod/{endpoint}", seconds))
+            f"runpod/{endpoint}", seconds,
+            est_usd=runpod_policy.estimate_usd(seconds, endpoint)))
     try:
         with stage_timer("run", metrics=metrics):
             _run(args, metrics)
