@@ -229,3 +229,34 @@ $ gitleaks dir --no-banner --redact .
 INF scanned ~20678485 bytes (20.68 MB) in 1.2s
 INF no leaks found
 ```
+
+## 7. Phase B status — 2026-09-12
+
+Implemented on `feat/security-hardening` (PR #7), `src/api/security/`; see
+`docs/log/2026-09-12-security-b.md` for the reasoning and the env contract.
+
+| Gap | Status | Where |
+|---|---|---|
+| G1 no authentication | **closed** | `auth.py`: `SOBA_API_KEYS` bearer keys, `hmac.compare_digest`, `request.state.api_key_name`, 401 + `WWW-Authenticate`; open by default with one startup warning, `/api/*` + `/jobs/*` closed once keys exist, legacy root routes closed by `SOBA_AUTH_LEGACY=1` |
+| G2 `SOBA_RUNPOD_URL` sends the token anywhere | **handed off** to runpod-orchestration-agent (`feat/runpod-orchestration`, `RunPodEngine` is theirs; this branch does not touch `generative.py`) | expected: `https://` required unless the host is `localhost` / `127.0.0.1` |
+| G3 `SOBA_COMPC_CMD` command template | **open, by design** — trusted-operator knob; the API never maps request data to the environment (verified: `routes/jobs.py` passes only the job dir + tier to the worker) | re-check when the Redis worker (`src/orchestration/`) lands |
+| G4 no request body limit | **closed** | `routes/jobs.py` wraps the multipart body in `capped_receive` (cut off while arriving, `SOBA_MAX_UPLOAD_MB` + 64 KiB multipart slack); the Content-Length pre-check and the on-disk cap stay |
+| G5 path safety on two regexes | **closed** | `routes/scene.py` `served_file()`: `resolve(strict=True)` + `is_relative_to(scene_dir)` on `scene.json`, `eval.json`, every mesh and hull; a symlink inside a scene dir now 404s |
+| G6 `SOBA_SCENE_DIR` trusted as-is | **closed by the job API** | job scene dirs come from `JobPaths(jobs_dir, id)` with `JOB_ID_RE`; the legacy root dir is operator config |
+| G7 no CORS / security headers | **closed** | `headers.py`: `SOBA_CORS_ORIGINS` allow-list (empty = no CORS headers), nosniff, `frame-ancestors 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin`; HSTS belongs to the TLS proxy |
+| G8 SSE without a client cap | **closed** | `SSEConnectionCapMiddleware`, `SOBA_SSE_MAX_PER_IP` (8), 429 `too_many_streams` |
+| G9 secrets in logs | **open** — nothing logs headers today; `ApiKey.__repr__` hides the secret and the parser never echoes key material | redaction filter for `configure_logging()` belongs to observability phase B (`src/telemetry/`) |
+| G10 dependency hygiene in CI | **handed off** to docker-agent (`ci.yml`): gitleaks + pip-audit + npm audit | pre-commit already runs gitleaks + ruff |
+
+Also in phase B: decompression-bomb / member / total / ratio caps, nested
+archives and zip symlink entries rejected, `manifest.json` through
+`Manifest.from_dict` (`bad_manifest`), frame-count cap, uint16 greyscale
+depth check on a sample of frames (`bad_depth_dtype` / `frame_too_large`),
+per-key + per-IP token-bucket rate limiting with a `loadtest` bypass.
+
+Follow-ups (not blocking): a shared (Redis) rate-limit bucket once there is
+more than one API replica; a cookie/session scheme so a browser can open the
+viewer under `/jobs/{id}/` when keys are set (today that needs a proxy that
+injects the bearer header); `/metrics` is outside the protected prefixes and
+observability phase B decides its policy; non-root user in
+`docker/api.Dockerfile` is docker-agent's (confirm in review).
