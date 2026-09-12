@@ -33,6 +33,12 @@ api = [
     "python-multipart>=0.0.9",
     "aiofiles>=23.2",
 ]
+# External queue consumer (src/orchestration/worker.py) and the Redis
+# JobQueue (src/api/jobs/queue_redis.py): `pip install -e ".[serve,api,worker]"`
+# on the worker host; the API needs it too when SOBA_QUEUE_URL is set.
+worker = [
+    "redis>=5.0",
+]
 # Heavy, host-side reconstruction deps (CUDA recommended for TSDF). Kept
 # optional so the contract + data-input layers install and test without them.
 recon = [
