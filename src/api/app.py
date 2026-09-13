@@ -4,6 +4,7 @@ Route order (first match wins):
   legacy root      GET /  /scene.json  /eval.json  /meshes/{id}.glb  /hulls/{stem}.glb  /events
   jobs API         POST|GET /api/jobs   GET|DELETE /api/jobs/{id}
   metrics          GET /metrics  (Prometheus text; 501 without the `telemetry` extra)
+  docs             GET /api/openapi.json  /api/docs  (spec/openapi.yaml + Redoc page)
   job-scoped       GET /jobs/{id}/  + the same six scene routes under that prefix
   static mount     everything else from frontend/dist (index assets)
 
@@ -36,6 +37,7 @@ from .jobs.queue import InProcessQueue, JobQueue
 from .jobs.queue_redis import queue_from_env
 from .jobs.store import QUEUED, JobStore, SqliteJobStore
 from .jobs.worker_local import LocalWorker
+from .routes.docs import docs_routes
 from .routes.jobs import (
     DEFAULT_MAX_UPLOAD_BYTES,
     JobsContext,
@@ -120,6 +122,7 @@ def create_app(
     routes += scene_routes(lambda request: scene_dir, frontend_dir)
     routes += jobs_routes(ctx)
     routes += metrics_routes(tel)
+    routes += docs_routes()  # GET /api/openapi.json + /api/docs (src/api/routes/docs.py)
     routes += scene_routes(job_scene_resolver(ctx), frontend_dir,
                            prefix="/jobs/{job_id}", watch=job_watcher(ctx))
     # Static frontend assets (index-*.js/css). Mounted last so the routes

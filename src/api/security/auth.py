@@ -9,7 +9,8 @@ Policy
       ``Authorization: Bearer <key>``. The legacy root routes (``/``,
       ``/scene.json``, ``/meshes/..``, ``/hulls/..``, ``/events``,
       ``/eval.json`` and the static assets) stay open unless
-      ``SOBA_AUTH_LEGACY=1`` closes them too.
+      ``SOBA_AUTH_LEGACY=1`` closes them too. ``/api/openapi.json`` and
+      ``/api/docs`` (``PUBLIC_PATHS``) stay open the same way.
 
 Key format: comma-separated ``name:key`` or ``name:key:loadtest``. ``name``
 is the caller's identity (``request.state.api_key_name``, the rate-limit
@@ -41,6 +42,10 @@ log = logging.getLogger("soba.api.security")
 ENV_KEYS = "SOBA_API_KEYS"
 ENV_LEGACY = "SOBA_AUTH_LEGACY"
 _PROTECTED_PREFIXES = ("/api", "/jobs")
+# Under /api but open in keyed mode: the OpenAPI document and the Redoc page
+# contain nothing that is not in the public repository. SOBA_AUTH_LEGACY=1
+# (close everything) still covers them.
+PUBLIC_PATHS = frozenset({"/api/openapi.json", "/api/docs"})
 _REALM = 'Bearer realm="soba"'
 
 
@@ -126,6 +131,8 @@ class AuthConfig:
     def requires_auth(self, path: str) -> bool:
         if not self.enabled:
             return False
+        if path in PUBLIC_PATHS:
+            return self.protect_legacy
         for prefix in _PROTECTED_PREFIXES:
             if path == prefix or path.startswith(prefix + "/"):
                 return True
