@@ -15,7 +15,9 @@ from pathlib import Path
 
 import pytest
 from _fixtures import post_archive, run_worker
-from prometheus_client.parser import text_string_to_metric_families
+prometheus_client = pytest.importorskip(
+    "prometheus_client", reason="telemetry extra not installed (pip install -e '.[telemetry]')")
+from prometheus_client.parser import text_string_to_metric_families  # noqa: E402
 from starlette.testclient import TestClient
 
 import telemetry
