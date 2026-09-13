@@ -62,6 +62,11 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   501 without it): request count/latency by route, job-state gauges, and gate / stage /
   drop / RunPod counters ingested from each finished job's `run_metrics.json`; every
   request and job-state transition is logged with the job id.
+- **Load testing (2026-09-13, `feat/load-testing`).** `make loadtest` runs k6 scenarios
+  (upload burst, status polling, scene fetch, SSE, mixed) plus a stdlib SSE probe against the
+  compose stack in open and keyed mode and writes `loadtest/results/<stamp>/`; the recorded
+  run is in `docs/loadtest.md`. Those numbers are API-layer throughput with the mock worker
+  on CPU, never pipeline or GPU throughput.
 - **API docs (2026-09-13, `feat/api-docs`).** `spec/openapi.yaml` (OpenAPI 3.1, scene body `$ref`s
   the frozen schema) is served at `GET /api/openapi.json` and rendered at `GET /api/docs` (Redoc,
   loads its bundle from a CDN in the browser); `tests/api/test_openapi.py` fails when a route and

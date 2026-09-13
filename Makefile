@@ -14,7 +14,7 @@ help:
 	@echo "up / down       docker compose --profile cpu (api + redis + orchestration worker, mock mode)"
 	@echo "test            pytest (full suite; open3d-dependent tests fail without the recon extra)"
 	@echo "lint            ruff check (E9 + F only, see [tool.ruff] in pyproject.toml)"
-	@echo "loadtest        k6 scenarios — lands with feat/load-testing"
+	@echo "loadtest        k6 + SSE-probe suite against compose (loadtest/run.sh); KEEP=1 leaves the stack up, SMOKE=1 short"
 
 build: build-api build-pipeline frontend-check
 
@@ -31,7 +31,7 @@ up:
 	SOBA_QUEUE_URL=redis://redis:6379/0 SOBA_WORKER_INPROC=0 $(COMPOSE) --profile cpu up --build
 
 down:
-	$(COMPOSE) --profile cpu --profile gpu down
+	$(COMPOSE) --profile cpu --profile gpu --profile loadtest down
 
 test:
 	$(PYTHON) -m pytest -q
@@ -39,6 +39,7 @@ test:
 lint:
 	$(PYTHON) -m ruff check .
 
+# API-layer numbers with the mock worker on CPU, never pipeline/GPU throughput
+# (docs/loadtest.md). Results: loadtest/results/<stamp>/ (gitignored).
 loadtest:
-	@echo "make loadtest: the k6 scenarios land with feat/load-testing (.claude/AGENTS.md agent 7)." >&2
-	@exit 2
+	PYTHON=$(PYTHON) COMPOSE="$(COMPOSE)" bash loadtest/run.sh
