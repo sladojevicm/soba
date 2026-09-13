@@ -1,0 +1,1354 @@
+openapi: 3.1.0
+
+# Hand-authored (Starlette has no generator). tests/api/test_openapi.py keeps
+# it honest: every route in `api.app.create_app()` must appear here and vice
+# versa, and live responses are validated against the schemas below.
+# Served by the app itself at GET /api/openapi.json (JSON) and GET /api/docs.
+# The scene body is NOT copied: it `$ref`s the frozen ./scene.schema.json.
+
+info:
+  title: Soba API
+  version: "1.0.0"
+  summary: Upload an RGB-D capture, get back a physics-enabled 3D scene.
+  description: |
+    Soba turns a short RGB-D capture of a room into a physics-enabled 3D scene
+    that runs in a plain browser tab. This API is the service layer in front of
+    the pipeline: upload a **PerceptionBundle** or **TUM RGB-D** archive, poll
+    (or stream) the job's status, then open the result in the viewer.
+
+    ## Route groups
+
+    | Group | Paths | Purpose |
+    |---|---|---|
+    | Legacy root | `/`, `/scene.json`, `/eval.json`, `/meshes/{id}.glb`, `/hulls/{stem}.glb`, `/events` | Single-scene mode: the scene dir given to `scripts/serve.py --scene` (or `SOBA_SCENE_DIR`) |
+    | Jobs | `/api/jobs`, `/api/jobs/{job_id}` | Upload, list, poll, delete jobs |
+    | Job-scoped viewer | `/jobs/{job_id}/...` | The same six scene routes for one job's output |
+    | Operations | `/metrics`, `/api/openapi.json`, `/api/docs` | Prometheus scrape, this document, the Redoc page |
+
+    Everything else (`/assets/index-*.js`, `/assets/index-*.css`, ...) is served
+    from the committed `frontend/dist/` by a static mount that runs last; it is
+    not enumerated here.
+
+    ## Authentication
+
+    Two modes, chosen by the `SOBA_API_KEYS` environment variable at startup:
+
+    * **Open mode** (`SOBA_API_KEYS` unset or empty, the default): every route is
+      reachable without credentials. The server logs one warning at startup.
+    * **Keyed mode** (`SOBA_API_KEYS=name:key[,name:key:loadtest]`): every path
+      under `/api/*` and `/jobs/*` requires `Authorization: Bearer <key>`; a
+      missing or wrong key answers `401` with `WWW-Authenticate: Bearer realm="soba"`.
+      The legacy root routes and the static assets stay open unless
+      `SOBA_AUTH_LEGACY=1` closes them too. `/api/openapi.json` and `/api/docs`
+      are deliberately exempt (they contain nothing that is not in the public
+      repository) unless `SOBA_AUTH_LEGACY=1`, which closes everything.
+      A key flagged `loadtest` is exempt from rate limiting.
+
+    **Known limitation.** `/metrics` is outside both protected prefixes and is
+    served without authentication in either mode; put it behind a reverse proxy
+    or a network ACL (see `STATUS.md`). A browser cannot attach a bearer header
+    to a page load, so in keyed mode the viewer under `/jobs/{job_id}/` needs a
+    header-injecting proxy.
+
+    ## Rate limiting
+
+    A general token bucket (`SOBA_RATE_LIMIT_RPS` / `_BURST`, default 100 / 200)
+    applies to every request, keyed by API-key name when a valid bearer key is
+    present, else by client IP (`X-Forwarded-For` only with `SOBA_TRUST_PROXY=1`).
+    `POST /api/jobs` has a second, stricter bucket (`SOBA_RATE_LIMIT_UPLOAD_RPS` /
+    `_BURST`, default 1 / 10). Exceeding either answers `429 rate_limited` with a
+    `Retry-After` header. At most `SOBA_SSE_MAX_PER_IP` (default 8) `/events`
+    streams may be open per client IP; the next one gets `429 too_many_streams`.
+    Buckets are per process.
+
+    ## Error envelope
+
+    Every error under `/api/*`, every `401` / `429` / `501`, and every job-scoped
+    `404` for an unknown job use one JSON envelope:
+
+    ```json
+    {"error": {"code": "unknown_job", "message": "no job '0123456789abcdef'"}}
+    ```
+
+    The legacy scene routes (and their job-scoped mirrors once the job exists)
+    keep their pre-job-API **plain-text** `400` / `404` bodies for byte-for-byte
+    compatibility with the browser viewer and `scripts/verify_browser.js`. Those
+    bodies are sent **without a `Content-Type` header** (documented here as
+    `text/plain`, which is what they are).
+
+    ## Headers on every response
+
+    `Cache-Control: no-store, must-revalidate`, `X-Content-Type-Options: nosniff`,
+    `Content-Security-Policy: frame-ancestors 'none'`, `X-Frame-Options: DENY`,
+    `Referrer-Policy: same-origin`. CORS headers appear only when
+    `SOBA_CORS_ORIGINS` is set.
+
+    ## Job lifecycle
+
+    `queued` -> `running:<stage>` -> `done` | `failed`. `queued -> failed` is also
+    allowed (a job can be failed before a worker picks it up). Terminal states are
+    frozen. Every accepted transition is appended to `history`. Stage names come
+    from the worker: the mock worker reports `validating` and `assembling`; the
+    real pipeline worker reports its own stage names.
+
+  contact:
+    name: Soba maintainers
+    url: https://github.com/mihajlo-sladojevic/soba
+
+servers:
+  - url: http://127.0.0.1:8000
+    description: "`python scripts/serve.py` / `uvicorn server:app` / the api compose service"
+
+tags:
+  - name: jobs
+    description: Upload a capture, poll its job, delete it.
+  - name: scene
+    description: The scene contract and its assets, for the root scene and per job.
+  - name: viewer
+    description: The Three.js + Rapier viewer page (`frontend/dist/index.html`).
+  - name: events
+    description: Server-sent events (`text/event-stream`).
+  - name: ops
+    description: Metrics and this API description.
+
+security:
+  # Open mode needs nothing; keyed mode needs the bearer on /api/* and /jobs/*.
+  # Listing both makes the requirement optional in the OpenAPI sense; the
+  # description of each operation says which prefix it lives under.
+  - {}
+  - bearerAuth: []
+
+paths:
+  # ------------------------------------------------------------------ jobs
+  /api/jobs:
+    post:
+      tags: [jobs]
+      operationId: createJob
+      summary: Upload a PerceptionBundle or TUM archive and queue a job
+      description: |
+        Multipart upload. `archive` is a **zip**, **tar.gz** or plain **tar** of
+        either a PerceptionBundle (`manifest.json` + `intrinsics.json` +
+        `frames/NNNNN/{rgb.jpg, depth.png}`) or a TUM RGB-D sequence (`rgb.txt` +
+        `depth.txt` + `rgb/` + `depth/`), at the archive root or inside a single
+        top-level directory. The format is sniffed from magic bytes, never from
+        the file name or the part's `Content-Type`. MP4 / video is never
+        accepted (maintainer decision: uploads are archives, not video).
+
+        Validation and extraction run synchronously inside the request, so a
+        bad archive is answered with a `4xx` instead of a job that later fails.
+        On success the job is `queued` and the worker picks it up. A TUM
+        sequence is accepted only when the server has an imaging backend
+        (OpenCV / imageio) to convert it; otherwise `422 invalid_upload`
+        explains that a PerceptionBundle archive is needed instead.
+
+        Body cap: `SOBA_MAX_UPLOAD_MB` (default 2048); `Content-Length` above it
+        is refused before the body is read, and a chunked body is cut off as it
+        arrives. Archive caps (`SOBA_MAX_EXTRACTED_MB`, `SOBA_MAX_MEMBER_MB`,
+        `SOBA_MAX_MEMBERS`, `SOBA_MAX_DECOMPRESSION_RATIO`, `SOBA_MAX_FRAMES`,
+        `SOBA_MAX_FRAME_PIXELS`) map onto the `413` / `422` codes below.
+
+        Rate limited by the upload bucket (default 1 rps, burst 10) on top of
+        the general one. Protected in keyed mode.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [archive]
+              properties:
+                archive:
+                  type: string
+                  format: binary
+                  description: The capture archive (zip, tar.gz or tar).
+                tier:
+                  type: integer
+                  enum: [1, 2, 3, 4]
+                  default: 2
+                  description: |
+                    Pipeline tier (`config/pipeline.yaml` `tiers:`). Sent as a
+                    text form field; anything that is not one of 1-4 is
+                    `422 bad_tier`.
+            encoding:
+              archive:
+                contentType: application/zip, application/gzip, application/x-tar, application/octet-stream
+      responses:
+        "202":
+          description: Job accepted and queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+              examples:
+                queued:
+                  $ref: "#/components/examples/JobQueued"
+        "400":
+          $ref: "#/components/responses/UploadRejected400"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/UploadRejected413"
+        "415":
+          $ref: "#/components/responses/UploadRejected415"
+        "422":
+          $ref: "#/components/responses/UploadRejected422"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/MultipartUnavailable"
+    get:
+      tags: [jobs]
+      operationId: listJobs
+      summary: List every job, newest first
+      description: Protected in keyed mode.
+      responses:
+        "200":
+          description: All jobs in the store, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/jobs/{job_id}:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+    get:
+      tags: [jobs]
+      operationId: getJob
+      summary: Poll one job
+      description: |
+        `status` is `queued`, `running:<stage>`, `done` or `failed`; `history`
+        holds every accepted transition so a slow poller still sees the whole
+        path. When `status` is `done`, open `scene_url` (`/jobs/{job_id}/`) in a
+        browser or fetch `/jobs/{job_id}/scene.json`. Protected in keyed mode.
+      responses:
+        "200":
+          description: The job record.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+              examples:
+                running:
+                  $ref: "#/components/examples/JobRunning"
+                done:
+                  $ref: "#/components/examples/JobDone"
+                failed:
+                  $ref: "#/components/examples/JobFailed"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/UnknownJob"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    delete:
+      tags: [jobs]
+      operationId: deleteJob
+      summary: Delete a job and everything on disk under it
+      description: |
+        Removes the record and the whole job directory (upload, extracted
+        bundle, scene output). A job that is still queued is skipped by the
+        worker when it reaches it. There is no other retention policy yet.
+        Protected in keyed mode.
+      responses:
+        "204":
+          description: Deleted. No body.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/UnknownJob"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # ------------------------------------------------------------------ ops
+  /metrics:
+    get:
+      tags: [ops]
+      operationId: getMetrics
+      summary: Prometheus scrape endpoint
+      security: []
+      description: |
+        Prometheus text exposition format, served by `prometheus_client`
+        (the optional `telemetry` extra). Without it the route answers
+        `501 metrics_unavailable`. Counters: `soba_http_requests_total`,
+        `soba_http_request_duration_seconds`, `soba_jobs{state}`,
+        `soba_job_runs_total`, `soba_gate_decisions_total`, `soba_gate_routed_total`,
+        `soba_pipeline_stage_seconds_total`, `soba_pipeline_stage_runs_total`,
+        `soba_pipeline_drops_total`, `soba_remote_*`, `soba_run_metrics_ingest_errors_total`.
+
+        **Not protected in either auth mode** (known limitation, `STATUS.md`).
+        Rate limited like everything else.
+      responses:
+        "200":
+          description: |
+            Prometheus text format. The `Content-Type` carries a `version`
+            parameter set by `prometheus_client`: `text/plain; version=0.0.4;
+            charset=utf-8` on releases before 0.21, `text/plain; version=1.0.0;
+            charset=utf-8` from 0.21 on. Prometheus accepts both.
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: |
+                # HELP soba_http_requests_total HTTP requests
+                # TYPE soba_http_requests_total counter
+                soba_http_requests_total{method="GET",route="/api/jobs",status="200"} 3.0
+                # HELP soba_jobs Jobs by state, from the JobStore at scrape time
+                # TYPE soba_jobs gauge
+                soba_jobs{state="queued"} 0.0
+                soba_jobs{state="done"} 1.0
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "501":
+          $ref: "#/components/responses/MetricsUnavailable"
+
+  /api/openapi.json:
+    get:
+      tags: [ops]
+      operationId: getOpenApi
+      summary: This document as JSON
+      security: []
+      description: |
+        `spec/openapi.yaml` loaded once at first request and served as JSON.
+        Open in keyed mode (closed only by `SOBA_AUTH_LEGACY=1`).
+      responses:
+        "200":
+          description: The OpenAPI 3.1 document.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [openapi, info, paths]
+                properties:
+                  openapi:
+                    type: string
+                    pattern: "^3\\.1\\."
+                  info:
+                    type: object
+                  paths:
+                    type: object
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/docs:
+    get:
+      tags: [ops]
+      operationId: getDocs
+      summary: Interactive API reference (Redoc)
+      security: []
+      description: |
+        A static HTML page that renders `/api/openapi.json` with Redoc. The
+        Redoc bundle is loaded from `cdn.jsdelivr.net` **at view time**, so the
+        page needs network access in the browser that opens it; the JSON
+        document itself is served locally and the page says where to find it
+        when the script cannot load. Open in keyed mode (closed only by
+        `SOBA_AUTH_LEGACY=1`).
+      responses:
+        "200":
+          description: The Redoc page.
+          content:
+            text/html:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # ------------------------------------------------------------------ legacy root scene
+  /:
+    get:
+      tags: [viewer]
+      operationId: getViewer
+      summary: The viewer page for the root scene
+      description: |
+        `frontend/dist/index.html`. The page then fetches `/scene.json`, the
+        meshes and hulls it lists, `/eval.json` and subscribes to `/events`.
+        Open unless `SOBA_AUTH_LEGACY=1`.
+      responses:
+        "200":
+          $ref: "#/components/responses/ViewerPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/FrontendMissing"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /scene.json:
+    get:
+      tags: [scene]
+      operationId: getScene
+      summary: The root scene contract
+      description: |
+        `scene.json` from the root scene dir. Partial-safe: before the scene
+        exists the route answers `200` with an empty scene (`{"version":
+        "2.0", "objects": []}`) so the viewer can start and wait on `/events`.
+        Open unless `SOBA_AUTH_LEGACY=1`.
+      responses:
+        "200":
+          $ref: "#/components/responses/SceneBody"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /eval.json:
+    get:
+      tags: [scene]
+      operationId: getEval
+      summary: The evaluation report for the root scene
+      description: |
+        `scripts/evaluate_scene.py` output when it exists, else `200
+        {"available": false}` (a `404` would show up as a console error in the
+        headless browser check). Open unless `SOBA_AUTH_LEGACY=1`.
+      responses:
+        "200":
+          $ref: "#/components/responses/EvalBody"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /meshes/{id}.glb:
+    parameters:
+      - $ref: "#/components/parameters/ObjectId"
+    get:
+      tags: [scene]
+      operationId: getMesh
+      summary: One object's visual mesh (glTF binary)
+      description: |
+        Serves `<scene>/objects/{id}/mesh.glb`. The id must match
+        `^[a-z0-9_]+$` (no dots, no slashes); the resolved file must live under
+        the scene dir (symlinks out are refused). Open unless `SOBA_AUTH_LEGACY=1`.
+      responses:
+        "200":
+          $ref: "#/components/responses/GlbFile"
+        "400":
+          $ref: "#/components/responses/BadObjectId"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/AssetNotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /hulls/{stem}.glb:
+    parameters:
+      - $ref: "#/components/parameters/HullStem"
+    get:
+      tags: [scene]
+      operationId: getHull
+      summary: One convex hull piece (glTF binary)
+      description: |
+        Serves `<scene>/objects/{id}/hulls/{id}_{i}.glb` where `stem` is
+        `{id}_{i}` (the hull index is the last `_N` segment). Open unless
+        `SOBA_AUTH_LEGACY=1`.
+      responses:
+        "200":
+          $ref: "#/components/responses/GlbFile"
+        "400":
+          $ref: "#/components/responses/BadHullName"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/AssetNotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /events:
+    get:
+      tags: [events]
+      operationId: getEvents
+      summary: Server-sent events for the root scene
+      description: |
+        `text/event-stream`. Replays one `object_added` per object already in
+        `scene.json` (spaced by `SOBA_SSE_DELAY`, default 0.4 s), then holds the
+        connection with a `heartbeat` every 15 s until the client disconnects.
+        No `job_status` events on the root stream. Capped at `SOBA_SSE_MAX_PER_IP`
+        open streams per client IP. Open unless `SOBA_AUTH_LEGACY=1`.
+      responses:
+        "200":
+          $ref: "#/components/responses/SceneEventStream"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyStreamsOrRateLimited"
+
+  # ------------------------------------------------------------------ job-scoped scene
+  /jobs/{job_id}:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+    get:
+      tags: [viewer]
+      operationId: redirectJobViewer
+      summary: Redirect to the job's viewer
+      description: |
+        `307` to `/jobs/{job_id}/` (with the trailing slash, so the viewer's
+        relative asset URLs resolve). The static catch-all mount would swallow
+        the slash-less URL otherwise. Protected in keyed mode.
+      responses:
+        "307":
+          description: Redirect to the slash-terminated viewer URL.
+          headers:
+            Location:
+              schema:
+                type: string
+                pattern: "^/jobs/[0-9a-f]{16}/$"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/UnknownJob"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /jobs/{job_id}/:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+    get:
+      tags: [viewer]
+      operationId: getJobViewer
+      summary: The viewer page for one job
+      description: |
+        Same page as `/`; the frontend derives its base path from the URL and
+        fetches `/jobs/{job_id}/scene.json` and friends. Loads while the job is
+        still running and fills in as `/jobs/{job_id}/events` reports objects.
+        Protected in keyed mode (a browser cannot send the bearer header, see
+        the authentication notes).
+      responses:
+        "200":
+          $ref: "#/components/responses/ViewerPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/UnknownJobOrFrontendMissing"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /jobs/{job_id}/scene.json:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+    get:
+      tags: [scene]
+      operationId: getJobScene
+      summary: The job's scene contract
+      description: |
+        `<jobs_dir>/{job_id}/scene/scene.json`. Before the worker has written
+        it the route answers `200` with an empty scene. Protected in keyed mode.
+      responses:
+        "200":
+          $ref: "#/components/responses/SceneBody"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/UnknownJob"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /jobs/{job_id}/eval.json:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+    get:
+      tags: [scene]
+      operationId: getJobEval
+      summary: The job's evaluation report
+      description: |
+        Jobs run with `--no-eval`, so this is `{"available": false}` unless a
+        report was written next to the scene by hand. Protected in keyed mode.
+      responses:
+        "200":
+          $ref: "#/components/responses/EvalBody"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/UnknownJob"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /jobs/{job_id}/meshes/{id}.glb:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+      - $ref: "#/components/parameters/ObjectId"
+    get:
+      tags: [scene]
+      operationId: getJobMesh
+      summary: One object's visual mesh for a job
+      description: As `/meshes/{id}.glb`, under the job's scene dir. Protected in keyed mode.
+      responses:
+        "200":
+          $ref: "#/components/responses/GlbFile"
+        "400":
+          $ref: "#/components/responses/BadObjectId"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/UnknownJobOrAssetNotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /jobs/{job_id}/hulls/{stem}.glb:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+      - $ref: "#/components/parameters/HullStem"
+    get:
+      tags: [scene]
+      operationId: getJobHull
+      summary: One convex hull piece for a job
+      description: As `/hulls/{stem}.glb`, under the job's scene dir. Protected in keyed mode.
+      responses:
+        "200":
+          $ref: "#/components/responses/GlbFile"
+        "400":
+          $ref: "#/components/responses/BadHullName"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/UnknownJobOrAssetNotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /jobs/{job_id}/events:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+    get:
+      tags: [events]
+      operationId: getJobEvents
+      summary: Server-sent events for one job
+      description: |
+        `text/event-stream`. Replays `object_added` for every object already in
+        the job's `scene.json`, then **follows the job**: a `job_status` event on
+        every status change (the current status is sent first) and an
+        `object_added` for each object the worker writes, polled every 0.5 s,
+        until the job is terminal (`done` / `failed`). After that, `heartbeat`
+        every 15 s until the client disconnects. Capped at `SOBA_SSE_MAX_PER_IP`
+        streams per client IP. Protected in keyed mode.
+      responses:
+        "200":
+          $ref: "#/components/responses/JobEventStream"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/UnknownJob"
+        "429":
+          $ref: "#/components/responses/TooManyStreamsOrRateLimited"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        `Authorization: Bearer <key>`, where `<key>` is the secret half of one
+        `name:key[:loadtest]` entry in `SOBA_API_KEYS`. Only enforced (on
+        `/api/*` and `/jobs/*`) when that variable is set; the key's `name` is
+        the caller's identity in logs and rate-limit buckets. Comparison is
+        constant-time over the whole key list.
+
+  parameters:
+    JobId:
+      name: job_id
+      in: path
+      required: true
+      description: 16 lowercase hex characters, as returned by `POST /api/jobs`.
+      schema:
+        type: string
+        pattern: "^[0-9a-f]{16}$"
+      example: 3f9c2a7b81d04e5c
+    ObjectId:
+      name: id
+      in: path
+      required: true
+      description: |
+        `objects[].id` from `scene.json` (`slug(class)_NN`, e.g. `dining_table_01`).
+        Anything outside `^[a-z0-9_]+$` is `400`.
+      schema:
+        type: string
+        pattern: "^[a-z0-9_]+$"
+      example: dining_table_01
+    HullStem:
+      name: stem
+      in: path
+      required: true
+      description: "`{id}_{i}`: the object id followed by the hull index, e.g. `dining_table_01_3`."
+      schema:
+        type: string
+        pattern: "^[a-z0-9_]+_[0-9]+$"
+      example: dining_table_01_3
+
+  schemas:
+    ErrorEnvelope:
+      type: object
+      description: The one error shape used under `/api`, for `401` / `429` / `501` and for unknown-job `404`s.
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          additionalProperties: false
+          properties:
+            code:
+              type: string
+              description: Stable machine-readable code (see `ErrorCode`).
+            message:
+              type: string
+              description: Human-readable detail; never echoes key material.
+      example:
+        error:
+          code: unknown_job
+          message: "no job '0123456789abcdef'"
+
+    ErrorCode:
+      type: string
+      description: |
+        Every `error.code` the API can return, by status.
+
+        | Status | Code | When |
+        |---|---|---|
+        | 400 | `missing_archive` | multipart body without an `archive` file part |
+        | 400 | `bad_multipart` | body is not parseable multipart |
+        | 401 | `unauthorized` | keyed mode, bearer missing or wrong (`WWW-Authenticate: Bearer realm="soba"`) |
+        | 404 | `unknown_job` | `job_id` malformed or not in the store |
+        | 413 | `upload_too_large` | body over `SOBA_MAX_UPLOAD_MB`, archive expands past `SOBA_MAX_EXTRACTED_MB`, or more than `SOBA_MAX_MEMBERS` members |
+        | 413 | `member_too_large` | one archive member over `SOBA_MAX_MEMBER_MB` |
+        | 415 | `unsupported_archive` | not zip / tar.gz / tar by magic bytes (MP4 lands here) |
+        | 422 | `bad_tier` | `tier` not one of 1-4 |
+        | 422 | `invalid_upload` | zip-slip / absolute path, link or special member, corrupt archive, no bundle or TUM layout, TUM without an imaging backend, bundle without frames |
+        | 422 | `decompression_ratio` | inflates more than `SOBA_MAX_DECOMPRESSION_RATIO` (per member above 1 MiB, or in total) |
+        | 422 | `nested_archive` | an archive inside the archive |
+        | 422 | `bad_manifest` | `manifest.json` rejected by `Manifest.from_dict` (or fps <= 0) |
+        | 422 | `too_many_frames` | `frame_count`, frame dirs or TUM list lines over `SOBA_MAX_FRAMES` |
+        | 422 | `bad_depth_dtype` | a sampled `depth.png` is missing or not a 16-bit greyscale PNG |
+        | 422 | `frame_too_large` | a sampled `depth.png` exceeds `SOBA_MAX_FRAME_PIXELS` |
+        | 429 | `rate_limited` | general or upload token bucket empty (`Retry-After`) |
+        | 429 | `too_many_streams` | more than `SOBA_SSE_MAX_PER_IP` open `/events` streams from one IP (`Retry-After: 5`) |
+        | 500 | `multipart_unavailable` | `python-multipart` is not installed on the server |
+        | 501 | `metrics_unavailable` | `prometheus_client` is not installed on the server |
+      enum:
+        - missing_archive
+        - bad_multipart
+        - unauthorized
+        - unknown_job
+        - upload_too_large
+        - member_too_large
+        - unsupported_archive
+        - bad_tier
+        - invalid_upload
+        - decompression_ratio
+        - nested_archive
+        - bad_manifest
+        - too_many_frames
+        - bad_depth_dtype
+        - frame_too_large
+        - rate_limited
+        - too_many_streams
+        - multipart_unavailable
+        - metrics_unavailable
+
+    JobState:
+      type: string
+      description: The state-machine state (without the stage).
+      enum: [queued, running, done, failed]
+
+    JobStatus:
+      type: string
+      description: |
+        `state`, plus `:<stage>` while running: `queued`, `running:<stage>`
+        (`running` alone if the worker set no stage), `done`, `failed`.
+      pattern: "^(queued|running(:[^\\s]+)?|done|failed)$"
+      examples: [queued, "running:validating", "running:assembling", done, failed]
+
+    JobHistoryEntry:
+      type: object
+      required: [status, at]
+      additionalProperties: false
+      properties:
+        status:
+          $ref: "#/components/schemas/JobStatus"
+        at:
+          type: number
+          description: Unix time (seconds, float) of the transition.
+
+    Job:
+      type: object
+      description: One job record (`api.jobs.store.JobRecord.to_dict()`).
+      required:
+        - id
+        - tier
+        - source_format
+        - state
+        - stage
+        - error
+        - upload_name
+        - bundle_dir
+        - created_at
+        - updated_at
+        - history
+        - status
+        - scene_url
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          pattern: "^[0-9a-f]{16}$"
+        tier:
+          type: integer
+          enum: [1, 2, 3, 4]
+        source_format:
+          type: string
+          enum: [bundle, tum]
+          description: What the archive contained.
+        state:
+          $ref: "#/components/schemas/JobState"
+        stage:
+          type: [string, "null"]
+          description: Worker stage while `state` is `running`; `null` otherwise.
+        error:
+          type: [string, "null"]
+          description: Failure reason when `state` is `failed`; `null` otherwise.
+        upload_name:
+          type: [string, "null"]
+          description: The client's file name for the `archive` part.
+        bundle_dir:
+          type: [string, "null"]
+          description: Server-side path of the extracted bundle / TUM root (informational).
+        created_at:
+          type: number
+          description: Unix time (seconds, float).
+        updated_at:
+          type: number
+          description: Unix time (seconds, float) of the last accepted transition.
+        history:
+          type: array
+          description: Every accepted transition, oldest first; the first entry is `queued`.
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/JobHistoryEntry"
+        status:
+          $ref: "#/components/schemas/JobStatus"
+        scene_url:
+          type: string
+          pattern: "^/jobs/[0-9a-f]{16}/$"
+          description: Where the viewer for this job lives once it is `done`.
+
+    JobList:
+      type: object
+      required: [jobs]
+      additionalProperties: false
+      properties:
+        jobs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Job"
+
+    Scene:
+      description: |
+        The frozen `scene.json` v2.0 contract, `spec/scene.schema.json`
+        (`docs/scene-spec.md` is its prose). Referenced, never copied.
+      $ref: "./scene.schema.json"
+
+    EmptyScene:
+      type: object
+      description: |
+        The partial-safe answer before a scene exists on disk. **Known
+        defect** (`STATUS.md`): this body omits `world`, `ground` and
+        `camera_pose` and so does not satisfy the frozen schema; the viewer
+        tolerates it. The mock worker, by contrast, writes a schema-valid
+        empty scene.
+      required: [version, objects]
+      additionalProperties: false
+      properties:
+        version:
+          type: string
+          const: "2.0"
+        objects:
+          type: array
+          maxItems: 0
+
+    EvalReport:
+      type: object
+      description: |
+        `scripts/evaluate_scene.py` output as written; only the marker keys
+        are fixed here. `BENCHMARK.md` §3 tables are generated from these files.
+      required: [schema]
+      properties:
+        schema:
+          type: integer
+        room:
+          type: string
+        score:
+          type: object
+
+    EvalUnavailable:
+      type: object
+      required: [available]
+      additionalProperties: false
+      properties:
+        available:
+          type: boolean
+          const: false
+
+    SseObjectAdded:
+      type: object
+      description: "`event: object_added` payload."
+      required: [id]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          description: "`objects[].id` of the object now present in `scene.json`."
+
+    SseJobStatus:
+      type: object
+      description: "`event: job_status` payload (job streams only)."
+      required: [status, state, stage, error]
+      additionalProperties: false
+      properties:
+        status:
+          $ref: "#/components/schemas/JobStatus"
+        state:
+          $ref: "#/components/schemas/JobState"
+        stage:
+          type: [string, "null"]
+        error:
+          type: [string, "null"]
+
+    SseHeartbeat:
+      type: object
+      description: "`event: heartbeat` payload: always `{}`."
+      additionalProperties: false
+      maxProperties: 0
+
+  responses:
+    Unauthorized:
+      description: |
+        Keyed mode only: no `Authorization: Bearer` header, or a key that
+        matches nothing in `SOBA_API_KEYS`. `WWW-Authenticate` is
+        `Bearer realm="soba"` (plus `, error="invalid_token"` when a token was
+        sent).
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+            pattern: '^Bearer realm="soba"'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ErrorEnvelope"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [unauthorized]
+          example:
+            error:
+              code: unauthorized
+              message: "missing Authorization: Bearer <key> header"
+
+    RateLimited:
+      description: Token bucket empty. `Retry-After` is whole seconds.
+      headers:
+        Retry-After:
+          schema:
+            type: string
+            pattern: "^[0-9]+$"
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ErrorEnvelope"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [rate_limited]
+          example:
+            error:
+              code: rate_limited
+              message: "rate limit exceeded; retry in 1 s"
+
+    TooManyStreamsOrRateLimited:
+      description: |
+        Either the general token bucket is empty (`rate_limited`) or this
+        client IP already has `SOBA_SSE_MAX_PER_IP` `/events` streams open
+        (`too_many_streams`, `Retry-After: 5`).
+      headers:
+        Retry-After:
+          schema:
+            type: string
+            pattern: "^[0-9]+$"
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ErrorEnvelope"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [rate_limited, too_many_streams]
+
+    UnknownJob:
+      description: "`job_id` is malformed or not in the store (also after `DELETE`)."
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ErrorEnvelope"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [unknown_job]
+          example:
+            error:
+              code: unknown_job
+              message: "no job '0123456789abcdef'"
+
+    UnknownJobOrFrontendMissing:
+      description: |
+        JSON envelope `unknown_job` for an unknown job; plain text
+        `frontend not built (frontend/index.html missing)` (no `Content-Type`
+        header) when the job exists but the viewer bundle is not on disk.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ErrorEnvelope"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [unknown_job]
+        text/plain:
+          schema:
+            type: string
+
+    UnknownJobOrAssetNotFound:
+      description: |
+        JSON envelope `unknown_job` for an unknown job; plain text
+        `mesh not found` / `hull not found` (no `Content-Type` header) when the
+        job exists but the file does not (or resolves outside the scene dir).
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ErrorEnvelope"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [unknown_job]
+        text/plain:
+          schema:
+            type: string
+
+    UploadRejected400:
+      description: No `archive` part, or the body is not multipart.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ErrorEnvelope"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [missing_archive, bad_multipart]
+          example:
+            error:
+              code: missing_archive
+              message: "multipart field 'archive' (a zip/tar.gz file) is required"
+
+    UploadRejected413:
+      description: Body, total extracted size, member count or one member over its cap.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ErrorEnvelope"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [upload_too_large, member_too_large]
+          example:
+            error:
+              code: upload_too_large
+              message: "upload exceeds 2048 MiB"
+
+    UploadRejected415:
+      description: Not a zip, tar.gz or tar archive (by magic bytes). Video files land here.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ErrorEnvelope"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [unsupported_archive]
+          example:
+            error:
+              code: unsupported_archive
+              message: "upload must be a zip, tar.gz or tar archive of a PerceptionBundle or a TUM RGB-D sequence (MP4/video is not accepted)"
+
+    UploadRejected422:
+      description: The archive was readable but its tier, layout or contents were rejected.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ErrorEnvelope"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum:
+                          - bad_tier
+                          - invalid_upload
+                          - decompression_ratio
+                          - nested_archive
+                          - bad_manifest
+                          - too_many_frames
+                          - bad_depth_dtype
+                          - frame_too_large
+          example:
+            error:
+              code: invalid_upload
+              message: "archive is neither a PerceptionBundle (manifest.json + intrinsics.json + frames/) nor a TUM sequence (rgb.txt + depth.txt), at the root or in a single top-level directory"
+
+    MultipartUnavailable:
+      description: The server was installed without the `api` extra (`python-multipart`).
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ErrorEnvelope"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [multipart_unavailable]
+
+    MetricsUnavailable:
+      description: The server was installed without the `telemetry` extra (`prometheus_client`).
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ErrorEnvelope"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [metrics_unavailable]
+          example:
+            error:
+              code: metrics_unavailable
+              message: "prometheus_client is not installed: pip install -e '.[telemetry]' to enable GET /metrics"
+
+    ViewerPage:
+      description: "`frontend/dist/index.html`."
+      content:
+        text/html:
+          schema:
+            type: string
+
+    FrontendMissing:
+      description: Plain text `frontend not built (frontend/index.html missing)`, no `Content-Type` header.
+      content:
+        text/plain:
+          schema:
+            type: string
+
+    SceneBody:
+      description: The scene contract, or the partial-safe empty scene before one exists.
+      content:
+        application/json:
+          schema:
+            anyOf:
+              - $ref: "#/components/schemas/Scene"
+              - $ref: "#/components/schemas/EmptyScene"
+
+    EvalBody:
+      description: The evaluation report, or the availability marker.
+      content:
+        application/json:
+          schema:
+            anyOf:
+              - $ref: "#/components/schemas/EvalReport"
+              - $ref: "#/components/schemas/EvalUnavailable"
+
+    GlbFile:
+      description: A glTF 2.0 binary file, served with no-store caching.
+      content:
+        model/gltf-binary:
+          schema:
+            type: string
+            format: binary
+
+    BadObjectId:
+      description: Plain text `bad object id` (the id does not match `^[a-z0-9_]+$`), no `Content-Type` header.
+      content:
+        text/plain:
+          schema:
+            type: string
+
+    BadHullName:
+      description: Plain text `bad hull name` (the stem does not match `^[a-z0-9_]+_[0-9]+$`), no `Content-Type` header.
+      content:
+        text/plain:
+          schema:
+            type: string
+
+    AssetNotFound:
+      description: Plain text `mesh not found` / `hull not found`, no `Content-Type` header.
+      content:
+        text/plain:
+          schema:
+            type: string
+
+    SceneEventStream:
+      description: |
+        Server-sent events (`sse-starlette`). Each message is
+        `event: <name>` + `data: <json>`. Events on this stream:
+
+        | event | data | when |
+        |---|---|---|
+        | `object_added` | `SseObjectAdded` | one per object in `scene.json`, replayed on connect |
+        | `heartbeat` | `SseHeartbeat` (`{}`) | every 15 s while the client stays connected |
+      content:
+        text/event-stream:
+          schema:
+            type: string
+            description: One of `SseObjectAdded`, `SseHeartbeat` per message, as SSE text.
+          example: |
+            event: object_added
+            data: {"id": "dining_table_01"}
+
+            event: heartbeat
+            data: {}
+
+    JobEventStream:
+      description: |
+        Server-sent events for one job. Events on this stream:
+
+        | event | data | when |
+        |---|---|---|
+        | `object_added` | `SseObjectAdded` | replayed on connect, then as the worker writes each object |
+        | `job_status` | `SseJobStatus` | the current status on connect, then on every change, until the job is terminal |
+        | `heartbeat` | `SseHeartbeat` (`{}`) | every 15 s once the job is terminal, while the client stays connected |
+      content:
+        text/event-stream:
+          schema:
+            type: string
+            description: One of `SseObjectAdded`, `SseJobStatus`, `SseHeartbeat` per message, as SSE text.
+          example: |
+            event: job_status
+            data: {"status": "running:assembling", "state": "running", "stage": "assembling", "error": null}
+
+            event: object_added
+            data: {"id": "dining_table_01"}
+
+            event: job_status
+            data: {"status": "done", "state": "done", "stage": null, "error": null}
+
+            event: heartbeat
+            data: {}
+
+  examples:
+    JobQueued:
+      summary: Fresh upload
+      value:
+        id: 3f9c2a7b81d04e5c
+        tier: 2
+        source_format: bundle
+        state: queued
+        stage: null
+        error: null
+        upload_name: office_3.zip
+        bundle_dir: /srv/soba/out/jobs/3f9c2a7b81d04e5c/extracted
+        created_at: 1789200000.12
+        updated_at: 1789200000.12
+        history:
+          - status: queued
+            at: 1789200000.12
+        status: queued
+        scene_url: /jobs/3f9c2a7b81d04e5c/
+    JobRunning:
+      summary: Worker mid-way
+      value:
+        id: 3f9c2a7b81d04e5c
+        tier: 2
+        source_format: bundle
+        state: running
+        stage: assembling
+        error: null
+        upload_name: office_3.zip
+        bundle_dir: /srv/soba/out/jobs/3f9c2a7b81d04e5c/extracted
+        created_at: 1789200000.12
+        updated_at: 1789200004.5
+        history:
+          - status: queued
+            at: 1789200000.12
+          - status: "running:validating"
+            at: 1789200001.0
+          - status: "running:assembling"
+            at: 1789200004.5
+        status: "running:assembling"
+        scene_url: /jobs/3f9c2a7b81d04e5c/
+    JobDone:
+      summary: Finished; open scene_url
+      value:
+        id: 3f9c2a7b81d04e5c
+        tier: 2
+        source_format: bundle
+        state: done
+        stage: null
+        error: null
+        upload_name: office_3.zip
+        bundle_dir: /srv/soba/out/jobs/3f9c2a7b81d04e5c/extracted
+        created_at: 1789200000.12
+        updated_at: 1789200310.7
+        history:
+          - status: queued
+            at: 1789200000.12
+          - status: "running:validating"
+            at: 1789200001.0
+          - status: "running:assembling"
+            at: 1789200004.5
+          - status: done
+            at: 1789200310.7
+        status: done
+        scene_url: /jobs/3f9c2a7b81d04e5c/
+    JobFailed:
+      summary: Pipeline error
+      value:
+        id: 3f9c2a7b81d04e5c
+        tier: 2
+        source_format: bundle
+        state: failed
+        stage: null
+        error: "run_assemble.py exited 3: no GPU here"
+        upload_name: office_3.zip
+        bundle_dir: /srv/soba/out/jobs/3f9c2a7b81d04e5c/extracted
+        created_at: 1789200000.12
+        updated_at: 1789200020.0
+        history:
+          - status: queued
+            at: 1789200000.12
+          - status: "running:validating"
+            at: 1789200001.0
+          - status: failed
+            at: 1789200020.0
+        status: failed
+        scene_url: /jobs/3f9c2a7b81d04e5c/

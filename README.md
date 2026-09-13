@@ -109,4 +109,5 @@ Without a GPU, tier 1–2 completion falls back to geometric repair and generati
 
 - [BENCHMARK.md](BENCHMARK.md) — TUM / Replica / YCB / ABO results, per stage and per tier
 - [Scene spec](docs/scene-spec.md) — the `scene.json` v2.0 contract
+- [API](docs/api.md) — the job API: auth, upload contract, job lifecycle, SSE, errors; OpenAPI at `spec/openapi.yaml`, served at `/api/openapi.json` and rendered at `/api/docs`
 - [STATUS.md](STATUS.md) — running engineering log
