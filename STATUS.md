@@ -62,6 +62,10 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   501 without it): request count/latency by route, job-state gauges, and gate / stage /
   drop / RunPod counters ingested from each finished job's `run_metrics.json`; every
   request and job-state transition is logged with the job id.
+- **API docs (2026-09-13, `feat/api-docs`).** `spec/openapi.yaml` (OpenAPI 3.1, scene body `$ref`s
+  the frozen schema) is served at `GET /api/openapi.json` and rendered at `GET /api/docs` (Redoc,
+  loads its bundle from a CDN in the browser); `tests/api/test_openapi.py` fails when a route and
+  the spec disagree. Prose in `docs/api.md`.
 - **Never built or never run.** A real-sensor scene end to end (TUM through detector,
   SAM2, MASt3R, assembly); live OAK capture; a phone-capture reader; the ScanNet
   reader (stub); a Phase-12 CLI (`scripts/run_assemble.py` is the driver).
