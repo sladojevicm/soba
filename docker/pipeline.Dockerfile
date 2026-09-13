@@ -12,9 +12,8 @@
 #
 # Two entrypoints (docker/pipeline-entrypoint.sh):
 #   worker      python -m orchestration.worker          (default)
-#               The queue consumer from feat/runpod-orchestration
-#               (src/orchestration/worker.py). Until that lands the entrypoint
-#               reports the missing module and exits 3.
+#               The Redis queue consumer (src/orchestration/worker.py); needs
+#               SOBA_QUEUE_URL=redis://... and exits 2 without it.
 #   serverless  python deploy/runpod/generative_handler.py
 #               RunPod serverless worker for the generative + completion bands
 #               (needs the `runpod` SDK, installed below, and the TripoSG /

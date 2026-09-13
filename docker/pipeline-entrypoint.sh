@@ -2,7 +2,7 @@
 # Entrypoint of docker/pipeline.Dockerfile. First argument selects the mode;
 # everything after it is passed through.
 #
-#   worker      python -m orchestration.worker        (default; feat/runpod-orchestration)
+#   worker      python -m orchestration.worker        (default; needs SOBA_QUEUE_URL=redis://...)
 #   serverless  python deploy/runpod/generative_handler.py   (RunPod serverless)
 #   assemble    python scripts/run_assemble.py "$@"   (one-shot pipeline run)
 #   serve       python scripts/serve.py "$@"          (scene server on :8000)
@@ -19,7 +19,6 @@ case "$mode" in
   worker)
     if ! python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('orchestration.worker') else 1)"; then
       echo "pipeline-entrypoint: src/orchestration/worker.py is not in this build." >&2
-      echo "  It lands with feat/runpod-orchestration (.claude/AGENTS.md agent 3)." >&2
       echo "  Other modes: serverless | assemble <args> | serve <args> | check | shell" >&2
       exit 3
     fi

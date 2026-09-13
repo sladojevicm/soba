@@ -30,10 +30,12 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq libgl1 libglib2.0-0
-      - name: Install soba [recon,serve,dev] (+ anthropic for the VLM backend test)
+      - name: Install soba with every extra (+ anthropic for the VLM backend test)
+        # api (job API), telemetry (/metrics), worker (Redis queue) are optional
+        # at runtime but their tests import them, so CI installs all of them.
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[recon,serve,dev]" anthropic
+          pip install -e ".[recon,serve,dev,api,telemetry,worker]" anthropic
           python -c "import open3d; print('open3d', open3d.__version__)"
       - name: ruff (E9 + F)
         run: ruff check .
@@ -118,11 +120,16 @@ jobs:
           load: true
           cache-from: type=gha,scope=pipeline
           cache-to: type=gha,scope=pipeline,mode=max
-      - name: Smoke — entrypoint modes (no GPU; the worker module is expected to be absent until feat/runpod-orchestration)
+      - name: Smoke — entrypoint modes (no GPU, no Redis)
         run: |
-          docker run --rm soba-pipeline:ci python -c "import open3d, cv2, trimesh, coacd, runpod, torch; print('open3d', open3d.__version__, '| torch', torch.__version__)"
-          set +e; docker run --rm soba-pipeline:ci worker; rc=$?; set -e
-          echo "worker mode exit=$rc (3 = orchestration.worker not present yet)"; [ "$rc" = 3 ]
+          docker run --rm soba-pipeline:ci python -c "import open3d, cv2, trimesh, coacd, runpod, torch, redis; print('open3d', open3d.__version__, '| torch', torch.__version__)"
+          # worker mode: the module is present and parses its CLI ...
+          docker run --rm soba-pipeline:ci worker --help | grep -q -- '--queue-url'
+          # ... and without SOBA_QUEUE_URL it must refuse to start, fast and non-zero.
+          set +e; out=$(docker run --rm soba-pipeline:ci worker --once 2>&1); rc=$?; set -e
+          echo "worker (no queue) exit=$rc"; echo "$out" | tail -3
+          [ "$rc" != 0 ] && echo "$out" | grep -q 'no queue'
+          docker run --rm soba-pipeline:ci python -c "import telemetry, api.app, orchestration.worker; print('api/telemetry/orchestration import OK')"
           docker run --rm soba-pipeline:ci python -c "import generative_handler" || true
           docker run --rm soba-pipeline:ci shell -c 'python scripts/run_assemble.py --help | head -3'
           df -h / | tail -1
