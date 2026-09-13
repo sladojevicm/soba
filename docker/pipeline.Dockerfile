@@ -4,7 +4,7 @@
 # observed cloud, TSDF (Open3D CUDA tensor backend), the confidence gate,
 # completion / generation adapters, scene assembly — plus the scene server.
 # Mirrors deploy/runpod/bootstrap.sh: a CUDA torch base, apt git + libgl1 +
-# libglib2.0-0, `pip install -e ".[recon,serve,dev]"`, an Open3D CUDA tensor
+# libglib2.0-0, `pip install -e ".[recon,serve,dev,api,telemetry,worker]"`, an Open3D CUDA tensor
 # check. Weights are NOT baked in (see "Model pins" below).
 #
 # Build (from the repo root; needs a lot of disk — the base is ~7 GB):
@@ -12,9 +12,8 @@
 #
 # Two entrypoints (docker/pipeline-entrypoint.sh):
 #   worker      python -m orchestration.worker          (default)
-#               The queue consumer from feat/runpod-orchestration
-#               (src/orchestration/worker.py). Until that lands the entrypoint
-#               reports the missing module and exits 3.
+#               The Redis queue consumer (src/orchestration/worker.py); needs
+#               SOBA_QUEUE_URL=redis://... and exits 2 without it.
 #   serverless  python deploy/runpod/generative_handler.py
 #               RunPod serverless worker for the generative + completion bands
 #               (needs the `runpod` SDK, installed below, and the TripoSG /
@@ -90,7 +89,7 @@ COPY src/ ./src/
 # the same — "we do NOT touch torch"). Versions come from pyproject.toml's
 # lower bounds; docs/model-pins.md records what actually produced the numbers.
 # hadolint ignore=DL3013
-RUN pip install -e ".[recon,serve,dev]" coacd runpod
+RUN pip install -e ".[recon,serve,dev,api,telemetry,worker]" coacd runpod
 
 COPY spec/ ./spec/
 COPY config/ ./config/

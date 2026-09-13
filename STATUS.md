@@ -67,6 +67,10 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   compose stack in open and keyed mode and writes `loadtest/results/<stamp>/`; the recorded
   run is in `docs/loadtest.md`. Those numbers are API-layer throughput with the mock worker
   on CPU, never pipeline or GPU throughput.
+- **API docs (2026-09-13, `feat/api-docs`).** `spec/openapi.yaml` (OpenAPI 3.1, scene body `$ref`s
+  the frozen schema) is served at `GET /api/openapi.json` and rendered at `GET /api/docs` (Redoc,
+  loads its bundle from a CDN in the browser); `tests/api/test_openapi.py` fails when a route and
+  the spec disagree. Prose in `docs/api.md`.
 - **Never built or never run.** A real-sensor scene end to end (TUM through detector,
   SAM2, MASt3R, assembly); live OAK capture; a phone-capture reader; the ScanNet
   reader (stub); a Phase-12 CLI (`scripts/run_assemble.py` is the driver).
