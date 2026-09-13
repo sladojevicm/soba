@@ -32,6 +32,7 @@ http.setResponseCallback(http.expectedStatuses({ min: 200, max: 299 }, 429));
 export const rateLimited = new Counter('rate_limited');       // 429 answers seen
 export const uploadOk = new Rate('upload_ok');                 // POST /api/jobs -> 202 (after retries)
 export const uploadRetries = new Counter('upload_retries');   // 429 -> Retry-After waits
+export const uploadGaveUp = new Counter('upload_gave_up');    // still 429 after UPLOAD_RETRIES waits (limiter, not an error)
 export const jobDone = new Rate('job_done');                   // polled job reached `done`
 export const jobTurnaround = new Trend('job_turnaround_ms', true); // upload start -> done seen (Retry-After waits included)
 export const jobWait = new Trend('job_wait_ms', true);             // 202 accepted -> done seen (queue + mock worker)
@@ -76,11 +77,14 @@ export function del(path, name) {
 
 // POST the fixture archive. A 429 is honoured (sleep Retry-After, retry up to
 // `retries` times) because that is what a well-behaved client does against
-// the 1 rps / burst 10 upload bucket in open mode. Returns the job id or null.
+// the 1 rps / burst 10 upload bucket in open mode. A 429 that survives every
+// retry is the limiter doing its job (upload_gave_up, upload_ok=0, no failed
+// check); any other non-202 answer is a failed check. Returns the job id or
+// null.
 export function uploadJob(tier, retries) {
   const max = retries === undefined ? envInt('UPLOAD_RETRIES', 8) : retries;
   const body = { tier: String(tier || 2), archive: http.file(FIXTURE, FIXTURE_NAME, 'application/zip') };
-  for (let attempt = 0; attempt <= max; attempt++) {
+  for (let attempt = 0; ; attempt++) {
     const res = http.post(BASE + '/api/jobs', body, { headers: headers(), tags: { name: 'upload' } });
     noteStatus(res);
     if (res.status === 202) {
@@ -89,18 +93,20 @@ export function uploadJob(tier, retries) {
       check(res, { 'upload 202 with id': (r) => typeof id === 'string' && id.length === 16 });
       return id;
     }
-    if (res.status === 429 && attempt < max) {
-      uploadRetries.add(1);
-      const ra = parseFloat(res.headers['Retry-After'] || '1');
-      sleep(Number.isFinite(ra) && ra > 0 ? ra : 1);
-      continue;
+    if (res.status !== 429) {
+      uploadOk.add(0);
+      check(res, { 'upload accepted': () => false });
+      return null;
     }
-    uploadOk.add(0);
-    check(res, { 'upload accepted': () => false });
-    return null;
+    if (attempt >= max) {
+      uploadOk.add(0);
+      uploadGaveUp.add(1);
+      return null;
+    }
+    uploadRetries.add(1);
+    const ra = parseFloat(res.headers['Retry-After'] || '1');
+    sleep(Number.isFinite(ra) && ra > 0 ? ra : 1);
   }
-  uploadOk.add(0);
-  return null;
 }
 
 // GET /api/jobs/{id} until state is done/failed or `timeoutS` elapses.
@@ -199,6 +205,20 @@ export function withRateLimitThresholds(thresholds) {
   if (__ENV.EXPECT_NO_429 === '1') t.rate_limited = ['count==0'];
   if (__ENV.EXPECT_429 === '1') t.rate_limited = ['count>0'];
   return t;
+}
+
+// upload_ok == 100 % is only a valid assertion when the upload bucket is
+// bypassed (EXPECT_NO_429=1, a `loadtest`-flagged key). Against the 1 rps /
+// burst 10 bucket the accepted share is set by the limiter and the VU count
+// (every VU shares one client IP and the same Retry-After), not by the
+// server's health, so there it is reported (upload_ok, upload_gave_up) and
+// only required to be non-zero. Every accepted job must reach done in both
+// modes.
+export function uploadThresholds(thresholds) {
+  const t = __ENV.EXPECT_NO_429 === '1'
+    ? { upload_ok: ['rate==1'], job_done: ['rate==1'] }
+    : { upload_ok: ['rate>0'], job_done: ['rate==1'] };
+  return withRateLimitThresholds(Object.assign(t, thresholds));
 }
 
 // --- summary ------------------------------------------------------------------

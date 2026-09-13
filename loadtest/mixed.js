@@ -1,6 +1,8 @@
 // mixed: the four traffic types at once, sized to stay under the open-mode
 // general bucket (100 rps / burst 200 per IP) from one client IP:
 //   uploads   UPLOAD_VUS (2)  users uploading, polling to done, deleting
+//             (two users at ~1.2 s per cycle exceed the 1 rps upload bucket
+//             slightly, so a few Retry-After waits are expected)
 //   polling   POLL_RATE (30 rps) status polls of one finished job
 //   pageloads SCENE_RATE (4/s) viewer page loads (7 requests each = 28 rps)
 //   sse       SSE_VUS (2) clients holding /jobs/{id}/events for HOLD_S (5 s)
@@ -11,7 +13,7 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 import {
   BASE, deleteJob, envInt, envStr, fetchScene, get, headers, rateLimited, setupDoneJob,
-  sseEnded, sseHeld, sseRejected, summarize, uploadAndWait, withRateLimitThresholds,
+  sseEnded, sseHeld, sseRejected, summarize, uploadAndWait, uploadThresholds,
 } from './lib.js';
 
 const NAME = envStr('LABEL', 'mixed');
@@ -39,9 +41,7 @@ export const options = {
       vus: envInt('SSE_VUS', 2), duration: DURATION, gracefulStop: `${HOLD_S + 5}s`,
     },
   },
-  thresholds: withRateLimitThresholds({
-    upload_ok: ['rate==1'],
-    job_done: ['rate==1'],
+  thresholds: uploadThresholds({                   // upload_ok / job_done, see lib.js
     'http_req_failed{name:upload}': ['rate<0.01'],
     'http_req_failed{name:status}': ['rate<0.01'],
     'http_req_failed{name:scene}': ['rate<0.01'],

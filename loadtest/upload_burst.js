@@ -4,15 +4,19 @@
 // Open mode: POST /api/jobs is limited to 1 rps / burst 10 per IP, and every
 // VU shares the k6 container's IP, so after the first ten uploads the
 // clients see 429 + Retry-After and wait (counted in rate_limited /
-// upload_retries; upload_ok still requires every upload to be accepted in
-// the end). With a `loadtest` key (API_KEY, EXPECT_NO_429=1) the bucket is
-// bypassed and rate_limited must stay at 0.
+// upload_retries). Every waiting VU gets the same Retry-After, they retry
+// together and one wins per second, so with VUS well above 1 some give up
+// after UPLOAD_RETRIES waits (upload_gave_up): that is the limiter working,
+// and upload_ok is reported, not required to be 100 %. With a `loadtest`
+// key (API_KEY, EXPECT_NO_429=1) the bucket is bypassed, rate_limited must
+// stay at 0 and upload_ok must be 100 %. Accepted jobs must always reach
+// done.
 //
 //   VUS (10)  DURATION (30s)  JOB_TIMEOUT_S (90)  UPLOAD_RETRIES (8)  KEEP_JOBS (0)
 
 import { sleep } from 'k6';
 import {
-  deleteJob, envInt, envStr, summarize, uploadAndWait, withRateLimitThresholds,
+  deleteJob, envInt, envStr, summarize, uploadAndWait, uploadThresholds,
 } from './lib.js';
 
 const NAME = envStr('LABEL', 'upload_burst');
@@ -26,9 +30,7 @@ export const options = {
       gracefulStop: '60s',
     },
   },
-  thresholds: withRateLimitThresholds({
-    upload_ok: ['rate==1'],                        // 100 % of uploads accepted
-    job_done: ['rate==1'],                         // every accepted job reaches done
+  thresholds: uploadThresholds({                   // upload_ok / job_done, see lib.js
     http_req_failed: ['rate<0.01'],                // 429 excluded (expected status)
     'http_req_duration{name:upload}': ['p(95)<2000'],
     'http_req_duration{name:status}': ['p(95)<250'],

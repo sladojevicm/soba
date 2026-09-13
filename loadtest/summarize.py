@@ -45,7 +45,7 @@ def k6_row(doc: dict) -> list[str]:
     for key in ("upload_ok", "job_done"):
         if key in m:
             extras.append(f"{key} {m[key]['values'].get('rate', 0) * 100:.0f}%")
-    for key in ("sse_held", "sse_rejected", "sse_ended", "upload_retries"):
+    for key in ("sse_held", "sse_rejected", "sse_ended", "upload_retries", "upload_gave_up"):
         if key in m and m[key]["values"].get("count"):
             extras.append(f"{key} {int(m[key]['values']['count'])}")
     knobs = " ".join(f"{k}={v}" for k, v in sorted(env.items()) if k not in ("API_KEY", "LABEL") and v)
