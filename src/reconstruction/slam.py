@@ -21,7 +21,7 @@ from typing import Protocol
 
 import numpy as np
 
-from perception.bundle import PerceptionBundle
+from perception.bundle import Intrinsics, Manifest, PerceptionBundle
 
 # Tier 4 uses MASt3R by DECISION (user, 2026-07-05): ORB-SLAM3 will not be
 # integrated — its loop closure was only ever justified if MASt3R drifted,
@@ -160,19 +160,210 @@ def solve_metric_scale(pred_depths, sensor_depths_m) -> float:
     good enough to fuse against a real depth sensor — solve the residual scale
     as the median over frames of the median per-pixel sensor/pred ratio.
     Returns 1.0 when nothing valid overlaps (degenerate input)."""
-    import cv2
-
     ratios = []
     for pred, sens in zip(pred_depths, sensor_depths_m):
         pred = np.asarray(pred, dtype=np.float64)
         sens = np.asarray(sens, dtype=np.float64)
         if sens.shape != pred.shape:
+            import cv2  # only needed to resample; keeps the equal-shape path cv2-free
+
             sens = cv2.resize(sens, (pred.shape[1], pred.shape[0]),
                               interpolation=cv2.INTER_NEAREST)
         m = (pred > 1e-6) & (sens > 1e-6)
         if m.sum() >= 100:
             ratios.append(float(np.median(sens[m] / pred[m])))
     return float(np.median(ratios)) if ratios else 1.0
+
+
+# --- MASt3R dense-output export (RGB-only ingest, step 1) --------------------
+# MASt3R needs only RGB; the metric-scale solve is the one place that reads the
+# depth sensor. When a bundle has no depth.png (a plain phone video), the scale
+# comes from the metric checkpoint alone and the dense depthmaps MASt3R already
+# computes are exported so the rest of the pipeline (observed cloud, gate,
+# TSDF, placement, ground) runs unchanged on the anchor frames.
+
+MAST3R_LOAD_SIZE = 512
+
+
+def dust3r_crop_geometry(width: int, height: int, size: int = MAST3R_LOAD_SIZE
+                         ) -> tuple[int, int, int, int, int, int]:
+    """Replicates dust3r.utils.image.load_images(size=512) exactly: resize so
+    the long edge is `size` (PIL rounding), then centre-crop to an even
+    multiple of 16 via halfw/halfh multiples of 8.
+
+    Returns (rw, rh, x0, y0, cw, ch): the resized image size, the crop origin
+    inside it and the crop size. The MASt3R depthmap, confidence map, focal and
+    principal point all live in that (ch, cw) crop frame."""
+    if width <= 0 or height <= 0:
+        raise ValueError(f"image size must be positive, got {width}x{height}")
+    S = max(width, height)
+    rw = int(round(width * size / S))
+    rh = int(round(height * size / S))
+    cx, cy = rw // 2, rh // 2
+    halfw, halfh = ((2 * cx) // 16) * 8, ((2 * cy) // 16) * 8
+    return rw, rh, cx - halfw, cy - halfh, 2 * halfw, 2 * halfh
+
+
+def crop_map_to_frame(crop: np.ndarray, width: int, height: int,
+                      size: int = MAST3R_LOAD_SIZE) -> np.ndarray:
+    """Map a per-pixel map from MASt3R's crop frame back onto the full RGB
+    frame (width x height). Pixels the crop never covered are 0 (invalid for
+    depth). Nearest-neighbour throughout so depth edges are not blended."""
+    import cv2
+
+    rw, rh, x0, y0, cw, ch = dust3r_crop_geometry(width, height, size)
+    crop = np.asarray(crop, dtype=np.float64)
+    if crop.shape != (ch, cw):
+        crop = cv2.resize(crop, (cw, ch), interpolation=cv2.INTER_NEAREST)
+    canvas = np.zeros((rh, rw), dtype=np.float64)
+    canvas[y0:y0 + ch, x0:x0 + cw] = crop
+    if (rw, rh) == (width, height):
+        return canvas
+    return cv2.resize(canvas, (width, height), interpolation=cv2.INTER_NEAREST)
+
+
+def conf_to_u8(conf: np.ndarray) -> np.ndarray:
+    """dust3r confidence (>= 1, exp-scaled) -> the bundle's uint8 conf.png.
+
+    u8 = 255 * (1 - 1/conf): conf 1 -> 0, conf 2 -> 127, conf 3 -> 170, ->255.
+    tsdf.fuse's optional gate zeroes depth where conf < 150, i.e. below about
+    conf 2.4; dust3r's own default min_conf_thr is 3, so the two agree on what
+    "trust this pixel" means."""
+    conf = np.asarray(conf, dtype=np.float64)
+    u8 = 255.0 * (1.0 - 1.0 / np.maximum(conf, 1.0))
+    return np.clip(np.round(u8), 0, 255).astype(np.uint8)
+
+
+def resolve_metric_scale(bundle: PerceptionBundle, sampled: list[int],
+                         pred_depths: list[np.ndarray]) -> tuple[float, str]:
+    """Fix M1 with a guard: solve the residual scale against the depth sensor
+    when every sampled frame has a depth.png, else keep the metric checkpoint's
+    own scale (1.0) and say so. Returns (scale, "sensor" | "mast3r")."""
+    import logging
+
+    have_depth = all(bundle.depth_path(f).is_file() for f in sampled)
+    if have_depth:
+        sensor = [np.asarray(bundle.read_depth_mm(f), dtype=np.float64) / 1000.0
+                  for f in sampled]
+        return solve_metric_scale(pred_depths, sensor), "sensor"
+    logging.getLogger(__name__).warning(
+        "bundle has no depth.png for the sampled frames -> metric scale comes "
+        "from MASt3R's metric checkpoint alone (unverified against a sensor; "
+        "size sanity rests on config class_gates)")
+    return 1.0, "mast3r"
+
+
+def _to_np(x) -> np.ndarray:
+    """torch tensor / list of tensors / array -> float64 numpy (duck-typed so
+    the export path is testable without torch)."""
+    if hasattr(x, "detach"):
+        x = x.detach().cpu().numpy()
+    return np.asarray(x, dtype=np.float64)
+
+
+def scene_outputs(scene) -> dict:
+    """Pull everything the export needs out of a dust3r global-alignment scene:
+    cam2world (N,4,4), depthmaps [N x (h,w)], confs [N x (h,w)] or None,
+    focals (N,) or None, principal points (N,2) or None. Duck-typed: any object
+    with get_im_poses/get_depthmaps (and optionally im_conf, get_focals,
+    get_principal_points) works, which is how the unit test drives it."""
+    out = {
+        "cam2world": _to_np(scene.get_im_poses()),
+        "depthmaps": [_to_np(d) for d in scene.get_depthmaps()],
+        "confs": None, "focals": None, "principal_points": None,
+    }
+    im_conf = getattr(scene, "im_conf", None)
+    if im_conf is not None:
+        out["confs"] = [_to_np(c) for c in im_conf]
+    if hasattr(scene, "get_focals"):
+        out["focals"] = _to_np(scene.get_focals()).reshape(-1)
+    if hasattr(scene, "get_principal_points"):
+        out["principal_points"] = _to_np(scene.get_principal_points()).reshape(-1, 2)
+    return out
+
+
+def export_anchor_bundle(
+    src: PerceptionBundle,
+    out_root: Path | str,
+    sampled: list[int],
+    anchors_world: np.ndarray,
+    depthmaps_m: list[np.ndarray],
+    confs: list[np.ndarray] | None = None,
+    focals: np.ndarray | None = None,
+    principal_points: np.ndarray | None = None,
+    scale: float = 1.0,
+) -> PerceptionBundle:
+    """Write a NEW bundle holding only MASt3R's anchor frames, renumbered
+    0..K-1, in the exact on-disk format every later stage reads:
+
+      frames/k/rgb.jpg + objects.json + mask_*.png   copied from frame sampled[k]
+      frames/k/depth.png    uint16 mm from depthmaps_m[k] * scale, mapped from
+                            the 512-res crop frame onto the RGB frame
+      frames/k/conf.png     uint8 from confs[k] (conf_to_u8), if given
+      poses.json            anchors_world[k] (T_world_camera, world = anchor 0)
+      intrinsics.json       fx = fy = median(focals) rescaled to the RGB size,
+                            principal point mapped the same way; else the
+                            source bundle's intrinsics
+      manifest.json         frame_count = K, fps = effective anchor rate
+      frame_times.json      the anchors' source timestamps
+
+    Restricting to anchors is deliberate: only anchors have a MASt3R depthmap,
+    and tsdf._object_frames reads depth.png for every masked frame."""
+    import shutil
+
+    if len(sampled) != len(depthmaps_m) or len(sampled) != len(anchors_world):
+        raise ValueError("sampled, depthmaps and anchor poses must have the same length")
+    if confs is not None and len(confs) != len(sampled):
+        raise ValueError("confs must match sampled")
+    if not sampled:
+        raise ValueError("nothing to export: no anchor frames")
+
+    h, w = src.read_rgb(sampled[0]).shape[:2]
+    rw, rh, x0, y0, _cw, _ch = dust3r_crop_geometry(w, h)
+    sx, sy = w / rw, h / rh  # resized-frame px -> RGB px (equal up to rounding)
+
+    if focals is not None and len(focals):
+        f = float(np.median(np.asarray(focals, dtype=np.float64))) * sx
+        if principal_points is not None and len(principal_points):
+            pp = np.median(np.asarray(principal_points, dtype=np.float64).reshape(-1, 2), axis=0)
+            cx, cy = (pp[0] + x0) * sx, (pp[1] + y0) * sy
+        else:
+            cx, cy = w / 2.0, h / 2.0
+        intr = Intrinsics(fx=f, fy=f, cx=float(cx), cy=float(cy))
+    else:
+        intr = src.intrinsics
+
+    src_times = src.read_frame_times()
+    times = [src_times[f] for f in sampled] if len(src_times) > max(sampled) else []
+    if len(times) >= 2 and times[-1] > times[0]:
+        fps = (len(times) - 1) / (times[-1] - times[0])
+    else:
+        n = max(1, src.manifest.frame_count)
+        fps = src.manifest.fps * len(sampled) / n
+
+    manifest = Manifest(
+        session_id=f"{src.manifest.session_id}_mast3r",
+        fps=float(fps),
+        frame_count=len(sampled),
+        timestamp_start=src.manifest.timestamp_start,
+        source=src.manifest.source,
+    )
+    out = PerceptionBundle.create(out_root, manifest, intr)
+
+    for k, fid in enumerate(sampled):
+        dst = out.ensure_frame(k)
+        for p in src.frame_dir(fid).iterdir():
+            if p.is_file() and p.name not in ("depth.png", "conf.png"):
+                shutil.copyfile(p, dst / p.name)
+        depth_m = crop_map_to_frame(np.asarray(depthmaps_m[k]) * float(scale), w, h)
+        out.write_depth_mm(k, depth_m * 1000.0)
+        if confs is not None:
+            out.write_conf(k, conf_to_u8(crop_map_to_frame(confs[k], w, h)))
+
+    out.write_poses([np.asarray(T, dtype=np.float64) for T in anchors_world])
+    if times:
+        out.write_frame_times(times)
+    return out
 
 
 class Mast3rEstimator:
@@ -217,7 +408,14 @@ class Mast3rEstimator:
         model = AsymmetricMASt3R.from_pretrained(str(ckpt)).to(dev).eval()
         return model, dev
 
-    def estimate(self, bundle: PerceptionBundle) -> list[np.ndarray]:
+    def estimate(self, bundle: PerceptionBundle, *,
+                 export_root: Path | str | None = None) -> list[np.ndarray]:
+        """Poses for every frame (anchors + SE(3) interpolation), world = frame 0.
+
+        `export_root`: also write MASt3R's dense output as a new anchor-only
+        bundle there (see export_anchor_bundle) — the RGB-only ingest path,
+        where the source bundle has no depth.png and the returned poses alone
+        would leave every downstream stage without geometry."""
         self._add_paths()  # the repo isn't a package; imports need its dirs
         import torch
         from dust3r.cloud_opt import GlobalAlignerMode, global_aligner
@@ -265,21 +463,26 @@ class Mast3rEstimator:
                 "MASt3R global alignment OOM on %s -> retrying on CPU "
                 "(slower, same result)", dev)
             scene = _align("cpu")
-        cam2world = scene.get_im_poses().detach().cpu().numpy().astype(np.float64)
-        pred_depths = [d.detach().cpu().numpy() for d in scene.get_depthmaps()]
+        outs = scene_outputs(scene)
         del out, scene
         if dev == "cuda":
             torch.cuda.empty_cache()
+        cam2world, pred_depths = outs["cam2world"], outs["depthmaps"]
 
         # fix M1: residual metric scale vs the sensor, applied to translations
-        sensor = [np.asarray(bundle.read_depth_mm(f), dtype=np.float64) / 1000.0
-                  for f in sampled]
-        s = solve_metric_scale(pred_depths, sensor)
+        # (and to the exported depth). Guarded: an RGB-only bundle keeps the
+        # metric checkpoint's scale.
+        s, _scale_source = resolve_metric_scale(bundle, sampled, pred_depths)
         cam2world[:, :3, 3] *= s
 
         # world = first frame (the bundle's convention)
         T0_inv = np.linalg.inv(cam2world[0])
         anchors = np.array([T0_inv @ T for T in cam2world])
+
+        if export_root is not None:
+            export_anchor_bundle(bundle, export_root, sampled, anchors, pred_depths,
+                                 confs=outs["confs"], focals=outs["focals"],
+                                 principal_points=outs["principal_points"], scale=s)
         return interpolate_poses(all_fids, sampled, anchors)
 
 
