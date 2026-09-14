@@ -92,7 +92,10 @@ services:
       redis:
         condition: service_healthy
     environment:
-      SOBA_JOBS_DIR: /app/out/jobs
+      # Same container path as the api service: the job record stores the
+      # extracted bundle as an absolute path (/data/jobs/<id>/extracted/...)
+      # and the worker opens it verbatim, so both must mount ./out at /data.
+      SOBA_JOBS_DIR: /data/jobs
       SOBA_QUEUE_URL: redis://redis:6379/0
     env_file:
       - path: .env
@@ -100,7 +103,7 @@ services:
     volumes:
       # model checkouts + weights (setup_*.sh) and pipeline outputs
       - ./workspace:/workspace
-      - ./out:/app/out
+      - ./out:/data
     command: ["worker"]
     deploy:
       resources:
