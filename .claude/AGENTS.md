@@ -320,3 +320,14 @@ Wave 3
 Critical path: job-api → orchestration → load-test → runbook.
 Strictly sequential: job-api before {orchestration, security B, observability B, api-docs,
 load-test}; security B before api-docs and load-test; all before runbook.
+
+## Status (2026-09-13)
+
+Execution order complete through Wave 3. Merged into `develop` (all PRs, in merge
+order): #7 security-hardening (A + B), #8 observability A, #9 job-api, #10 docker /
+compose / CI, #11 observability B, #12 runpod-orchestration, #13 api-docs,
+#14 load-testing. Wave 3: `docs/deployment-runbook` (runbook-agent, PR open against
+`develop`). Open: #6 `docs/adr-lidar-feasibility` (ADR 0001, PROPOSED, awaiting the
+maintainer). `lidar-capture-agent` remains **blocked** until that ADR/BDR is approved in
+writing. No release has been cut: `develop` → `master` waits on the runbook's gates
+(`docs/runbook.md` §6: Open3D CUDA check on a GPU host, model pins recorded, CI green).

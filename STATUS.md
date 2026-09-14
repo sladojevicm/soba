@@ -1,6 +1,6 @@
 # Soba — Status
 
-_Current state as of 2026-09-12. Measured numbers live in `BENCHMARK.md`; the
+_Current state as of 2026-09-14. Measured numbers live in `BENCHMARK.md`; the
 scene contract lives in `spec/scene.schema.json`; those two are authoritative.
 The reasoning behind past decisions lives in dated files under `docs/log/`._
 
@@ -78,6 +78,15 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   `world`, `ground` and `camera_pose` and fails the frozen schema. The eight
   cross-module disagreements are listed in `CLAUDE.md`. TUM world frames are not
   gravity-aligned, so floor snapping is wrong on real-sensor runs.
+- **Deployment runbook (2026-09-14, `docs/deployment-runbook`).** `docs/runbook.md` is the
+  operator page: images and tag scheme (no registry push exists yet), env matrix and
+  secrets, compose / two-host / GPU-worker deploy, RunPod serverless endpoint, the three
+  pre-deploy gates (Open3D CUDA `check`, model pins, CI), smoke test, cost controls, alert
+  rules, backup, rollback, incident checklist, release flow. Executed here: API image build,
+  compose `cpu` smoke (upload → done → `verify_browser.js` 8/8 on the job URL), `/metrics`,
+  `SMOKE=1 make loadtest` (all pass); every GPU / RunPod / registry step is marked not
+  executed here. Compose `worker-gpu` now mounts `./out` at `/data` like `api` (real jobs
+  failed at `validating` before); the pipeline image still runs as root (flagged).
 - **Packaging.** `docker/` (API, pipeline, frontend-check images), compose and
   `.github/workflows/ci.yml` exist (2026-09-11); the frontend bundle is served by
   the API image, CDN offload is deferred until there is real traffic.
