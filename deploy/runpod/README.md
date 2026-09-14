@@ -1,5 +1,12 @@
 # Running the soba host pipeline on RunPod
 
+> **Deploying Soba as a service?** Start with [`docs/runbook.md`](../../docs/runbook.md):
+> images and tags, the env matrix and secrets, compose / two-host / GPU-worker
+> deployment, the RunPod **serverless** endpoint, the mandatory pre-deploy gates
+> (Open3D CUDA check, model pins, CI), smoke test, alerts, backup, rollback,
+> incident checklist and the release flow. This page keeps only what is specific
+> to renting and using an interactive GPU **pod**.
+
 This pod runs the **host (NVIDIA) side** of the pipeline: SAM2, RGB-D pose,
 Open3D **TSDF fusion (CUDA-only)**, the confidence gate, scene assembly, and the
 scene server/viewer. It does **not** need to be the big generative GPU — that's a
@@ -13,20 +20,28 @@ separate, optional RunPod *serverless* endpoint for TripoSG/Hunyuan3D.
 ## 0. Container images and model pins
 
 The same stack is packaged as images under `docker/` (built in CI by
-`.github/workflows/ci.yml`; Docker is not installed on the WSL box, so they are
-only ever built on the runner or on the pod):
+`.github/workflows/ci.yml`, which does not push them; `docs/runbook.md` §3 has
+the tag scheme and push commands):
 
 - `docker/pipeline.Dockerfile` — this host pipeline on a `pytorch/pytorch:2.6.0-cuda12.4`
-  base (`[recon,serve,dev]` + coacd + runpod). Entrypoints: `worker`
-  (`python -m orchestration.worker`, lands with the orchestration work),
+  base (`[recon,serve,dev,api,telemetry,worker]` + coacd + runpod). Entrypoints:
+  `worker` (`python -m orchestration.worker`, the Redis queue consumer),
   `serverless` (`python deploy/runpod/generative_handler.py`, the endpoint in the
   last section), `assemble <args>`, `serve`, `check` (Open3D CUDA tensor check on
   a real GPU), `shell`. Build with `--build-arg BASE_IMAGE=...-devel` when the
   TripoSG / Hunyuan3D setup scripts must compile CUDA extensions. Weights and
   model checkouts are mounted under `/workspace`, never baked.
-- `docker/api.Dockerfile` — the scene server + committed viewer bundle only (no GPU).
+- `docker/api.Dockerfile` — the job API + scene server + committed viewer bundle (no GPU).
 - `docs/model-pins.md` — which model versions produced `BENCHMARK.md`, and every
   pin the repo does not record (git commits, checkpoint sha256, HF revisions).
+  Recording them is a release gate (`docs/runbook.md` §6).
+
+**Open3D CUDA gate.** The `open3d` wheel pip resolves has no CUDA module
+(`docs/log/2026-09-11-docker-ci.md`), so on any GPU host, image or pod, run
+the check before trusting a tier ≥ 2 build: `docker run --rm --gpus all
+soba-pipeline:<tag> check` (exit 1 = TSDF would silently run on CPU), or the
+"Verify host-pipeline stack" block that `bootstrap.sh` prints. What to do
+when it fails is in the runbook.
 
 ## 1. Rent the pod
 
@@ -50,9 +65,8 @@ only ever built on the runner or on the pod):
 
 ```bash
 cd /workspace
-git clone --depth 1 --branch master \
-  https://github.com/sladojevicm/soba.git
-bash soba/deploy/runpod/bootstrap.sh
+git clone --depth 1 --branch master https://github.com/sladojevicm/soba.git   # bootstrap.sh also does this (REPO_BRANCH=master)
+bash soba/deploy/runpod/bootstrap.sh          # REPO_BRANCH=<tag> to pin a release
 # optional learned completion as well:  SETUP_POINTR=1 bash .../bootstrap.sh
 # OR ComPC (training-free, preserves observed geometry — needs >=16GB GPU,
 # isolated env; brittle, may need iteration):  SETUP_COMPC=1 bash .../bootstrap.sh
@@ -79,11 +93,17 @@ the tiers.
 ## 3. Configure (optional keys)
 
 ```bash
-cp soba/deploy/runpod/env.example /workspace/.env
+cp soba/deploy/runpod/env.example /workspace/.env && chmod 600 /workspace/.env
 # edit /workspace/.env — ANTHROPIC_API_KEY only if you want the Step-8 physics
-# VLM; the front-end needs no keys.
+# VLM; the front-end needs no keys. Never commit it (docs/security/secrets-audit.md).
 set -a; . /workspace/.env; set +a
 ```
+
+To make the pod a queue worker for a deployed API instead of running scenes by
+hand, use the last block of `env.example` (`SOBA_QUEUE_URL`, `SOBA_JOBS_DIR`,
+`SOBA_WORKER_MODE=real`) and `python -m orchestration.worker`; the wiring and
+the cost controls (`SOBA_RUNPOD_DISABLED`, budget, breaker) are in
+`docs/runbook.md` §5 and §8.
 
 ## 4. Run the pipeline
 
@@ -128,14 +148,16 @@ Separate from the host pod above. This is the "big generative GPU" — a RunPod
 both models; the client (`reconstruction.generative.RunPodEngine`) picks per tier
 (fix K1): **tiers 1-2 → TripoSG**, **tiers 3-4 → Hunyuan3D 2.1**.
 
-1. Build a serverless worker whose image has the repo + weights:
+1. Build a serverless worker: the `docker/pipeline.Dockerfile` image built on
+   the `-devel` base (it already installs `runpod`), start command
+   `serverless` (= `python deploy/runpod/generative_handler.py`, which reuses
+   the exact `LocalGpuEngine` model code), and a network volume at
+   `/workspace` populated once with:
    ```bash
    bash deploy/runpod/setup_triposg.sh      # tiers 1-2
    bash deploy/runpod/setup_hunyuan3d.sh    # tiers 3-4 (~10 GB shape; >=16 GB GPU)
-   pip install runpod
    ```
-   Worker entrypoint: `python deploy/runpod/generative_handler.py`
-   (it reuses the exact `LocalGpuEngine` model code behind the serverless API).
+   Endpoint sizing, template env and the live probe are in `docs/runbook.md` §5.4.
 2. Point the **host** pipeline at it (in `.env`, see `env.example`):
    ```bash
    export RUNPOD_API_KEY=...  RUNPOD_GEN_ENDPOINT_ID=...
