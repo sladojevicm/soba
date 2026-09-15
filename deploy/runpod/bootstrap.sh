@@ -64,9 +64,9 @@ else
   echo "           pip install torch --index-url https://download.pytorch.org/whl/cu121" >&2
 fi
 
-log "Install soba (recon + serve + dev extras)"
+log "Install soba (recon + serve + dev + api + telemetry + worker extras)"
 python3 -m pip install --upgrade pip -q
-python3 -m pip install -e "${REPO_DIR}[recon,serve,dev]" -q
+python3 -m pip install -e "${REPO_DIR}[recon,serve,dev,api,telemetry,worker]" -q
 
 log "Verify host-pipeline stack"
 python3 - <<'PY'

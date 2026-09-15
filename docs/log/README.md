@@ -4,6 +4,7 @@ Read these only when you need the reasoning behind a decision. The current state
 
 All entries predate the 2026-07-13 rename from vid2sim-v2 to Soba and were moved verbatim on 2026-09-04: substitute `soba` / `SOBA_*` for `vid2sim-v2` / `VID2SIM_*` in any command you copy. Newest first.
 
+- [2026-09-15](2026-09-15-gpu-validation-prep.md) — First GPU run of Waves 0–3 prepared: bootstrap installs every extra, `deploy/runpod/gpu_validate.sh` (S0–S9, recorded outcomes), `publish-images.yml` (GHCR), `docs/gpu-validation.md` guide
 - [2026-09-14](2026-09-14-deployment-runbook.md) — Deployment runbook: `docs/runbook.md` (images + tag scheme, env matrix, compose / two-host / GPU / RunPod serverless deploy, Open3D CUDA + model-pin + CI gates, smoke, cost controls, alerts, backup, rollback, incidents, release flow); compose `worker-gpu` jobs-dir mount fixed; what was executed here vs needs a GPU / pod / key
 - [2026-09-13](2026-09-13-load-testing.md) — Load testing: k6 scenarios (upload burst, polling, scene fetch, SSE, mixed) + stdlib SSE probe against compose, `make loadtest`, open vs keyed (rate-limit bypass) passes, manual CI job; numbers in `docs/loadtest.md` are API-layer with a mock worker, never pipeline/GPU
 - [2026-09-13](2026-09-13-api-docs.md) — API docs: hand-authored `spec/openapi.yaml` (OpenAPI 3.1, `$ref` to the scene schema), `GET /api/openapi.json` + Redoc `/api/docs`, route-vs-spec + live-response contract test, `docs/api.md`
