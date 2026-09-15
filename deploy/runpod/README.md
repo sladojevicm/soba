@@ -1,5 +1,9 @@
 # Running the soba host pipeline on RunPod
 
+> **First GPU run of the service layer (job API, real worker, queue, metrics)?**
+> Follow `docs/gpu-validation.md`: it wraps this README's pod setup and runs
+> `deploy/runpod/gpu_validate.sh`, which records every step's real outcome.
+
 > **Deploying Soba as a service?** Start with [`docs/runbook.md`](../../docs/runbook.md):
 > images and tags, the env matrix and secrets, compose / two-host / GPU-worker
 > deployment, the RunPod **serverless** endpoint, the mandatory pre-deploy gates
