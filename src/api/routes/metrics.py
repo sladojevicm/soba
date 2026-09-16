@@ -16,6 +16,7 @@ Metrics (prefix `soba_`):
   pipeline_stage_seconds_total{stage}             stages.<name>.seconds
   pipeline_stage_runs_total{stage}                stages.<name>.count
   pipeline_drops_total{reason}                    drops
+  completion_total{method}                        completion.counts (poisson_* = fallback)
   remote_calls_total{kind} / remote_call_seconds_total{kind} / remote_est_usd_total{kind}
   run_metrics_ingest_errors_total                 unreadable / invalid run_metrics.json files
 
@@ -133,6 +134,10 @@ class ApiTelemetry:
                             ["stage"], registry=r)
         self.drops = C("soba_pipeline_drops_total", "Objects dropped, by reason", ["reason"],
                        registry=r)
+        self.completion = C("soba_completion_total",
+                            "Completion method per completion-band object "
+                            "(poisson_* = fallback, not the configured learned completer)",
+                            ["method"], registry=r)
         self.remote_calls = C("soba_remote_calls_total", "Remote (RunPod) calls", ["kind"],
                               registry=r)
         self.remote_seconds = C("soba_remote_call_seconds_total", "Remote call wall time",
@@ -218,6 +223,8 @@ class ApiTelemetry:
             self.stage_runs.labels(stage=stage).inc(st["count"])
         for reason, n in data["drops"].items():
             self.drops.labels(reason=reason).inc(n)
+        for method, n in data.get("completion", {}).get("counts", {}).items():
+            self.completion.labels(method=method).inc(n)
         for kind, rc in data["remote"]["by_kind"].items():
             self.remote_calls.labels(kind=kind).inc(rc["calls"])
             self.remote_seconds.labels(kind=kind).inc(rc["seconds"])

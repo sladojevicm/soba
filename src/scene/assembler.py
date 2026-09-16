@@ -133,6 +133,30 @@ def _fill_dist(coco_class: str) -> float:
     return FILL_DIST_BY_CLASS.get((coco_class or "").lower(), FILL_DIST_DEFAULT)
 
 
+def _record_completion(obj: ObjectInput, oid_str: str, engine, completed) -> str:
+    """Make the completion method VISIBLE in run_metrics.json (never only a log
+    line): a tier-2+ scene must not silently claim the learned completer it did
+    not run. `SOBA_COMPLETION_STRICT=1` turns any Poisson fallback into a run
+    failure (validation runs), instead of a quietly degraded scene."""
+    import os
+    if engine is None:
+        method, reason = "poisson_fallback", "no_engine"
+    elif completed is None or not len(completed.vertices):
+        method, reason = "poisson_fallback", "engine_declined"
+    else:
+        configured = getattr(engine, "completion_model", None)
+        method, reason = (str(configured), None) if configured else ("poisson_local", None)
+    fallback = method.startswith("poisson")
+    telemetry.completion(obj.track_id, obj.coco_class, method, id=oid_str,
+                         engine=type(engine).__name__ if engine is not None else None,
+                         reason=reason, fallback=fallback)
+    if fallback and os.environ.get("SOBA_COMPLETION_STRICT") == "1":
+        raise RuntimeError(
+            f"completion fallback for {oid_str} ({method}: {reason}) with "
+            "SOBA_COMPLETION_STRICT=1: the configured learned completer did not run")
+    return method
+
+
 def _fuse_and_seal(obj, center, completed):
     """Option-A finalize for a "completion" object that carries its VBG: KEEP the
     real observed geometry and graft the engine's completion only where unobserved
@@ -250,6 +274,8 @@ def _assemble_object_inner(obj: ObjectInput, oid_str: str, ground_y: float,
             completed = engine.complete(
                 mesh=mesh, cloud=obj.cloud, crop_path=obj.crop_path,
                 coco_class=obj.coco_class)
+    if obj.strategy == "completion":
+        _record_completion(obj, oid_str, engine, completed)
     if obj.strategy == "completion" and obj.vbg is not None and obj.voxel_size:
         # Option A: keep real geometry, graft only the unobserved part, then seal.
         final_mesh, vol = _fuse_and_seal(obj, center, completed)

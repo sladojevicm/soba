@@ -836,6 +836,31 @@ components:
           type: string
           pattern: "^/jobs/[0-9a-f]{16}/$"
           description: Where the viewer for this job lives once it is `done`.
+        run:
+          type: object
+          description: >-
+            Present on `GET /api/jobs/{id}` once the job's scene holds a
+            `run_metrics.json` (real worker only). `gate` and `completion` are
+            per-object counts; `completion` names the learned completer that
+            actually ran for each completion-band object, and any `poisson_*`
+            key is a fallback, not the configured tier's completer
+            (`SOBA_COMPLETION_STRICT=1` on the worker fails the run instead).
+          additionalProperties: true
+          properties:
+            status:
+              type: [string, "null"]
+            gate:
+              type: [object, "null"]
+              additionalProperties:
+                type: integer
+            completion:
+              type: object
+              additionalProperties:
+                type: integer
+            drops:
+              type: object
+              additionalProperties:
+                type: integer
 
     JobList:
       type: object

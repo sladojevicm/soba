@@ -81,6 +81,20 @@ REPO_BRANCH=develop bash soba/deploy/runpod/bootstrap.sh
 Bootstrap ends with the same Open3D CUDA check the script repeats as S1; if it
 prints the CUDA warning here, you already have the answer to the wheel question.
 
+**Tier-2-capable pod = TripoSG AND PatchComplete.** The gate's "complete" band at
+tiers 2-4 runs PatchComplete (the paper's configuration); without it the engine falls
+back to Poisson repair, which since 2026-09-17 is recorded per object in
+`run_metrics.json` (`completion.counts`), in `/metrics` (`soba_completion_total`) and
+on `GET /api/jobs/{id}` (`run.completion`). Runs 1 and 2 on 2026-09-16 had no
+PatchComplete, so their "completion" objects were Poisson. For validation set
+`SOBA_COMPLETION_STRICT=1` so a fallback fails the run instead of degrading it.
+
+```bash
+SETUP_TRIPOSG=1 SETUP_PATCHCOMPLETE=1 REPO_BRANCH=develop bash soba/deploy/runpod/bootstrap.sh
+export SOBA_TRIPOSG_HOME=/workspace/TripoSG SOBA_PATCHCOMPLETE_HOME=/workspace/PatchComplete
+export SOBA_COMPLETION_STRICT=1
+```
+
 Optional, adds ~10 min and ~10 GB: the generative band. Optional too, needed only for real
 sensor bundles (TUM / OAK / phone) and the 2 gpu-marked tests: `SETUP_MAST3R=1` (clones
 naver/mast3r with submodules and fetches the 2.6 GB metric checkpoint; then

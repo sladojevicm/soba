@@ -12,7 +12,7 @@
 #     bash bootstrap.sh
 #
 # Override any of these via env before running:
-#     REPO_URL REPO_BRANCH WORKDIR REPO_DIR POINTR_HOME SETUP_POINTR SETUP_MAST3R SETUP_TRIPOSG
+#     REPO_URL REPO_BRANCH WORKDIR REPO_DIR POINTR_HOME SETUP_POINTR SETUP_MAST3R SETUP_TRIPOSG SETUP_PATCHCOMPLETE
 # See deploy/runpod/README.md for the full rental + run guide.
 # ---------------------------------------------------------------------------
 set -euo pipefail
@@ -26,6 +26,8 @@ SETUP_POINTR="${SETUP_POINTR:-0}"   # 1 = also clone PoinTr (optional middle ban
 SETUP_COMPC="${SETUP_COMPC:-0}"     # 1 = also build ComPC (training-free, preserves
                                     #     observed geometry; isolated env, >=16GB GPU)
 SETUP_TRIPOSG="${SETUP_TRIPOSG:-0}" # 1 = also set up local TripoSG image-to-3D
+SETUP_PATCHCOMPLETE="${SETUP_PATCHCOMPLETE:-0}" # 1 = also set up PatchComplete (the completion
+                                    #     band at tiers 2-4; without it: Poisson fallback)
 SETUP_MAST3R="${SETUP_MAST3R:-0}"   # 1 = also clone MASt3R (+dust3r) and fetch the metric
                                     #     checkpoint (poses for tiers 2-4 on real sensor data)
                                     #     (generative band; clones repo + weights)
@@ -128,6 +130,18 @@ if [ "$SETUP_MAST3R" = "1" ]; then
     echo "MASt3R ready. export SOBA_MAST3R_HOME=${MAST3R_HOME:-$WORKDIR/mast3r}"
   else
     echo "WARNING: MASt3R setup failed — host pipeline is unaffected. See above." >&2
+  fi
+fi
+
+if [ "$SETUP_PATCHCOMPLETE" = "1" ]; then
+  log "Optional: PatchComplete (completion band, tiers 2-4)"
+  # Non-fatal: the host pipeline falls back to Poisson repair and SAYS SO in
+  # run_metrics.json (completion.counts) — but that is not the benchmark config.
+  if PATCHCOMPLETE_HOME="${PATCHCOMPLETE_HOME:-$WORKDIR/PatchComplete}" \
+       bash "$REPO_DIR/deploy/runpod/setup_patchcomplete.sh"; then
+    echo "PatchComplete ready. export SOBA_PATCHCOMPLETE_HOME=${PATCHCOMPLETE_HOME:-$WORKDIR/PatchComplete}"
+  else
+    echo "WARNING: PatchComplete setup failed — completion band will be Poisson fallback. See above." >&2
   fi
 fi
 

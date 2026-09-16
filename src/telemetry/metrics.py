@@ -63,6 +63,7 @@ class RunMetrics:
         self.stages: dict[str, dict] = {}
         self.gate: dict = {"counts": {s: 0 for s in STRATEGIES}, "per_object": []}
         self.drops: dict[str, int] = {}
+        self.completion: dict = {"counts": {}, "per_object": []}
         self.remote: dict = {"calls": 0, "seconds": 0.0, "est_usd": None, "by_kind": {}}
 
     # --- recording -------------------------------------------------------
@@ -107,6 +108,27 @@ class RunMetrics:
         self.drops[reason] = self.drops.get(reason, 0) + 1
         log_event(log, logging.INFO, "drop", event="drop", reason=reason, **fields)
 
+    def record_completion(self, track_id: int, cls: str, method: str, *,
+                          engine: str | None = None, reason: str | None = None,
+                          fallback: bool = False, **fields) -> dict:
+        """Record which completion actually ran for one completion-band object.
+
+        `method` is the learned completer that produced the mesh
+        ("patchcomplete", "pointr", "compc", ...) or a Poisson fallback
+        ("poisson_fallback" when the configured engine declined / had no
+        weights, "poisson_local" when no GPU engine exists at all). `fallback`
+        marks anything that is NOT the configured learned completer, so a
+        scene can never claim tier 2 while silently running Poisson.
+        """
+        entry = {"track_id": int(track_id), "class": str(cls), "method": str(method),
+                 "engine": engine, "reason": reason, "fallback": bool(fallback), **fields}
+        counts = self.completion["counts"]
+        counts[method] = counts.get(method, 0) + 1
+        self.completion["per_object"].append(entry)
+        log_event(log, logging.WARNING if fallback else logging.INFO,
+                  "completion", event="completion", **entry)
+        return entry
+
     def record_remote_call(self, kind: str, seconds: float,
                            est_usd: float | None = None) -> None:
         seconds = float(seconds)
@@ -138,6 +160,8 @@ class RunMetrics:
             "gate": {"counts": dict(self.gate["counts"]),
                      "per_object": list(self.gate["per_object"])},
             "drops": dict(self.drops),
+            "completion": {"counts": dict(self.completion["counts"]),
+                           "per_object": list(self.completion["per_object"])},
             "remote": {**self.remote,
                        "seconds": round(self.remote["seconds"], 6),
                        "by_kind": {k: dict(v) for k, v in self.remote["by_kind"].items()}},
@@ -192,6 +216,16 @@ def drop(reason: str, **fields) -> None:
         m.record_drop(reason, **fields)
     else:
         log_event(log, logging.INFO, "drop", event="drop", reason=reason, **fields)
+
+
+def completion(track_id: int, cls: str, method: str, **fields) -> None:
+    """Record a completion method on the active run; only logs when none is active."""
+    m = current()
+    if m is not None:
+        m.record_completion(track_id, cls, method, **fields)
+    else:
+        log_event(log, logging.INFO, "completion", event="completion",
+                  track_id=track_id, cls=cls, method=method, **fields)
 
 
 @contextmanager
