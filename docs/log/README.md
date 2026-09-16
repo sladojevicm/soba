@@ -4,6 +4,7 @@ Read these only when you need the reasoning behind a decision. The current state
 
 All entries predate the 2026-07-13 rename from vid2sim-v2 to Soba and were moved verbatim on 2026-09-04: substitute `soba` / `SOBA_*` for `vid2sim-v2` / `VID2SIM_*` in any command you copy. Newest first.
 
+- [2026-09-16](2026-09-16-gpu-validation-run3-dense.md) — GPU validation run 3, dense office_3 (2000 frames, 48 min): same gate routing as 100 frames, so coverage not density is the limit; completion stage 0.035 s = Poisson fallback confirmed
 - [2026-09-17](2026-09-17-replica-regen-and-date-pins.md) — `sync_bundles.md` rewritten (regenerate `_v2` bundles from Replica v1, no copy source exists); `scripts/reconstruct_pins.py` date-based pins, run and pasted into `docs/model-pins.md`
 - [2026-09-17](2026-09-17-patchcomplete-tier2.md) — PatchComplete is tier 2's completion band (in the paper): setup script + `SETUP_PATCHCOMPLETE=1`; completion method recorded in run_metrics/`/metrics`/job record; `SOBA_COMPLETION_STRICT=1`; the 09-16 runs were Poisson fallbacks
 - [2026-09-17](2026-09-17-key-plumbing-and-docs-reconcile.md) — Prep while the pod runs: `ANTHROPIC_API_KEY` handling in the GPU guide (VLM vs lookup physics, how to confirm), STATUS.md never-run list and runbook §6 gates reconciled with the two pod runs

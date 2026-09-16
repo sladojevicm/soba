@@ -220,3 +220,9 @@ engine), 760 s; coacd hulls; TripoSG commit recorded (`docs/model-pins.md`). Fix
 `setup_triposg.sh` pins the HF stack when torch < 2.5; `gpu_validate.sh` now writes the
 `FAILED` summary lines (`-rfEs`). Details: `docs/log/2026-09-16-gpu-validation-run2.md`.
 
+## Run 3 — 2026-09-16 (dense office_3, 2000 frames)
+
+Same routing as the 100-frame run (tsdf 0 / completion 5 / generative 9), 2912 s. Coverage,
+not density, is the limit: the demo input is the `_v2` orbit bundles
+(`deploy/runpod/sync_bundles.md`). Completion stage 0.035 s = Poisson fallback (no
+PatchComplete yet). Details: `docs/log/2026-09-16-gpu-validation-run3-dense.md`.

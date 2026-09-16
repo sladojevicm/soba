@@ -111,7 +111,10 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   PatchComplete was set up, and until 2026-09-17 nothing but a log line said so. Now
   `run_metrics.json` `completion.counts`, `soba_completion_total` and the job record's
   `run.completion` name the completer that ran; `SOBA_COMPLETION_STRICT=1` fails a run on
-  any fallback; `SETUP_PATCHCOMPLETE=1` installs it (`deploy/runpod/setup_patchcomplete.sh`). Not yet run on a GPU: the RunPod serverless endpoint, the compose
+  any fallback; `SETUP_PATCHCOMPLETE=1` installs it (`deploy/runpod/setup_patchcomplete.sh`).
+  **Run 3** (dense, 2000 frames, 2912 s): identical gate routing to the 100-frame run, so
+  the vMAP room-scan trajectory, not frame density, caps quality; the demo needs the `_v2`
+  orbit bundles (`deploy/runpod/sync_bundles.md`, `docs/log/2026-09-16-gpu-validation-run3-dense.md`). Not yet run on a GPU: the RunPod serverless endpoint, the compose
   `gpu` profile, Hunyuan3D (tiers 3–4). Two pytest failures on the pod still unidentified.
 - **Machines.** This WSL box has no GPU and no data, and its `.venv` lacks the
   `recon` extra: `pytest` here gives 125 pass and 49 fail or error, every one a
