@@ -123,18 +123,22 @@ with no record that the benchmark used a different one.
 
 ## How to close the gaps
 
-Run on the RTX 4060 machine (paths per `CLAUDE.md`: `~/soba/...`) and paste the
-output into this file:
+Run `deploy/runpod/recover_pins.sh` once on the RTX 4060 (paths per `CLAUDE.md`,
+`~/soba/...`) and paste its output verbatim into the section below. It only
+reads; every absent item prints `NOT FOUND`, which is itself a recorded fact.
+The same script with `ROOT=/workspace` runs on a pod volume (Hunyuan3D pins
+can only come from the volume that built tiers 3–4; if that volume is gone,
+say so below and treat upstream `main` of 2026-07-06 as the best reference).
 
 ```bash
-for r in mast3r mast3r/dust3r TripoSG PatchComplete; do
-  printf '%-22s %s\n' "$r" "$(git -C ~/soba/$r rev-parse HEAD 2>/dev/null || echo MISSING)"; done
-sha256sum ~/soba/mast3r/checkpoints/*.pth ~/soba/PatchComplete/trained_models/*.pt \
-          ~/soba/models/sam2.1_hiera_large.pt ~/soba/TripoSG/pretrained_weights/TripoSG/*.safetensors
-pip show ultralytics sam2 torch open3d coacd numpy 2>/dev/null | grep -E '^(Name|Version)'
-huggingface-cli scan-cache
+# on the 4060
+cd ~/soba && git pull && bash deploy/runpod/recover_pins.sh
 ```
 
-The Hunyuan3D pins can only come from the RunPod volume that built tiers 3–4;
-if it no longer exists, record that here and treat the upstream `main` of
-2026-07-06 as the best available reference.
+## Recovered pins (paste target)
+
+_Not yet run on the 4060. The only recovered pins so far are from the RunPod
+validation pod (2026-09-16, TripoSG commit `fc5c4099…`, library versions in the
+table above), which are validation pins, not the benchmark's._
+
+<!-- paste the recover_pins.sh output below this line -->
