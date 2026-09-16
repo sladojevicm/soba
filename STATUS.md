@@ -97,8 +97,11 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   `python -m orchestration.worker` in 227 s (4 objects; gate completion=4 / generative=10,
   all 10 generative dropped as `engine_declined` because TripoSG was not set up); 503 of
   505 tests pass on the pod (2 failures under review). Full record:
-  `docs/log/2026-09-16-gpu-validation-run1.md`. Not yet run on a GPU: the generative
-  band (TripoSG), the RunPod serverless endpoint, the compose `gpu` profile.
+  `docs/log/2026-09-16-gpu-validation-run1.md`. **Run 2** the same day with TripoSG set up
+  (`docs/log/2026-09-16-gpu-validation-run2.md`): 10 objects (4 completion + 6 generative,
+  4 declined by the engine) in 760 s, coacd hull colliders, TripoSG commit recorded in
+  `docs/model-pins.md`. Not yet run on a GPU: the RunPod serverless endpoint, the compose
+  `gpu` profile, Hunyuan3D (tiers 3–4). Two pytest failures on the pod still unidentified.
 - **Machines.** This WSL box has no GPU and no data, and its `.venv` lacks the
   `recon` extra: `pytest` here gives 125 pass and 49 fail or error, every one a
   missing-`open3d` import (last full run: 241 pass, 2026-07-06, GPU machine). Data and builds: `~/soba/data` on the

@@ -175,3 +175,10 @@ under review, S8 library versions only. Findings and interpretation:
 bootstrap, `coacd` added to the `recon` extra. Next run: `SETUP_TRIPOSG=1` bootstrap,
 then the same script.
 
+## Run 2 — 2026-09-16 (same volume, TripoSG set up)
+
+S6 PASS with the generative band: 10 objects (4 completion + 6 TripoSG, 4 declined by the
+engine), 760 s; coacd hulls; TripoSG commit recorded (`docs/model-pins.md`). Fixed from it:
+`setup_triposg.sh` pins the HF stack when torch < 2.5; `gpu_validate.sh` now writes the
+`FAILED` summary lines (`-rfEs`). Details: `docs/log/2026-09-16-gpu-validation-run2.md`.
+

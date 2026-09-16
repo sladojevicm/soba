@@ -4,6 +4,7 @@ Read these only when you need the reasoning behind a decision. The current state
 
 All entries predate the 2026-07-13 rename from vid2sim-v2 to Soba and were moved verbatim on 2026-09-04: substitute `soba` / `SOBA_*` for `vid2sim-v2` / `VID2SIM_*` in any command you copy. Newest first.
 
+- [2026-09-16](2026-09-16-gpu-validation-run2.md) — GPU validation run 2: TripoSG generative band on the 4090 through the job API (10 objects, 760 s), first model pin (TripoSG commit), HF-stack pins for torch < 2.5
 - [2026-09-16](2026-09-16-gpu-validation-run1.md) — GPU validation run 1 (RunPod 4090): Open3D CUDA PASS, job API real mode + Redis worker done in ~225 s, coacd missing on pod (fixed), 2 pytest failures under review
 - [2026-09-15](2026-09-15-gpu-validation-prep.md) — First GPU run of Waves 0–3 prepared: bootstrap installs every extra, `deploy/runpod/gpu_validate.sh` (S0–S9, recorded outcomes), `publish-images.yml` (GHCR), `docs/gpu-validation.md` guide
 - [2026-09-14](2026-09-14-deployment-runbook.md) — Deployment runbook: `docs/runbook.md` (images + tag scheme, env matrix, compose / two-host / GPU / RunPod serverless deploy, Open3D CUDA + model-pin + CI gates, smoke, cost controls, alerts, backup, rollback, incidents, release flow); compose `worker-gpu` jobs-dir mount fixed; what was executed here vs needs a GPU / pod / key

@@ -138,7 +138,7 @@ cat "$RUN/cuda_check.txt"
 
 # --- S2 pytest (gpu-marked tests included) --------------------------------
 log "S2 pytest (full suite, gpu tests included)"
-$PY -m pytest -q -rs --color=no -p no:cacheprovider > "$RUN/pytest.txt" 2>&1; PT_RC=$?
+$PY -m pytest -q -rfEs --color=no -p no:cacheprovider > "$RUN/pytest.txt" 2>&1; PT_RC=$?
 PT_LINE="$(grep -E 'passed|failed|error' "$RUN/pytest.txt" | tail -1)"
 [ "$PT_RC" = 0 ] && record S2 PASS "$PT_LINE" || record S2 FAIL "$PT_LINE (see pytest.txt)"
 echo "$PT_LINE"
