@@ -377,17 +377,22 @@ image: `SOBA_QUEUE_URL=redis://<host>:6379/0 SOBA_JOBS_DIR=/workspace/out/jobs P
 ## 6. Pre-deploy gates
 
 All three are mandatory before a tag is deployed. G1 and G2 need a GPU
-machine; neither was executed here.
+machine. G1 has been executed on a RunPod RTX 4090 (bootstrap path, not the
+image); G2 has not.
 
-**G1 — Open3D CUDA check (mandatory, GPU host).** The `open3d==0.19.0`
-wheel pip resolves in the pipeline image has **no CUDA module**: the CI
-build log says `Unsupported device "CUDA:0". Set BUILD_CUDA_MODULE=ON`
-(`docs/log/2026-09-11-docker-ci.md`, `docs/model-pins.md`). On a GPU host
-TSDF would then **silently run on CPU** (the build-time check only warns).
-`bootstrap.sh` runs the same `pip install` line and has the same exposure.
+**G1 — Open3D CUDA check (mandatory, GPU host).** **Executed 2026-09-16 on a
+RunPod RTX 4090 via `bootstrap.sh` + `deploy/runpod/gpu_validate.sh` S1: PASS**
+— `open3d CUDA tensor OK on CUDA:0 (TSDF VoxelBlockGrid will run on GPU)` with
+the same pip-resolved `open3d==0.19.0` wheel
+(`docs/log/2026-09-16-gpu-validation-run1.md`). The 2026-09-11 CI message
+`Unsupported device "CUDA:0". Set BUILD_CUDA_MODULE=ON` was what Open3D prints
+when no CUDA device exists on the build runner, not evidence of a CPU-only
+wheel. The gate stays: run it on every new host and on the **image** itself
+(the image path has not been run on a GPU yet; only bootstrap's has).
 
 ```bash
-# NOT executed here: needs a GPU host. Exit 0 = CUDA tensor backend present; exit 1 = CPU fallback.
+# executed 2026-09-16 (pod, bootstrap path): S1 PASS — see docs/gpu-validation.md run 1
+# NOT executed yet on the image: needs a GPU host with Docker. Exit 0 = CUDA tensor backend present; exit 1 = CPU fallback.
 docker run --rm --gpus all soba-pipeline:<tag> check
 #   expect: "open3d CUDA tensor OK on CUDA:0 (TSDF VoxelBlockGrid will run on GPU)"
 # on a pod / the 4060 without Docker, the same check is bootstrap.sh's "Verify host-pipeline stack" block.
@@ -404,20 +409,17 @@ CPU TSDF for a tier-1 / small-scene deployment and say so in the release
 notes. Which wheel or build is a maintainer decision, not something to bake
 in silently.
 
-**G2 — Model pins recorded.** Nothing pins MASt3R, TripoSG, Hunyuan3D 2.1 or
-PatchComplete commits, checkpoint sha256s or HF revisions
-(`docs/model-pins.md`, `STATUS.md`). Before a release tag, run the recovery
-block on the 4060 and, if the volume still exists, on the pod, and paste the
-output into `docs/model-pins.md`:
+**G2 — Model pins recorded.** Nothing pins the MASt3R, TripoSG, Hunyuan3D 2.1
+or PatchComplete commits, checkpoint sha256s or HF revisions **that produced
+BENCHMARK.md** (`docs/model-pins.md`, `STATUS.md`). The only recorded pin is a
+validation pin: the TripoSG commit the 2026-09-16 pod run cloned. Before a
+release tag, run the recovery script on the 4060 and, if the volume still
+exists, on the pod, and paste the output into the paste target at the end of
+`docs/model-pins.md`:
 
 ```bash
-# NOT executed here: needs the RTX 4060 machine (paths ~/soba/...) and the pod volume (/workspace/...).
-for r in mast3r mast3r/dust3r TripoSG PatchComplete; do
-  printf '%-22s %s\n' "$r" "$(git -C ~/soba/$r rev-parse HEAD 2>/dev/null || echo MISSING)"; done
-sha256sum ~/soba/mast3r/checkpoints/*.pth ~/soba/PatchComplete/trained_models/*.pt \
-          ~/soba/models/sam2.1_hiera_large.pt ~/soba/TripoSG/pretrained_weights/TripoSG/*.safetensors
-pip show ultralytics sam2 torch open3d coacd numpy 2>/dev/null | grep -E '^(Name|Version)'
-huggingface-cli scan-cache
+# NOT executed yet: needs the RTX 4060 machine (paths ~/soba/...) and the pod volume (ROOT=/workspace).
+bash deploy/runpod/recover_pins.sh            # prints a paste-ready Markdown block; NOT FOUND for anything absent
 ```
 
 A release whose image and volume do not match the recorded pins cannot

@@ -95,10 +95,27 @@ Without it, objects the gate routes to "generative" are **dropped** and the job
 still completes; the summary says which happened. RMBG-1.4 is licence-gated on
 HuggingFace: `export HF_TOKEN=...` first if the download 401s.
 
-Optional keys (`cp soba/deploy/runpod/env.example /workspace/.env`, edit, then
-`set -a; . /workspace/.env; set +a`): `ANTHROPIC_API_KEY` for the physics VLM
-(lookup table otherwise). Leave `RUNPOD_API_KEY` / endpoint ids **unset** for
-this session; the serverless path is validated separately.
+**Physics: VLM or lookup.** Without `ANTHROPIC_API_KEY` every object gets
+`physics: lookup` (the density table), which is the fallback the paper reports
+on, not its headline physics path (BENCHMARK.md §2: the VLM's material /
+`fill_fraction` estimates). The two 2026-09-16 pod runs were lookup-only. To
+run the VLM, paste the key on the pod, in the shell only, never in a file that
+could be committed:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...        # pod shell only; never in the repo
+# or, kept across pod restarts on the volume (chmod 600, gitignored path):
+# cp soba/deploy/runpod/env.example /workspace/.env && chmod 600 /workspace/.env
+# edit /workspace/.env, then before each run:  set -a; . /workspace/.env; set +a
+```
+
+The validation script confirms which path ran: the `Knobs:` line of
+`summary.md` prints `ANTHROPIC_API_KEY=set` or `unset`, and every object in
+the job's `scene.json` carries `source.physics_origin` (`vlm` or `lookup`,
+also shown as the inspector's "physics" row in the viewer). Cost: one batched
+Claude call per scene (all crops in one request), cents per scene. Leave
+`RUNPOD_API_KEY` / endpoint ids **unset** for this session; the serverless
+path is out of scope.
 
 ### A3. Run the validation
 
@@ -128,7 +145,8 @@ real GPU build; a screenshot is worth keeping.
 
 Paste into the chat, or commit under `docs/validation/<stamp>/`:
 
-- `/workspace/validation/<stamp>/summary.md` (the table)
+- `/workspace/validation/<stamp>/summary.md` (the table; its `Knobs:` line says
+  whether physics ran with the VLM or the lookup table)
 - `cuda_check.txt` (one line decides the TSDF question)
 - `pins.txt` (goes into `docs/model-pins.md`)
 - if S6 failed: `job_real.json` and the tail of `api.log`

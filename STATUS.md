@@ -72,8 +72,15 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   loads its bundle from a CDN in the browser); `tests/api/test_openapi.py` fails when a route and
   the spec disagree. Prose in `docs/api.md`.
 - **Never built or never run.** A real-sensor scene end to end (TUM through detector,
-  SAM2, MASt3R, assembly); live OAK capture; a phone-capture reader; the ScanNet
-  reader (stub); a Phase-12 CLI (`scripts/run_assemble.py` is the driver).
+  SAM2, MASt3R, assembly); live OAK capture; a phone-capture reader (Step 1 building
+  blocks exist on `feat/rgb-video-step1`, PR #16, unmerged and parked); the ScanNet
+  reader (stub); a Phase-12 CLI (`scripts/run_assemble.py` is the driver). **Now run at
+  least once on a GPU (2026-09-16, RunPod 4090):** the job API in real mode, the Redis
+  queue + external worker, TripoSG generation through the job API, Open3D CUDA TSDF,
+  coacd hulls, all on a Replica GT-pose bundle. Still never run on a GPU: MASt3R via
+  the job path (setup script written, unexercised), the RunPod serverless endpoint,
+  the compose `gpu` profile, Hunyuan3D tiers 3–4, VLM physics through the job API
+  (both pod runs were lookup-only: no `ANTHROPIC_API_KEY` set).
 - **Known defects.** The server's empty-scene fallback (`src/api/routes/scene.py`, `scene_json`) omits
   `world`, `ground` and `camera_pose` and fails the frozen schema. The eight
   cross-module disagreements are listed in `CLAUDE.md`. TUM world frames are not
