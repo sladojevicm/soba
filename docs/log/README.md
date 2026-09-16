@@ -4,6 +4,7 @@ Read these only when you need the reasoning behind a decision. The current state
 
 All entries predate the 2026-07-13 rename from vid2sim-v2 to Soba and were moved verbatim on 2026-09-04: substitute `soba` / `SOBA_*` for `vid2sim-v2` / `VID2SIM_*` in any command you copy. Newest first.
 
+- [2026-09-17](2026-09-17-replica-regen-and-date-pins.md) — `sync_bundles.md` rewritten (regenerate `_v2` bundles from Replica v1, no copy source exists); `scripts/reconstruct_pins.py` date-based pins, run and pasted into `docs/model-pins.md`
 - [2026-09-17](2026-09-17-patchcomplete-tier2.md) — PatchComplete is tier 2's completion band (in the paper): setup script + `SETUP_PATCHCOMPLETE=1`; completion method recorded in run_metrics/`/metrics`/job record; `SOBA_COMPLETION_STRICT=1`; the 09-16 runs were Poisson fallbacks
 - [2026-09-17](2026-09-17-key-plumbing-and-docs-reconcile.md) — Prep while the pod runs: `ANTHROPIC_API_KEY` handling in the GPU guide (VLM vs lookup physics, how to confirm), STATUS.md never-run list and runbook §6 gates reconciled with the two pod runs
 - [2026-09-17](2026-09-17-demo-input-and-pins-prep.md) — Prep while the pod runs: `deploy/runpod/sync_bundles.md` (`_v2` orbit bundles 4060 → pod, BUNDLE_DIR run), `deploy/runpod/recover_pins.sh` (one-shot benchmark pin recovery, paste target in docs/model-pins.md)
