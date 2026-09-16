@@ -41,8 +41,12 @@ scipy 1.17.1, torch 2.4.1+cu124, trimesh 5.1.0.
    now pins transformers 4.46.3 / diffusers 0.32.2 / peft 0.14.0 / accelerate 1.2.1
    when torch < 2.5 (`ce13747`); that pinned set is what this run used.
 2. **`gpu_validate.sh` ran pytest with `-rs`**, so `pytest.txt` has the two failures'
-   tracebacks but no `FAILED` summary lines; fixed to `-rfEs`. The two failures are
-   still unidentified (same count as run 1; 503 pass).
+   tracebacks but no `FAILED` summary lines; fixed to `-rfEs`. Identified from the tracebacks: `test_mast3r_empty_bundle_returns_no_poses`
+   (`ModuleNotFoundError: dust3r`, no MASt3R checkout on the pod) and
+   `test_make_backend_reads_config_model` (`anthropic` SDK not installed, `make_backend`
+   returns None). Both environmental, the same two CI excludes (`docs/ci-probe.md`).
+   Closed in bootstrap: `anthropic` installed with the extras; `SETUP_MAST3R=1` runs the
+   new `deploy/runpod/setup_mast3r.sh` (clone with submodules, metric checkpoint + sha256).
 3. Redis path not repeated this run (`WITH_REDIS` unset); it passed in run 1.
 
 ## Not run

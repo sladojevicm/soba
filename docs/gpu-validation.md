@@ -81,7 +81,10 @@ REPO_BRANCH=develop bash soba/deploy/runpod/bootstrap.sh
 Bootstrap ends with the same Open3D CUDA check the script repeats as S1; if it
 prints the CUDA warning here, you already have the answer to the wheel question.
 
-Optional, adds ~10 min and ~10 GB: the generative band.
+Optional, adds ~10 min and ~10 GB: the generative band. Optional too, needed only for real
+sensor bundles (TUM / OAK / phone) and the 2 gpu-marked tests: `SETUP_MAST3R=1` (clones
+naver/mast3r with submodules and fetches the 2.6 GB metric checkpoint; then
+`export SOBA_MAST3R_HOME=/workspace/mast3r`).
 
 ```bash
 SETUP_TRIPOSG=1 REPO_BRANCH=develop bash soba/deploy/runpod/bootstrap.sh   # TripoSG + RMBG weights
