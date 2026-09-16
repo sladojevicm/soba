@@ -30,9 +30,25 @@ fi
 log "Install TripoSG inference deps (NOT torch — keep the pod's CUDA build)"
 # Only what scripts/inference_triposg.py + the pipeline import. torch/torchvision
 # stay as the template shipped them.
-python3 -m pip install -q \
-  "diffusers>=0.30" transformers accelerate huggingface_hub safetensors \
-  einops omegaconf peft trimesh pymeshlab scikit-image opencv-python-headless \
+#
+# The HF stack is pinned to the pod's torch: current transformers requires
+# torch >= 2.5 and, on an older torch, disables itself ("PyTorch was not
+# found"), which makes `import diffusers` die with "name 'nn' is not defined"
+# (observed on the RunPod "PyTorch 2.4.0" template, 2026-09-16). Override with
+# TRIPOSG_HF_PINS="..." if you know better.
+TORCH_VER=$(python3 -c "import torch; v = torch.__version__.split('+')[0].split('.'); print(int(v[0]) * 100 + int(v[1]))")
+if [ -z "${TRIPOSG_HF_PINS:-}" ]; then
+  if [ "$TORCH_VER" -lt 205 ]; then
+    # last HF releases built and tested against torch 2.4 (Dec 2024 line)
+    TRIPOSG_HF_PINS="transformers==4.46.3 diffusers==0.32.2 peft==0.14.0 accelerate==1.2.1"
+    echo "torch $(python3 -c 'import torch; print(torch.__version__)') < 2.5 -> pinning $TRIPOSG_HF_PINS"
+  else
+    TRIPOSG_HF_PINS="diffusers>=0.30 transformers accelerate peft"
+  fi
+fi
+# shellcheck disable=SC2086
+python3 -m pip install -q $TRIPOSG_HF_PINS huggingface_hub safetensors \
+  einops omegaconf trimesh pymeshlab scikit-image opencv-python-headless \
   jaxtyping typeguard   # TripoSG type-annotation deps (pure python)
 
 # diso = TripoSG's differentiable iso-surface extraction (its final mesh step).
