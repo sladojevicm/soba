@@ -12,7 +12,7 @@
 #     bash bootstrap.sh
 #
 # Override any of these via env before running:
-#     REPO_URL REPO_BRANCH WORKDIR REPO_DIR POINTR_HOME SETUP_POINTR
+#     REPO_URL REPO_BRANCH WORKDIR REPO_DIR POINTR_HOME SETUP_POINTR SETUP_MAST3R SETUP_TRIPOSG
 # See deploy/runpod/README.md for the full rental + run guide.
 # ---------------------------------------------------------------------------
 set -euo pipefail
@@ -26,6 +26,8 @@ SETUP_POINTR="${SETUP_POINTR:-0}"   # 1 = also clone PoinTr (optional middle ban
 SETUP_COMPC="${SETUP_COMPC:-0}"     # 1 = also build ComPC (training-free, preserves
                                     #     observed geometry; isolated env, >=16GB GPU)
 SETUP_TRIPOSG="${SETUP_TRIPOSG:-0}" # 1 = also set up local TripoSG image-to-3D
+SETUP_MAST3R="${SETUP_MAST3R:-0}"   # 1 = also clone MASt3R (+dust3r) and fetch the metric
+                                    #     checkpoint (poses for tiers 2-4 on real sensor data)
                                     #     (generative band; clones repo + weights)
 
 log(){ printf '\n\033[1;36m== %s ==\033[0m\n' "$*"; }
@@ -71,7 +73,7 @@ python3 -m pip install --upgrade pip -q
 # pip cannot uninstall, and open3d -> flask needs a newer one: "Cannot uninstall
 # blinker 1.4". Reinstalling it over the top first avoids the error.
 python3 -m pip install -q --ignore-installed blinker
-python3 -m pip install -e "${REPO_DIR}[recon,serve,dev,api,telemetry,worker]" -q
+python3 -m pip install -e "${REPO_DIR}[recon,serve,dev,api,telemetry,worker]" anthropic -q   # anthropic: the physics VLM backend (tests/scene/test_vlm_claude.py)
 
 log "Verify host-pipeline stack"
 python3 - <<'PY'
@@ -115,6 +117,17 @@ if [ "$SETUP_COMPC" = "1" ]; then
     echo "ComPC env built. Export SOBA_COMPC_CMD (printed above) to activate."
   else
     echo "WARNING: ComPC setup failed — host pipeline is unaffected. See output above." >&2
+  fi
+fi
+
+if [ "$SETUP_MAST3R" = "1" ]; then
+  log "Optional: MASt3R poses (tiers 2-4 on real sensor bundles)"
+  # Non-fatal: Replica GT-pose bundles never need it.
+  if MAST3R_HOME="${MAST3R_HOME:-$WORKDIR/mast3r}" \
+       bash "$REPO_DIR/deploy/runpod/setup_mast3r.sh"; then
+    echo "MASt3R ready. export SOBA_MAST3R_HOME=${MAST3R_HOME:-$WORKDIR/mast3r}"
+  else
+    echo "WARNING: MASt3R setup failed — host pipeline is unaffected. See above." >&2
   fi
 fi
 
