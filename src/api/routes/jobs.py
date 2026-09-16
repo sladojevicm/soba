@@ -14,6 +14,7 @@ thread) so a bad archive is answered with a 4xx instead of a failed job.
 
 from __future__ import annotations
 
+import json
 import secrets
 import shutil
 from dataclasses import dataclass, field
@@ -153,10 +154,33 @@ def jobs_routes(ctx: JobsContext) -> list[Route]:
     async def list_jobs(request: Request):
         return JSONResponse({"jobs": [r.to_dict() for r in ctx.store.list()]})
 
+    def _run_summary(jid: str) -> dict | None:
+        """What the real worker's run actually did, from its run_metrics.json:
+        gate/completion counts and drops. `completion` names the learned
+        completer that ran per completion-band object; any `poisson_*` key is
+        a fallback, so a job cannot claim tier 2 while silently running Poisson."""
+        path = ctx.paths(jid).scene_dir / "run_metrics.json"
+        if not path.is_file():
+            return None
+        try:
+            d = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return None
+        return {"status": d.get("run", {}).get("status"),
+                "gate": d.get("gate", {}).get("counts"),
+                "completion": d.get("completion", {}).get("counts", {}),
+                "drops": d.get("drops", {})}
+
     async def get_job(request: Request):
         jid = request.path_params["job_id"]
         rec = ctx.get(jid)
-        return JSONResponse(rec.to_dict()) if rec else _unknown(jid)
+        if rec is None:
+            return _unknown(jid)
+        body = rec.to_dict()
+        summary = _run_summary(jid)
+        if summary is not None:
+            body["run"] = summary
+        return JSONResponse(body)
 
     async def delete_job(request: Request):
         jid = request.path_params["job_id"]

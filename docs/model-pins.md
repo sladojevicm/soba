@@ -99,6 +99,24 @@ with no record that the benchmark used a different one.
 | sha256 | **NOT PINNED IN REPO** | — |
 | Recover | on the 4060: `git -C ~/soba/PatchComplete remote -v; git -C ~/soba/PatchComplete rev-parse HEAD; sha256sum ~/soba/PatchComplete/trained_models/*.pt` | |
 
+**Permanent limitation (2026-09-17).** PatchComplete is the completion band of BENCHMARK.md
+§3 tier 2, §4 "forced completion" and tiers 3-4 (`config/pipeline.yaml` `completion_model:
+patchcomplete`, `generative.make_engine` default). Upstream is `yuchenrao/PatchComplete`
+(NeurIPS'22); its weights are the authors' `trained_models.zip` on a TUM server
+(`kaldir.vc.in.tum.de/yrao/trained_models.zip`, 1.9 GB) whose README states the models were
+re-run after the paper. A file on a plain web server has no revision history, so:
+
+| Item | Status |
+|---|---|
+| code commit | **reconstructable by date** (`scripts/reconstruct_pins.py`): the default-branch commit as of 2026-07-05/06 |
+| `trained_models/*.pt` sha256 | **unpinnable / provenance-unverifiable**: the copy behind BENCHMARK.md is gone with the volume; today's download may or may not be byte-identical |
+| what runs from now on | `deploy/runpod/setup_patchcomplete.sh` records the zip's and each `.pt`'s sha256 in `trained_models/SHA256SUMS`; paste them below as the *validation* pin |
+
+Consequence: the completion band of the benchmark is reproducible "up to the authors'
+current zip", and nothing in the repo can tighten that. Also new on 2026-09-17: a scene
+records which completer actually ran (`run_metrics.json` `completion.counts`); the two
+2026-09-16 pod runs were Poisson fallbacks, not PatchComplete.
+
 ### PoinTr, ComPC (optional completion backends, not used by the benchmark)
 
 | Model | Repo | Pins | benchmark? |

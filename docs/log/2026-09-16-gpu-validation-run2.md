@@ -49,6 +49,13 @@ scipy 1.17.1, torch 2.4.1+cu124, trimesh 5.1.0.
    new `deploy/runpod/setup_mast3r.sh` (clone with submodules, metric checkpoint + sha256).
 3. Redis path not repeated this run (`WITH_REDIS` unset); it passed in run 1.
 
+## Correction (2026-09-17)
+
+The "4 completion objects" in runs 1 and 2 were **Poisson fallbacks**: no PatchComplete
+was installed, `LocalGpuEngine.complete` logged a warning and returned None, and the
+assembler repaired with Poisson. Nothing in the job record, `run_metrics.json` or
+`/metrics` said so. Closed by `docs/log/2026-09-17-patchcomplete-tier2.md`.
+
 ## Not run
 
 RunPod serverless endpoint; compose `gpu` profile; Hunyuan3D (tiers 3–4); any

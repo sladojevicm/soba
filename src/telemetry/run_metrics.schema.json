@@ -5,23 +5,69 @@
   "description": "Per-run telemetry written by scripts/run_assemble.py to out/<scene>/run_metrics.json (src/telemetry). Gate metrics are recorded exactly as confidence.gate_object returned them, never recomputed.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "started_at", "finished_at", "stages", "gate", "drops", "remote"],
+  "required": [
+    "schema",
+    "started_at",
+    "finished_at",
+    "stages",
+    "gate",
+    "drops",
+    "remote"
+  ],
   "properties": {
-    "schema": { "const": 1 },
-    "started_at": { "type": "string", "format": "date-time" },
-    "finished_at": { "type": "string", "format": "date-time" },
+    "schema": {
+      "const": 1
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finished_at": {
+      "type": "string",
+      "format": "date-time"
+    },
     "run": {
       "type": "object",
       "description": "What was run: bundle, out, tier, force_strategy, gate_only and the outcome.",
-      "required": ["status"],
+      "required": [
+        "status"
+      ],
       "properties": {
-        "status": { "enum": ["running", "ok", "failed"] },
-        "error": { "type": ["string", "null"] },
-        "bundle": { "type": "string" },
-        "out": { "type": "string" },
-        "tier": { "type": "integer", "minimum": 1, "maximum": 4 },
-        "force_strategy": { "enum": ["tsdf", "completion", "generative", null] },
-        "gate_only": { "type": "boolean" }
+        "status": {
+          "enum": [
+            "running",
+            "ok",
+            "failed"
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bundle": {
+          "type": "string"
+        },
+        "out": {
+          "type": "string"
+        },
+        "tier": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4
+        },
+        "force_strategy": {
+          "enum": [
+            "tsdf",
+            "completion",
+            "generative",
+            null
+          ]
+        },
+        "gate_only": {
+          "type": "boolean"
+        }
       },
       "additionalProperties": true
     },
@@ -30,46 +76,112 @@
       "description": "Wall time per stage name, summed over its invocations.",
       "additionalProperties": {
         "type": "object",
-        "required": ["seconds", "count"],
+        "required": [
+          "seconds",
+          "count"
+        ],
         "additionalProperties": false,
         "properties": {
-          "seconds": { "type": "number", "minimum": 0 },
-          "count": { "type": "integer", "minimum": 0 }
+          "seconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          }
         }
       }
     },
     "gate": {
       "type": "object",
-      "required": ["counts", "per_object"],
+      "required": [
+        "counts",
+        "per_object"
+      ],
       "additionalProperties": false,
       "properties": {
         "counts": {
           "type": "object",
           "description": "Gate decisions (keep = tsdf, complete = completion, regenerate = generative).",
-          "required": ["tsdf", "completion", "generative"],
-          "additionalProperties": { "type": "integer", "minimum": 0 },
+          "required": [
+            "tsdf",
+            "completion",
+            "generative"
+          ],
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          },
           "properties": {
-            "tsdf": { "type": "integer", "minimum": 0 },
-            "completion": { "type": "integer", "minimum": 0 },
-            "generative": { "type": "integer", "minimum": 0 }
+            "tsdf": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "completion": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "generative": {
+              "type": "integer",
+              "minimum": 0
+            }
           }
         },
         "per_object": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["track_id", "class", "tier", "strategy",
-                         "angular_coverage_deg", "completeness_ratio"],
+            "required": [
+              "track_id",
+              "class",
+              "tier",
+              "strategy",
+              "angular_coverage_deg",
+              "completeness_ratio"
+            ],
             "additionalProperties": false,
             "properties": {
-              "track_id": { "type": "integer" },
-              "class": { "type": "string" },
-              "tier": { "type": "integer", "minimum": 1, "maximum": 4 },
-              "strategy": { "enum": ["tsdf", "completion", "generative"] },
-              "angular_coverage_deg": { "type": ["number", "null"] },
-              "completeness_ratio": { "type": ["number", "null"] },
-              "routed": { "enum": ["tsdf", "completion", "generative"] },
-              "cached": { "type": "boolean" }
+              "track_id": {
+                "type": "integer"
+              },
+              "class": {
+                "type": "string"
+              },
+              "tier": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4
+              },
+              "strategy": {
+                "enum": [
+                  "tsdf",
+                  "completion",
+                  "generative"
+                ]
+              },
+              "angular_coverage_deg": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "completeness_ratio": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "routed": {
+                "enum": [
+                  "tsdf",
+                  "completion",
+                  "generative"
+                ]
+              },
+              "cached": {
+                "type": "boolean"
+              }
             }
           }
         }
@@ -78,26 +190,116 @@
     "drops": {
       "type": "object",
       "description": "Objects dropped from the scene, by reason.",
-      "additionalProperties": { "type": "integer", "minimum": 0 }
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
     },
     "remote": {
       "type": "object",
-      "required": ["calls", "seconds", "est_usd", "by_kind"],
+      "required": [
+        "calls",
+        "seconds",
+        "est_usd",
+        "by_kind"
+      ],
       "additionalProperties": false,
       "properties": {
-        "calls": { "type": "integer", "minimum": 0 },
-        "seconds": { "type": "number", "minimum": 0 },
-        "est_usd": { "type": ["number", "null"] },
+        "calls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "seconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "est_usd": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "by_kind": {
           "type": "object",
           "additionalProperties": {
             "type": "object",
-            "required": ["calls", "seconds", "est_usd"],
+            "required": [
+              "calls",
+              "seconds",
+              "est_usd"
+            ],
             "additionalProperties": false,
             "properties": {
-              "calls": { "type": "integer", "minimum": 0 },
-              "seconds": { "type": "number", "minimum": 0 },
-              "est_usd": { "type": ["number", "null"] }
+              "calls": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "seconds": {
+                "type": "number",
+                "minimum": 0
+              },
+              "est_usd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "completion": {
+      "type": "object",
+      "required": [
+        "counts",
+        "per_object"
+      ],
+      "additionalProperties": false,
+      "description": "Which completion actually ran per completion-band object. Any method starting with 'poisson' is a fallback, not the configured learned completer.",
+      "properties": {
+        "counts": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "per_object": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "track_id",
+              "class",
+              "method",
+              "fallback"
+            ],
+            "properties": {
+              "track_id": {
+                "type": "integer"
+              },
+              "class": {
+                "type": "string"
+              },
+              "method": {
+                "type": "string"
+              },
+              "engine": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "fallback": {
+                "type": "boolean"
+              }
             }
           }
         }

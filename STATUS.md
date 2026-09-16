@@ -107,7 +107,11 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   `docs/log/2026-09-16-gpu-validation-run1.md`. **Run 2** the same day with TripoSG set up
   (`docs/log/2026-09-16-gpu-validation-run2.md`): 10 objects (4 completion + 6 generative,
   4 declined by the engine) in 760 s, coacd hull colliders, TripoSG commit recorded in
-  `docs/model-pins.md`. Not yet run on a GPU: the RunPod serverless endpoint, the compose
+  `docs/model-pins.md`. **Both runs' "completion" objects were Poisson fallbacks**: no
+  PatchComplete was set up, and until 2026-09-17 nothing but a log line said so. Now
+  `run_metrics.json` `completion.counts`, `soba_completion_total` and the job record's
+  `run.completion` name the completer that ran; `SOBA_COMPLETION_STRICT=1` fails a run on
+  any fallback; `SETUP_PATCHCOMPLETE=1` installs it (`deploy/runpod/setup_patchcomplete.sh`). Not yet run on a GPU: the RunPod serverless endpoint, the compose
   `gpu` profile, Hunyuan3D (tiers 3–4). Two pytest failures on the pod still unidentified.
 - **Machines.** This WSL box has no GPU and no data, and its `.venv` lacks the
   `recon` extra: `pytest` here gives 125 pass and 49 fail or error, every one a
@@ -129,6 +133,13 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   repo, so BENCHMARK.md numbers are not reproducible from the repo alone. Recovery
   commands for the GPU machine and the pod volume are in `docs/model-pins.md`. The
   2026-09-16 pod run recorded library versions only (fresh volume, no model checkouts).
+- **PatchComplete weights are permanently unpinnable.** The completion band at tiers 2-4
+  (BENCHMARK.md §3 tier 2, §4 "forced completion", tiers 3-4) ran the authors' pretrained
+  `trained_models.zip` from a university server with no revision history; the README says
+  those models were re-run after the paper. The code commit can be reconstructed by date,
+  the weights cannot: whether today's zip equals July's is unknowable. The sha256 that
+  `setup_patchcomplete.sh` records pins what runs from now on, not what produced the paper.
+  This is a known, permanent limitation, not a TODO.
 - ~~`coacd` missing from the extras~~ — fixed 2026-09-16: it is in the `recon` extra now.
   Before that the first pod run had no coacd (bootstrap installs extras only), so its
   scenes shipped single-hull colliders.
