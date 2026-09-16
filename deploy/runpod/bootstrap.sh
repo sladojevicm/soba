@@ -65,7 +65,12 @@ else
 fi
 
 log "Install soba (recon + serve + dev + api + telemetry + worker extras)"
+export PIP_ROOT_USER_ACTION=ignore   # pods run as root; the warning is noise here
 python3 -m pip install --upgrade pip -q
+# Ubuntu templates ship a distutils-installed blinker 1.4 (python3-blinker) that
+# pip cannot uninstall, and open3d -> flask needs a newer one: "Cannot uninstall
+# blinker 1.4". Reinstalling it over the top first avoids the error.
+python3 -m pip install -q --ignore-installed blinker
 python3 -m pip install -e "${REPO_DIR}[recon,serve,dev,api,telemetry,worker]" -q
 
 log "Verify host-pipeline stack"
