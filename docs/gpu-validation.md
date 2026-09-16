@@ -108,11 +108,14 @@ bash deploy/runpod/gpu_validate.sh                         # smoke size, ~15-30 
 # variants:
 WITH_REDIS=1 bash deploy/runpod/gpu_validate.sh            # + the external queue worker (S7)
 KEEP=1 bash deploy/runpod/gpu_validate.sh                  # leave the API up for the viewer
-STRIDE=1 MAX_FRAMES=2000 bash deploy/runpod/gpu_validate.sh   # dense build (30-60 min more)
+BUNDLE_DIR=bundles/office_3_dense STRIDE=1 MAX_FRAMES=2000 bash deploy/runpod/gpu_validate.sh   # dense build, own dir (30-60 min more)
 ```
 
 Everything lands in `/workspace/validation/<stamp>/`. The script prints the
-summary table at the end.
+summary table at the end. `SCENE` is the Replica scene name (the HuggingFace download);
+an existing bundle dir is reused, so a second density needs its own `BUNDLE_DIR`. A
+`KEEP=1` API must be stopped before the next run (`pkill -f '[s]cripts/serve.py'`), or
+S5 refuses to start and says so.
 
 ### A4. Look at the viewer
 

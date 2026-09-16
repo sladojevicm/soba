@@ -20,8 +20,13 @@
 #   cd /workspace/soba && bash deploy/runpod/gpu_validate.sh
 # Knobs (env):
 #   SCENE=office_3  STRIDE=20  MAX_FRAMES=100   smoke-size Replica bundle (as
-#                                               run_pipeline.sh); STRIDE=1
-#                                               MAX_FRAMES=2000 = the dense build
+#                                               run_pipeline.sh). SCENE is the
+#                                               Replica scene NAME (HF download).
+#   BUNDLE_DIR=bundles/$SCENE                   where the bundle lives; an existing
+#                                               one is REUSED, so a dense build
+#                                               needs its own dir:
+#                                               BUNDLE_DIR=bundles/office_3_dense
+#                                               STRIDE=1 MAX_FRAMES=2000
 #   TIER=2          gate tier for the job
 #   WITH_REDIS=1    also validate the external queue worker (apt installs redis)
 #   KEEP=1          leave the API (and worker) running for the browser viewer
@@ -39,6 +44,7 @@ cd "$REPO"
 export PYTHONPATH="$REPO/src"
 PY="${PYTHON:-python3}"
 SCENE="${SCENE:-office_3}"; STRIDE="${STRIDE:-20}"; MAX_FRAMES="${MAX_FRAMES:-100}"
+BUNDLE_DIR="${BUNDLE_DIR:-bundles/$SCENE}"
 TIER="${TIER:-2}"; WITH_REDIS="${WITH_REDIS:-0}"; KEEP="${KEEP:-0}"; PORT="${PORT:-8000}"
 JOB_TIMEOUT="${JOB_TIMEOUT:-7200}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -72,7 +78,7 @@ stop_api(){ [ -n "$API_PID" ] && { kill "$API_PID" 2>/dev/null; wait "$API_PID" 
 
 submit_job(){ # label -> sets JID, JOB_RC
   local label="$1"
-  $PY scripts/submit_job.py --bundle "bundles/$SCENE" --tier "$TIER" \
+  $PY scripts/submit_job.py --bundle "$BUNDLE_DIR" --tier "$TIER" \
       --server "$API_URL" --timeout "$JOB_TIMEOUT" > "$RUN/job_$label.log" 2>&1
   JOB_RC=$?
   JID="$(grep -oE '\b[0-9a-f]{16}\b' "$RUN/job_$label.log" | head -1)"
@@ -144,14 +150,19 @@ PT_LINE="$(grep -E 'passed|failed|error' "$RUN/pytest.txt" | tail -1)"
 echo "$PT_LINE"
 
 # --- S3 Replica bundle -----------------------------------------------------
-log "S3 bundle bundles/$SCENE (stride=$STRIDE, max-frames=$MAX_FRAMES)"
-if [ -f "bundles/$SCENE/manifest.json" ]; then
-  record S3 PASS "reused existing bundles/$SCENE ($(ls "bundles/$SCENE/frames" | wc -l) frames)"
+log "S3 bundle $BUNDLE_DIR (scene $SCENE, stride=$STRIDE, max-frames=$MAX_FRAMES)"
+if [ -f "$BUNDLE_DIR/manifest.json" ]; then
+  record S3 PASS "reused existing $BUNDLE_DIR ($(ls "$BUNDLE_DIR/frames" | wc -l) frames)"
 else
+  # build_replica_bundles.py writes <out>/<scene>; stage into a temp dir so a
+  # custom BUNDLE_DIR (e.g. the dense build next to the smoke one) gets its own copy.
+  STAGE="$(mktemp -d "$REPO/bundles/.build_XXXX")"
   if $PY scripts/build_replica_bundles.py --scenes "$SCENE" --stride "$STRIDE" \
-        --max-frames "$MAX_FRAMES" --out bundles > "$RUN/bundle.log" 2>&1; then
-    record S3 PASS "built ($(ls "bundles/$SCENE/frames" | wc -l) frames)"
-  else record S3 FAIL "build_replica_bundles.py exit $? (see bundle.log)"; fi
+        --max-frames "$MAX_FRAMES" --out "$STAGE" > "$RUN/bundle.log" 2>&1 \
+     && [ -f "$STAGE/$SCENE/manifest.json" ]; then
+    mkdir -p "$(dirname "$BUNDLE_DIR")" && mv "$STAGE/$SCENE" "$BUNDLE_DIR" && rmdir "$STAGE" 2>/dev/null
+    record S3 PASS "built $BUNDLE_DIR ($(ls "$BUNDLE_DIR/frames" | wc -l) frames)"
+  else record S3 FAIL "build_replica_bundles.py failed for scene '$SCENE' (see bundle.log; SCENE must be a Replica scene name, e.g. office_3)"; fi
 fi
 
 # --- S4 fixture scene for the legacy root routes -------------------------
@@ -163,12 +174,14 @@ if $PY scripts/make_test_scene.py --out out/scene_test > "$RUN/fixture.log" 2>&1
 log "S5 API (in-process worker, REAL mode) on :$PORT"
 export SOBA_WORKER_MODE=real SOBA_JOBS_DIR="$JOBS_DIR"
 unset SOBA_QUEUE_URL; export SOBA_WORKER_INPROC=1
-if start_api; then record S5 PASS "GET /scene.json 200; open-mode warning: $(grep -c 'SOBA_API_KEYS is not set' "$RUN/api.log")"
+if curl -sf "$API_URL/scene.json" >/dev/null 2>&1; then
+  record S5 FAIL "port $PORT is already serving (an API left running by an earlier KEEP=1 run?). Stop it first: pkill -f '[s]cripts/serve.py'"
+elif start_api; then record S5 PASS "GET /scene.json 200; open-mode warning: $(grep -c 'SOBA_API_KEYS is not set' "$RUN/api.log")"
 else record S5 FAIL "API did not answer within 60 s (see api.log)"; tail -20 "$RUN/api.log"; fi
 
 # --- S6 real job through the job API --------------------------------------
-log "S6 job: bundles/$SCENE tier $TIER -> run_assemble.py on this GPU"
-if [ -f "bundles/$SCENE/manifest.json" ] && [ -n "$API_PID" ]; then
+log "S6 job: $BUNDLE_DIR tier $TIER -> run_assemble.py on this GPU"
+if [ -f "$BUNDLE_DIR/manifest.json" ] && [ -n "$API_PID" ]; then
   submit_job real
   if [ "$JOB_RC" = 0 ]; then record S6 PASS "job $JID done; $(job_detail real)"
   else record S6 FAIL "job ${JID:-?} exit $JOB_RC; error: $($PY -c "import json,sys;print(json.load(open(sys.argv[1])).get('error'))" "$RUN/job_real.json" 2>/dev/null | cut -c1-200)"; fi
@@ -230,7 +243,7 @@ log "S9 summary -> $SUMMARY"
   echo "# GPU validation $STAMP"
   echo
   echo "Pod: $(hostname); $(head -1 "$RUN/env.txt"); $(sed -n 2p "$RUN/env.txt")"
-  echo "Knobs: SCENE=$SCENE STRIDE=$STRIDE MAX_FRAMES=$MAX_FRAMES TIER=$TIER WITH_REDIS=$WITH_REDIS TRIPOSG=${SOBA_TRIPOSG_HOME:-unset} ANTHROPIC_API_KEY=$([ -n "${ANTHROPIC_API_KEY:-}" ] && echo set || echo unset)"
+  echo "Knobs: SCENE=$SCENE BUNDLE_DIR=$BUNDLE_DIR STRIDE=$STRIDE MAX_FRAMES=$MAX_FRAMES TIER=$TIER WITH_REDIS=$WITH_REDIS TRIPOSG=${SOBA_TRIPOSG_HOME:-unset} ANTHROPIC_API_KEY=$([ -n "${ANTHROPIC_API_KEY:-}" ] && echo set || echo unset)"
   echo
   echo "| step | result | detail |"; echo "|---|---|---|"
   printf '%s\n' "${RESULTS[@]}"
