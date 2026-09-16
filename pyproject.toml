@@ -55,6 +55,7 @@ recon = [
     "scipy>=1.11",          # fusion.py field blend; patchcomplete cKDTree
     "scikit-image>=0.22",   # marching-cubes (fusion + patchcomplete mesh extract)
     "pymeshfix>=0.16",      # Option D geometric watertight repair (keep-band)
+    "coacd>=1.0",           # convex decomposition behind every hull collider (scene/decomp.py falls back to ONE hull without it)
 ]
 
 [tool.setuptools.packages.find]

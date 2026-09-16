@@ -90,13 +90,22 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
 - **Packaging.** `docker/` (API, pipeline, frontend-check images), compose and
   `.github/workflows/ci.yml` exist (2026-09-11); the frontend bundle is served by
   the API image, CDN offload is deferred until there is real traffic.
+- **GPU validation run 1 (2026-09-16, RunPod RTX 4090, `docs/gpu-validation.md`).** First real-GPU
+  pass over the service layer: Open3D CUDA tensor backend **PASS** on the pod's pip wheel
+  (0.19.0), so TSDF runs on the GPU; a Replica `office_3` smoke bundle (100 frames) went
+  through `POST /api/jobs` → real worker → done in 225 s, and again through Redis +
+  `python -m orchestration.worker` in 227 s (4 objects; gate completion=4 / generative=10,
+  all 10 generative dropped as `engine_declined` because TripoSG was not set up); 503 of
+  505 tests pass on the pod (2 failures under review). Full record:
+  `docs/log/2026-09-16-gpu-validation-run1.md`. Not yet run on a GPU: the generative
+  band (TripoSG), the RunPod serverless endpoint, the compose `gpu` profile.
 - **Machines.** This WSL box has no GPU and no data, and its `.venv` lacks the
   `recon` extra: `pytest` here gives 125 pass and 49 fail or error, every one a
   missing-`open3d` import (last full run: 241 pass, 2026-07-06, GPU machine). Data and builds: `~/soba/data` on the
   RTX 4060 machine; `/workspace` on the RunPod pod holds tier 3/4 outputs, and the
   tier 1/2 output folders may be gone with the old pod. The pod bills hourly.
 
-## Known limitations (2026-09-12)
+## Known limitations (2026-09-12, updated 2026-09-16)
 
 - **Bearer-only auth blocks the browser viewer once `SOBA_API_KEYS` is set.** A browser
   cannot attach an `Authorization` header to `/jobs/{id}/`, so the viewer needs a
@@ -108,9 +117,11 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
 - **No model version pins exist for MASt3R, TripoSG, Hunyuan3D or PatchComplete.**
   No git commit, checkpoint sha256 or HuggingFace revision is recorded anywhere in the
   repo, so BENCHMARK.md numbers are not reproducible from the repo alone. Recovery
-  commands for the GPU machine and the pod volume are in `docs/model-pins.md`.
-- **`coacd` is missing from the `pyproject.toml` extras** although every hull collider
-  in BENCHMARK.md depends on it; the pipeline image installs it explicitly.
+  commands for the GPU machine and the pod volume are in `docs/model-pins.md`. The
+  2026-09-16 pod run recorded library versions only (fresh volume, no model checkouts).
+- ~~`coacd` missing from the extras~~ — fixed 2026-09-16: it is in the `recon` extra now.
+  Before that the first pod run had no coacd (bootstrap installs extras only), so its
+  scenes shipped single-hull colliders.
 
 ## Durable gotchas (still true)
 

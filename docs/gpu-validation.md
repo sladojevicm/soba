@@ -165,3 +165,13 @@ Path A validates the code; Path B additionally validates the **image**
 | S6 FAIL | Read `job_real.json` `error` (the worker stores the subprocess log tail). Most likely candidates: a missing model checkout path, or the `run_assemble.py` CLI drifting from `worker_local.py`'s call. Fix on `develop`, rerun. |
 | S7 PASS | The Redis queue + external worker path is proven end to end; the compose `gpu` profile only adds Docker on top |
 | S8 non-empty | Paste into `docs/model-pins.md`; for MASt3R / TripoSG / Hunyuan3D these are the first pins the repo has ever had |
+
+## Run 1 — 2026-09-16 (RTX 4090, EU-RO-1)
+
+S1 PASS (Open3D CUDA on the pip wheel), S3–S7 PASS (job API real mode 225 s, Redis
+worker 227 s, 4 objects, generative band dropped: TripoSG not set up), S2 two failures
+under review, S8 library versions only. Findings and interpretation:
+`docs/log/2026-09-16-gpu-validation-run1.md`. Fixed from it: `blinker` pre-install in
+bootstrap, `coacd` added to the `recon` extra. Next run: `SETUP_TRIPOSG=1` bootstrap,
+then the same script.
+

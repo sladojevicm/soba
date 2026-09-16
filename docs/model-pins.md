@@ -117,6 +117,7 @@ with no record that the benchmark used a different one.
 | CoACD | "1.0" in the `BENCHMARK.md` header, `1.0.11` in `docs/log/2026-06-27` | **not in any extra** (single-hull fallback without it); installed unpinned by `docker/pipeline.Dockerfile` |
 | opencv / trimesh / scipy / scikit-image / pymeshfix | not recorded for the benchmark | lower bounds only (`pyproject.toml`) |
 | anthropic SDK | Claude column is agent-preview, no SDK version recorded | not in any extra |
+| **Observed on the RunPod pod, 2026-09-16** (`docs/log/2026-09-16-gpu-validation-run1.md`) | Python 3.11.10 · torch 2.4.1+cu124 (RunPod "PyTorch 2.4.0" template) · open3d 0.19.0 **with a working CUDA tensor backend** · numpy 2.4.6 · scipy 1.17.1 · trimesh 5.1.0 · coacd **absent** (bootstrap gap, fixed the same day) | validation run, not a benchmark; no model checkouts on the fresh volume |
 | Benchmark commit | `363dc52` on `fix/phase3-pose-and-eval` (2026-07-05); §3 tiers 3–4 built 2026-07-06, §4 on 2026-09-05 | `BENCHMARK.md` header |
 
 ## How to close the gaps
