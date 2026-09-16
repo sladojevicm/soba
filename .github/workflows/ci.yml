@@ -29,7 +29,7 @@ jobs:
       - name: System libraries (open3d + opencv need libGL/glib, as bootstrap.sh)
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq libgl1 libglib2.0-0
+          sudo apt-get install -y -qq libgl1 libglib2.0-0 libegl1   # libegl1: open3d >= 0.20 wheels link libEGL
       - name: Install soba with every extra (+ anthropic for the VLM backend test)
         # api (job API), telemetry (/metrics), worker (Redis queue) are optional
         # at runtime but their tests import them, so CI installs all of them.

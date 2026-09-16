@@ -73,7 +73,7 @@ ENV PYTHONUNBUFFERED=1 \
 # image's Ubuntu release, so they are not pinned here (hadolint DL3008).
 # hadolint ignore=DL3008
 RUN apt-get update -qq \
-    && apt-get install -y -qq --no-install-recommends git libgl1 libglib2.0-0 \
+    && apt-get install -y -qq --no-install-recommends git libgl1 libglib2.0-0 libegl1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

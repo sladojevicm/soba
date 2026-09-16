@@ -48,7 +48,7 @@ telemetry = [
 # Heavy, host-side reconstruction deps (CUDA recommended for TSDF). Kept
 # optional so the contract + data-input layers install and test without them.
 recon = [
-    "open3d>=0.18",
+    "open3d>=0.18,<0.20",   # 0.19 is the benchmark stack (BENCHMARK.md header); 0.20.0 (2026-09-16) changed deps and needs libEGL — untested here
     "opencv-python>=4.9",
     "trimesh>=4.0",
     "pillow>=10.0",

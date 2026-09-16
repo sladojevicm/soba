@@ -42,7 +42,7 @@ fi
 log "System packages (git + libGL/glib for open3d & opencv)"
 if command -v apt-get >/dev/null 2>&1; then
   apt-get update -qq || true
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git libgl1 libglib2.0-0 >/dev/null || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git libgl1 libglib2.0-0 libegl1 >/dev/null || true
 fi
 
 log "Clone / update repo ($REPO_BRANCH)"
