@@ -142,3 +142,33 @@ export function routeLabel(p: ObjectPipeline | undefined, geometrySource: "tsdf"
   const m = p.completionMethod ? METHOD_NAMES[p.completionMethod] ?? p.completionMethod : "completion";
   return `completed · ${m}`;
 }
+
+// Route tints for the 3D view. The viewer cannot read CSS, so these mirror
+// the --color-route-* tokens in index.css (same arrangement as the selection
+// accent 0xffb454). Keep the two in step.
+export const ROUTE_TINTS: Record<Route, number> = {
+  kept: 0x8fa8ff,
+  completed: 0x56c2e6,
+  generated: 0xd48be8,
+};
+
+export const ROUTE_NAMES: Record<Route, string> = {
+  kept: "kept · measured geometry good enough as is",
+  completed: "completed · measured, then shape-completed",
+  generated: "generated · regenerated from an image crop",
+};
+
+// Material tints mirror the --color-mat-* tokens the same way. The keys are
+// the VLM's closed material list (src/scene/vlm_claude.py MATERIALS).
+export const MATERIAL_TINTS: Record<string, number> = {
+  wood: 0xb08d6a,
+  metal: 0x9aa7b5,
+  plastic: 0xe3ded2,
+  rubber: 0x565c66,
+  glass: 0xa8d8e0,
+  ceramic: 0xefe9df,
+  fabric: 0x7f93b8,
+  paper: 0xf1ead2,
+  stone: 0x8c8f8a,
+  unknown: 0x8a93a2,
+};

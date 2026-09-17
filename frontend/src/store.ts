@@ -9,10 +9,11 @@
 // enter this store.
 
 import { create } from "zustand";
-import { fetchPipeline, type PipelineData } from "./pipeline";
+import { fetchPipeline, MATERIAL_TINTS, ROUTE_TINTS, type PipelineData } from "./pipeline";
 import { SobaViewer } from "./viewer/SobaViewer";
 import type { ObjectInfo, ViewerStats } from "./viewer/types";
 
+export type ColorMode = "off" | "material" | "route";
 export type ViewerPhase = "boot" | "ready" | "error";
 
 interface SobaState {
@@ -24,6 +25,10 @@ interface SobaState {
   /** the run's telemetry (gate route per object, stage timings); null when
    *  the scene folder has no run_metrics.json */
   pipeline: PipelineData | null;
+  /** presentation mode: panels give way to the large-type story card */
+  presentation: boolean;
+  /** tint objects by material class or by the gate's route (rendering only) */
+  colorMode: ColorMode;
 }
 
 const initialState: SobaState = {
@@ -33,6 +38,8 @@ const initialState: SobaState = {
   selectedId: null,
   stats: null,
   pipeline: null,
+  presentation: false,
+  colorMode: "off",
 };
 
 export const useSobaStore = create<SobaState>(() => ({ ...initialState }));
@@ -60,12 +67,19 @@ export function attachViewer(canvas: HTMLCanvasElement): () => void {
     set({ phase: "ready" });
     // one fetch per mount; a plain-data read that never touches the viewer
     void fetchPipeline().then((pipeline) => {
-      if (viewerRef === viewer) set({ pipeline });
+      if (viewerRef !== viewer) return;
+      set({ pipeline });
+      applyTints();
     });
   });
-  viewer.on("object-loaded", ({ info }) =>
-    set((s) => ({ objects: [...s.objects, info] })));
-  viewer.on("selection-changed", ({ id }) => set({ selectedId: id }));
+  viewer.on("object-loaded", ({ info }) => {
+    set((s) => ({ objects: [...s.objects, info] }));
+    applyTints(); // an object streamed in after the toggle gets its colour too
+  });
+  viewer.on("selection-changed", ({ id }) => {
+    set({ selectedId: id });
+    if (useSobaStore.getState().colorMode !== "off") applyTints(); // deselected object regains its tint
+  });
   viewer.on("stats", (stats) => set({ stats }));
   viewer.on("error", (err) => set({ phase: "error", error: err.message }));
   if (devCounts) {
@@ -77,7 +91,9 @@ export function attachViewer(canvas: HTMLCanvasElement): () => void {
   return () => {
     viewer.dispose();
     if (viewerRef === viewer) viewerRef = null;
-    set({ ...initialState });
+    // viewer-derived state resets; the two UI preferences survive a remount
+    const { presentation, colorMode } = useSobaStore.getState();
+    set({ ...initialState, presentation, colorMode });
   };
 }
 
@@ -94,4 +110,62 @@ export function frameAll(): void {
 
 export function dropBall(): void {
   viewerRef?.spawnBall();
+}
+
+// ---- presentation (frontend/CLAUDE.md: still only plain data crosses) -----
+
+function applyTints(): void {
+  const { colorMode, pipeline, objects } = useSobaStore.getState();
+  if (colorMode === "off") { viewerRef?.setTints(null); return; }
+  const tints: Record<string, number> = {};
+  for (const o of objects) {
+    if (colorMode === "material") {
+      tints[o.id] = MATERIAL_TINTS[o.material] ?? MATERIAL_TINTS.unknown;
+    } else {
+      // without telemetry scene.json still separates measured from generated
+      const route = pipeline?.byId[o.id]?.route ?? (o.geometrySource === "generative" ? "generated" : "completed");
+      tints[o.id] = ROUTE_TINTS[route];
+    }
+  }
+  viewerRef?.setTints(tints);
+}
+
+export function setPresentation(on: boolean): void {
+  useSobaStore.setState({ presentation: on });
+}
+
+const COLOR_CYCLE: ColorMode[] = ["off", "material", "route"];
+export function cycleColorMode(): void {
+  const { colorMode } = useSobaStore.getState();
+  useSobaStore.setState({ colorMode: COLOR_CYCLE[(COLOR_CYCLE.indexOf(colorMode) + 1) % COLOR_CYCLE.length] });
+  applyTints();
+}
+
+export function frameAllNow(): void {
+  viewerRef?.frameAll();
+}
+
+export function setAutoOrbit(on: boolean): void {
+  viewerRef?.setAutoOrbit(on);
+}
+
+/** Tour: select + frame the next / previous object; past either end returns
+ *  to the whole room with nothing selected. */
+export function tourStep(delta: 1 | -1): void {
+  const { objects, selectedId } = useSobaStore.getState();
+  if (!objects.length) return;
+  const i = objects.findIndex((o) => o.id === selectedId);
+  const next = i === -1 ? (delta === 1 ? 0 : objects.length - 1) : i + delta;
+  const id = next >= 0 && next < objects.length ? objects[next].id : null;
+  viewerRef?.selectById(id);
+  viewerRef?.focusObject(id);
+}
+
+export function frameRoom(): void {
+  viewerRef?.selectById(null);
+  viewerRef?.focusObject(null);
+}
+
+export function resetObjects(): void {
+  viewerRef?.resetObjects();
 }

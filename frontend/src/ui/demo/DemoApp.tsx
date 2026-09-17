@@ -5,10 +5,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { fetchPipeline, type PipelineData } from "../../pipeline";
+import { frameAllNow, setAutoOrbit, setPresentation, useSobaStore } from "../../store";
 import App from "../App";
 import { ProcessingScreen } from "./ProcessingScreen";
 import { StagedBanner } from "./StagedBanner";
 import { UploadScreen } from "./UploadScreen";
+import { formatRunDate } from "./format";
 
 type Phase = "upload" | "processing" | "reveal";
 
@@ -23,7 +25,27 @@ export default function DemoApp() {
   const toProcessing = useCallback(() => { setStep(0); setPhase("processing"); }, []);
   const toReveal = useCallback(() => setPhase("reveal"), []);
 
-  if (phase === "reveal") return <App />;
+  // The whole demo is projector-sized; the reveal opens in presentation mode
+  // with a slow orbit that stops as soon as the presenter touches the camera.
+  useEffect(() => {
+    setPresentation(true);
+    document.documentElement.dataset.presentation = "on";
+  }, []);
+  useEffect(() => {
+    if (phase !== "reveal") return;
+    return useSobaStore.subscribe((s, prev) => {
+      if (s.phase === "ready" && prev.phase !== "ready") {
+        // the capture pose usually sits inside the furniture: open on the room
+        frameAllNow();
+        setAutoOrbit(true);
+      }
+    });
+  }, [phase]);
+
+  if (phase === "reveal") {
+    const when = pipeline?.run.startedAt ? formatRunDate(pipeline.run.startedAt) : null;
+    return <App staged={when ? `recorded ${when}` : "recorded run"} />;
+  }
   return (
     <div className="flex h-full flex-col bg-bg">
       {phase === "processing" && <StagedBanner run={pipeline?.run ?? null} />}
