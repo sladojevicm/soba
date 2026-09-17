@@ -35,3 +35,11 @@ def test_split_engine_forwards_the_reason():
     inner.last_decline = "unavailable: OOM"
     split = generative.SplitEngine(completer=_engine(), regenerator=inner)
     assert split.last_decline == "unavailable: OOM"
+
+
+def test_missing_crop_is_a_rejection_not_an_unavailable_model():
+    """Found by SOBA_STRICT=1 on the pod (2026-09-17): an object whose crop could not
+    be staged was classified `unavailable` and failed the whole strict run."""
+    eng = _engine()
+    assert eng.regenerate(cloud=None, crop_path=None, coco_class="chair") is None
+    assert eng.last_decline.startswith("rejected: no crop staged")
