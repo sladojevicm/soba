@@ -27,15 +27,14 @@ way. That is the demo-grade input.
 | Renderer | `scripts/render_replica.py` (open3d CPU raycasting, numpy, the repo's `perception` package; `cv2` only for `match-test`) | already installed by bootstrap |
 | Licence | Replica Dataset Research Terms: non-commercial research only | same footing as the rest of Soba |
 
-Sizes and times (estimates from the release parts and the ray count; nothing measured
-on the pod yet):
+Sizes and times (**measured on the pod 2026-09-17**, RTX 4090 host, 16 vCPU):
 
 | Step | Estimate |
 |---|---|
-| Download | 17 parts of ~2 GB from GitHub releases, ~34 GB total; the tar stream must be fetched whole |
-| Kept on the volume | only the 8 `habitat/` directories, single-digit GB |
-| Render, all 8 rooms at 200 frames | CPU, deterministic (no RNG in the planner); a few minutes per room |
-| Output | ~150–200 MB per room, ~1.5 GB for all 8 |
+| Download | 17 parts, 32 GB on disk; the tar stream must be fetched whole |
+| Kept on the volume | the 8 `habitat/` pairs: meshes of 19-55 MB each, ~300 MB in all |
+| Render, all 8 rooms at 200 frames | 45 s to 2 min 15 s per room, 12 min 20 s in all (CPU, deterministic) |
+| Output | 298-322 MB per room, 2.5 GB for all 8 |
 
 ## 1. Download Replica v1 to the volume (once)
 
@@ -52,7 +51,7 @@ done
 
 ```bash
 mkdir -p /workspace/replica/scenes
-cat replica_v1_0.tar.gz.part?? | tar -xz -C /workspace/replica/scenes --wildcards \
+cat replica_v1_0.tar.gz.part?? | tar -xz --no-same-owner -C /workspace/replica/scenes --wildcards \
   'room_0/habitat/mesh_semantic.ply' 'room_0/habitat/info_semantic.json' \
   'room_1/habitat/mesh_semantic.ply' 'room_1/habitat/info_semantic.json' \
   'room_2/habitat/mesh_semantic.ply' 'room_2/habitat/info_semantic.json' \

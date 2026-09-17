@@ -120,7 +120,11 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   with no fallback, pod suite 510 green, MASt3R pins observed and equal to the reconstructed
   ones. The generative band was silently absent that run (TripoSG deps not reinstalled after
   the container reset); `generation_unavailable` and `SOBA_GENERATION_STRICT=1` now expose
-  that (`docs/log/2026-09-17-gpu-validation-run4-patchcomplete.md`). Not yet run on a GPU: the RunPod serverless endpoint, the compose
+  that (`docs/log/2026-09-17-gpu-validation-run4-patchcomplete.md`). **Run 6** (strict,
+  `SOBA_STRICT=1`): full tier 2 verified end to end on office_3: 4/4 PatchComplete meshes
+  `fused` into the final geometry, pymeshfix seals, 10/10 CoACD colliders, 7 TripoSG objects,
+  no fallback, 880 s. The 8 `_v2` orbit bundles were regenerated on the pod (match-test
+  0.0 mm) and live on the volume (`docs/log/2026-09-17-gpu-validation-run6-strict.md`). Not yet run on a GPU: the RunPod serverless endpoint, the compose
   `gpu` profile, Hunyuan3D (tiers 3–4). Two pytest failures on the pod still unidentified.
 - **Machines.** This WSL box has no GPU and no data, and its `.venv` lacks the
   `recon` extra: `pytest` here gives 125 pass and 49 fail or error, every one a
