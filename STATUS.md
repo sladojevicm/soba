@@ -99,7 +99,8 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   the API image, CDN offload is deferred until there is real traffic.
 - **GPU validation run 1 (2026-09-16, RunPod RTX 4090, `docs/gpu-validation.md`).** First real-GPU
   pass over the service layer: Open3D CUDA tensor backend **PASS** on the pod's pip wheel
-  (0.19.0), so TSDF runs on the GPU; a Replica `office_3` smoke bundle (100 frames) went
+  (0.19.0): the **capability** is confirmed, but TSDF fusion still **executes on CPU**
+  (`tsdf.fuse` defaults to `CPU:0` and `scripts/run_assemble.py` passes no device); a Replica `office_3` smoke bundle (100 frames) went
   through `POST /api/jobs` → real worker → done in 225 s, and again through Redis +
   `python -m orchestration.worker` in 227 s (4 objects; gate completion=4 / generative=10,
   all 10 generative dropped as `engine_declined` because TripoSG was not set up); 503 of
@@ -141,6 +142,11 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   repo, so BENCHMARK.md numbers are not reproducible from the repo alone. Recovery
   commands for the GPU machine and the pod volume are in `docs/model-pins.md`. The
   2026-09-16 pod run recorded library versions only (fresh volume, no model checkouts).
+- **TSDF fusion executes on the CPU, also on a GPU host.** Open3D's CUDA tensor backend is
+  confirmed working on the pod (validation step S1), but `tsdf.fuse(device="CPU:0")` is the
+  default and `scripts/run_assemble.py` never passes a device, so no run so far fused on the
+  GPU (the dense 2000-frame build took 2912 s). An earlier version of this file said "TSDF
+  runs on the GPU"; that was inferred from the capability check and was wrong.
 - **PatchComplete weights are permanently unpinnable.** The completion band at tiers 2-4
   (BENCHMARK.md §3 tier 2, §4 "forced completion", tiers 3-4) ran the authors' pretrained
   `trained_models.zip` from a university server with no revision history; the README says

@@ -127,5 +127,50 @@
         "fallback": true
       }
     ]
+  },
+  "steps": {
+    "fusion": {
+      "counts": {
+        "fused": 1,
+        "plain_finalize_fallback": 1
+      },
+      "per_object": [
+        {
+          "track_id": 3,
+          "class": "chair",
+          "method": "fused",
+          "fallback": false,
+          "reason": null
+        },
+        {
+          "track_id": 5,
+          "class": "couch",
+          "method": "plain_finalize_fallback",
+          "fallback": true,
+          "reason": "fusion raised ValueError: x"
+        }
+      ]
+    },
+    "collider": {
+      "counts": {
+        "coacd": 2
+      },
+      "per_object": [
+        {
+          "track_id": 3,
+          "class": "chair",
+          "method": "coacd",
+          "fallback": false,
+          "reason": null
+        },
+        {
+          "track_id": 5,
+          "class": "couch",
+          "method": "coacd",
+          "fallback": false,
+          "reason": null
+        }
+      ]
+    }
   }
 }

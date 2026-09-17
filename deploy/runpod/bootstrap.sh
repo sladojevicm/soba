@@ -87,7 +87,7 @@ print("  open3d", o3d.__version__, "| torch", torch.__version__, "| cuda", torch
 try:
     dev = o3d.core.Device("CUDA:0")
     o3d.core.Tensor.zeros((2, 2), device=dev)
-    print("  open3d CUDA tensor OK on", dev, "(TSDF VoxelBlockGrid will run on GPU)")
+    print("  open3d CUDA tensor OK on", dev, "(CUDA backend AVAILABLE; tsdf.fuse still executes on CPU:0 — run_assemble.py passes no device)")
 except Exception as e:
     print("  WARNING open3d CUDA tensor FAILED — TSDF will fall back to CPU:", e)
 PY

@@ -382,7 +382,7 @@ image); G2 has not.
 
 **G1 — Open3D CUDA check (mandatory, GPU host).** **Executed 2026-09-16 on a
 RunPod RTX 4090 via `bootstrap.sh` + `deploy/runpod/gpu_validate.sh` S1: PASS**
-— `open3d CUDA tensor OK on CUDA:0 (TSDF VoxelBlockGrid will run on GPU)` with
+— `open3d CUDA tensor OK on CUDA:0 (CUDA backend AVAILABLE; …)` with
 the same pip-resolved `open3d==0.19.0` wheel
 (`docs/log/2026-09-16-gpu-validation-run1.md`). The 2026-09-11 CI message
 `Unsupported device "CUDA:0". Set BUILD_CUDA_MODULE=ON` was what Open3D prints
@@ -394,7 +394,10 @@ wheel. The gate stays: run it on every new host and on the **image** itself
 # executed 2026-09-16 (pod, bootstrap path): S1 PASS — see docs/gpu-validation.md run 1
 # NOT executed yet on the image: needs a GPU host with Docker. Exit 0 = CUDA tensor backend present; exit 1 = CPU fallback.
 docker run --rm --gpus all soba-pipeline:<tag> check
-#   expect: "open3d CUDA tensor OK on CUDA:0 (TSDF VoxelBlockGrid will run on GPU)"
+#   expect: "open3d CUDA tensor OK on CUDA:0 (CUDA backend AVAILABLE; tsdf.fuse still executes on CPU:0 ...)"
+#   This gate proves CAPABILITY only. TSDF fusion currently EXECUTES ON CPU on every host:
+#   tsdf.fuse defaults to device="CPU:0" and scripts/run_assemble.py passes no device
+#   (confirmed 2026-09-17; STATUS.md known limitations). Budget run times accordingly.
 # on a pod / the 4060 without Docker, the same check is bootstrap.sh's "Verify host-pipeline stack" block.
 ```
 

@@ -4,6 +4,7 @@ Read these only when you need the reasoning behind a decision. The current state
 
 All entries predate the 2026-07-13 rename from vid2sim-v2 to Soba and were moved verbatim on 2026-09-04: substitute `soba` / `SOBA_*` for `vid2sim-v2` / `VID2SIM_*` in any command you copy. Newest first.
 
+- [2026-09-17](2026-09-17-geometry-fallbacks-visible.md) — Fusion, keep-band repair, CoACD and mass-volume fallbacks recorded per object (`steps`), one `SOBA_STRICT=1`; the "TSDF runs on the GPU" claim retracted (capability yes, execution CPU); rest of the sweep deferred
 - [2026-09-17](2026-09-17-gpu-validation-run4-patchcomplete.md) — GPU validation run 4: PatchComplete verified (4/4, strict), pod suite 510 green, MASt3R pins match the reconstruction; TripoSG was silently absent → `generation_unavailable` drop + `SOBA_GENERATION_STRICT=1`
 - [2026-09-16](2026-09-16-gpu-validation-run3-dense.md) — GPU validation run 3, dense office_3 (2000 frames, 48 min): same gate routing as 100 frames, so coverage not density is the limit; completion stage 0.035 s = Poisson fallback confirmed
 - [2026-09-17](2026-09-17-replica-regen-and-date-pins.md) — `sync_bundles.md` rewritten (regenerate `_v2` bundles from Replica v1, no copy source exists); `scripts/reconstruct_pins.py` date-based pins, run and pasted into `docs/model-pins.md`

@@ -31,7 +31,7 @@ def test_empty_run_validates_against_schema(tmp_path):
     assert on_disk == out
     assert on_disk["schema"] == 1
     assert set(on_disk) == {"schema", "started_at", "finished_at", "run", "stages",
-                            "gate", "drops", "remote", "completion"}
+                            "gate", "drops", "remote", "completion", "steps"}
     assert on_disk["gate"]["counts"] == {"tsdf": 0, "completion": 0, "generative": 0}
     assert on_disk["finished_at"] >= on_disk["started_at"]
     assert not (tmp_path / "nested/dir/run_metrics.json.tmp").exists()

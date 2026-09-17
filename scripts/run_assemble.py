@@ -263,10 +263,10 @@ def _run(args, metrics: telemetry.RunMetrics) -> None:
                         # must not silently lose its whole generative band.
                         metrics.record_drop("generation_unavailable", track_id=tid,
                                             engine=type(engine).__name__, why=why)
-                        if _os.environ.get("SOBA_GENERATION_STRICT") == "1":
+                        if telemetry.strict("GENERATION"):
                             raise RuntimeError(
                                 f"generation unavailable for track {tid} ({why}) with "
-                                "SOBA_GENERATION_STRICT=1: the image-to-3D model did not run")
+                                "SOBA_STRICT/SOBA_GENERATION_STRICT=1: the image-to-3D model did not run")
                         continue
                     meta.write_text(_json.dumps({"rejected": True}))
                     metrics.record_drop("engine_declined", track_id=tid,

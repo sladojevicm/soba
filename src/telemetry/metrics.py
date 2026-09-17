@@ -64,6 +64,7 @@ class RunMetrics:
         self.gate: dict = {"counts": {s: 0 for s in STRATEGIES}, "per_object": []}
         self.drops: dict[str, int] = {}
         self.completion: dict = {"counts": {}, "per_object": []}
+        self.steps: dict[str, dict] = {}
         self.remote: dict = {"calls": 0, "seconds": 0.0, "est_usd": None, "by_kind": {}}
 
     # --- recording -------------------------------------------------------
@@ -129,6 +130,23 @@ class RunMetrics:
                   "completion", event="completion", **entry)
         return entry
 
+    def record_step(self, step: str, track_id: int, cls: str, method: str, *,
+                    fallback: bool = False, reason: str | None = None, **fields) -> dict:
+        """Record which implementation a per-object geometry step ACTUALLY used
+        (`fusion`, `watertight_repair`, `collider`, `volume`), the same way
+        `record_completion` does for the completion band. `fallback=True` means
+        the designed method did not run or failed and a substitute produced the
+        result: visible here, in /metrics and on the job record, and a run
+        failure under SOBA_STRICT=1."""
+        entry = {"track_id": int(track_id), "class": str(cls), "method": str(method),
+                 "fallback": bool(fallback), "reason": reason, **fields}
+        st = self.steps.setdefault(step, {"counts": {}, "per_object": []})
+        st["counts"][method] = st["counts"].get(method, 0) + 1
+        st["per_object"].append(entry)
+        log_event(log, logging.WARNING if fallback else logging.INFO,
+                  f"step {step}", event="step", step=step, **entry)
+        return entry
+
     def record_remote_call(self, kind: str, seconds: float,
                            est_usd: float | None = None) -> None:
         seconds = float(seconds)
@@ -162,6 +180,8 @@ class RunMetrics:
             "drops": dict(self.drops),
             "completion": {"counts": dict(self.completion["counts"]),
                            "per_object": list(self.completion["per_object"])},
+            "steps": {k: {"counts": dict(v["counts"]), "per_object": list(v["per_object"])}
+                      for k, v in self.steps.items()},
             "remote": {**self.remote,
                        "seconds": round(self.remote["seconds"], 6),
                        "by_kind": {k: dict(v) for k, v in self.remote["by_kind"].items()}},
@@ -216,6 +236,26 @@ def drop(reason: str, **fields) -> None:
         m.record_drop(reason, **fields)
     else:
         log_event(log, logging.INFO, "drop", event="drop", reason=reason, **fields)
+
+
+def strict(kind: str | None = None) -> bool:
+    """True when fallbacks must FAIL the run instead of degrading the scene:
+    `SOBA_STRICT=1` (everything) or the per-kind `SOBA_<KIND>_STRICT=1`
+    (COMPLETION, GENERATION, GEOMETRY)."""
+    import os
+    if os.environ.get("SOBA_STRICT") == "1":
+        return True
+    return bool(kind) and os.environ.get(f"SOBA_{kind.upper()}_STRICT") == "1"
+
+
+def step(name: str, track_id: int, cls: str, method: str, **fields) -> None:
+    """Record a geometry step on the active run; only logs when none is active."""
+    m = current()
+    if m is not None:
+        m.record_step(name, track_id, cls, method, **fields)
+    else:
+        log_event(log, logging.INFO, f"step {name}", event="step", step=name,
+                  track_id=track_id, cls=cls, method=method, **fields)
 
 
 def completion(track_id: int, cls: str, method: str, **fields) -> None:
