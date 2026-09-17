@@ -88,8 +88,11 @@ export function ProcessingScreen({
   }, [step, last, onStep, onDone]);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-6 px-6 py-4">
-      <div className="grid w-full max-w-7xl grid-cols-1 gap-4 lg:grid-cols-3">
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* scrolls if a small window cannot fit it; m-auto centres without ever
+          pushing content above the top edge (justify-center would) */}
+      <div className="flex min-h-0 flex-1 overflow-y-auto px-6 py-4">
+      <div className="m-auto grid w-full max-w-7xl grid-cols-1 gap-4 md:grid-cols-3">
         {acts.map((act, i) => {
           const state = i < step ? "done" : i === step ? "active" : "todo";
           return (
@@ -114,11 +117,11 @@ export function ProcessingScreen({
                 {state !== "todo" && (
                   <div className="flex animate-panel-in flex-col border-t border-hairline/60 pt-2">
                     {act.rows.map((r) => (
-                      <div key={r.label} className="flex items-baseline justify-between gap-3 py-1">
+                      <div key={r.label} className="flex flex-wrap items-baseline justify-between gap-x-3 py-1">
                         <span className="text-base text-dim">{r.label}</span>
-                        <span className="shrink-0 text-right font-mono text-base tabular-nums text-text">
+                        <span className="ml-auto text-right font-mono text-base tabular-nums text-text">
                           {r.value}
-                          {r.time && <span className="ml-2 text-faint">{r.time}</span>}
+                          {r.time && <span className="ml-2 whitespace-nowrap text-faint">{r.time}</span>}
                         </span>
                       </div>
                     ))}
@@ -130,16 +133,18 @@ export function ProcessingScreen({
           );
         })}
       </div>
+      </div>
 
-      <div className="flex items-center gap-3">
+      {/* always on screen, whatever the window size */}
+      <div className="flex shrink-0 items-center justify-center gap-3 border-t border-hairline bg-surface px-6 py-3">
         <Button variant={step >= last ? "accent" : "default"} onClick={() => (step >= last ? onDone() : onStep(step + 1))}>
           {step >= last ? "Open the scene" : `Next: ${acts[step + 1].title}`} <ArrowRight className="size-3.5" />
         </Button>
         <span className="text-sm text-faint"><Kbd>→</Kbd> next · <Kbd>←</Kbd> back</span>
+        {!run && (
+          <span className="text-sm text-faint">no run_metrics.json in this scene folder: no recorded numbers</span>
+        )}
       </div>
-      {!run && (
-        <p className="text-sm text-faint">This scene folder has no run_metrics.json, so no recorded numbers are shown.</p>
-      )}
     </div>
   );
 }

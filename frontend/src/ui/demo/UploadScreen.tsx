@@ -45,7 +45,8 @@ export function UploadScreen({ onContinue }: { onContinue: () => void }) {
   const Icon = file && !file.type.startsWith("video/") ? Package : FileVideo;
 
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-6 px-6">
+    <div className="flex h-full overflow-y-auto px-6 py-4">
+    <div className="m-auto flex w-full flex-col items-center gap-6">
       <div className="text-center">
         <h1 className="text-2xl font-medium text-text-strong">Soba</h1>
         <p className="mt-1 text-xl text-dim">an RGB-D capture of a room in, a physics-enabled 3D scene out</p>
@@ -107,6 +108,7 @@ export function UploadScreen({ onContinue }: { onContinue: () => void }) {
           <Button variant="ghost" size="sm" onClick={onContinue}>continue without a file</Button>
         )}
       </div>
+    </div>
     </div>
   );
 }

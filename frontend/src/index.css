@@ -111,8 +111,11 @@
   }
   #root { height: 100%; }
   /* Presentation mode: every size token is rem-based, so one root scale makes
-   * the whole UI readable from the back of a room. */
-  html[data-presentation="on"] { font-size: 150%; }
+   * the whole UI readable from the back of a room. The scale follows the
+   * WINDOW (24px at 1600x900), not a fixed zoom: a laptop at 150% display
+   * scaling has a 1280x670 viewport and a fixed 150% overflowed it. */
+  :root { --presentation-root: clamp(1rem, min(1.5vw, 2.67vh), 2rem); }
+  html[data-presentation="on"] { font-size: var(--presentation-root); }
   #c { display: block; width: 100vw; height: 100vh; }
 
   /* Reduced motion: collapse every UI animation/transition to a frame. The
