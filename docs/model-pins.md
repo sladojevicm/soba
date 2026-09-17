@@ -185,6 +185,32 @@ Reading the table:
   method agrees with a real clone.
 - **PatchComplete weights**: unpinnable, see the permanent limitation above.
 
+## Validation pins observed on the RunPod pod (2026-09-17, run 4)
+
+What the pod actually ran, from `pins.txt` of `/workspace/validation/20260917T074432Z`
+(`deploy/runpod/gpu_validate.sh` S8). These are **observed**, not reconstructed, and they
+pin the validation runs from 2026-09-17 on; they are not a claim about the July benchmark.
+
+| Item | Pin |
+|---|---|
+| mast3r | `f5209afc300cec36239a7ac992263f36847bbba0` (https://github.com/naver/mast3r.git); dust3r submodule `3cc8c88c413bb9e34c41db0e0eef99c2ee010b12` |
+| MASt3R checkpoint `MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth` | sha256 `e28f91b488554653e2b46ddae9c78c1143e0bcb2e27d3e26cdb0b717f1568eb2` (**exact**: single release file) |
+| TripoSG | `fc5c40990181e2a756c4e0b1c2f4d6b5202faf8c` (https://github.com/VAST-AI-Research/TripoSG.git) |
+| PatchComplete code | `938303c4499173b0c9da28c6486b7fb171f71598` (https://github.com/yuchenrao/PatchComplete.git) |
+| PatchComplete `multi_res.pt` | sha256 `63bd929da01f730b4f85a40fe40c9ae23b0c32090681e301e6ff57ccd8760f5a` |
+| PatchComplete `patch_learning_res_32.pt` | sha256 `777708619d454a928297f302e40a447b449351d01f8a8508ef3c37dee478416d` |
+| PatchComplete `patch_learning_res_8.pt` | sha256 `71e5068a63082d9fed43bc95aca8e8bf4e83aa5cc999e0ae8220c1c31d964b60` |
+| PatchComplete `patch_learning_res_4.pt` | sha256 `678a7b9a6cef88d18a8fc434c585e74614a2135b83ac7a70a7cc63a0f052d8b2` |
+| PatchComplete `fine_tune.pt` (in the zip, not loaded by the adapter) | sha256 `6b5b61d2cd86db46b3df384553ed07a69f06b8904ca067939e5883298af79624` |
+| Libraries | torch 2.4.1+cu124 · open3d 0.19.0 (CUDA tensor backend OK) · numpy 2.4.6 · scipy 1.17.1 · trimesh 5.1.0 · coacd 1.0.14 |
+
+All three code commits equal the date-reconstructed rows above (mast3r, TripoSG,
+PatchComplete upstreams have not moved since the benchmark dates). The PatchComplete
+weight hashes pin what runs **from now on**; whether they equal the July weights remains
+unknowable (permanent limitation above). If a future download of `trained_models.zip`
+yields different hashes, the authors replaced the file and these rows are the record of
+what the 2026-09-17 validation used.
+
 ## How to close the gaps
 
 Run `deploy/runpod/recover_pins.sh` once on the RTX 4060 (paths per `CLAUDE.md`,
