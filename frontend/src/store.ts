@@ -9,6 +9,7 @@
 // enter this store.
 
 import { create } from "zustand";
+import { fetchPipeline, type PipelineData } from "./pipeline";
 import { SobaViewer } from "./viewer/SobaViewer";
 import type { ObjectInfo, ViewerStats } from "./viewer/types";
 
@@ -20,6 +21,9 @@ interface SobaState {
   objects: ObjectInfo[];
   selectedId: string | null;
   stats: ViewerStats | null;
+  /** the run's telemetry (gate route per object, stage timings); null when
+   *  the scene folder has no run_metrics.json */
+  pipeline: PipelineData | null;
 }
 
 const initialState: SobaState = {
@@ -28,6 +32,7 @@ const initialState: SobaState = {
   objects: [],
   selectedId: null,
   stats: null,
+  pipeline: null,
 };
 
 export const useSobaStore = create<SobaState>(() => ({ ...initialState }));
@@ -51,7 +56,13 @@ export function attachViewer(canvas: HTMLCanvasElement): () => void {
   const set = useSobaStore.setState;
   const viewer = new SobaViewer();
   viewerRef = viewer;
-  viewer.on("ready", () => set({ phase: "ready" }));
+  viewer.on("ready", () => {
+    set({ phase: "ready" });
+    // one fetch per mount; a plain-data read that never touches the viewer
+    void fetchPipeline().then((pipeline) => {
+      if (viewerRef === viewer) set({ pipeline });
+    });
+  });
   viewer.on("object-loaded", ({ info }) =>
     set((s) => ({ objects: [...s.objects, info] })));
   viewer.on("selection-changed", ({ id }) => set({ selectedId: id }));

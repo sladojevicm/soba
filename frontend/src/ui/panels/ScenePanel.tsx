@@ -4,6 +4,7 @@
 // store field, so selection stays bidirectional with one source of truth.
 
 import { Box } from "lucide-react";
+import { routeLabel } from "../../pipeline";
 import { selectObject, useSobaStore } from "../../store";
 import type { ObjectInfo } from "../../viewer/types";
 import { Badge } from "../components/badge";
@@ -31,19 +32,24 @@ function ObjectRow({ obj, selected }: { obj: ObjectInfo; selected: boolean }) {
   );
 }
 
-// The gate routed each object: well-observed geometry is kept from the TSDF
-// fusion; poorly-observed objects are regenerated from an image crop.
-const gateLabel = (o: ObjectInfo) =>
-  o.geometrySource === "tsdf" ? "keep · fused tsdf" : "regenerate · image-to-3d";
-
+// The gate routed each object: kept from the TSDF fusion, completed by the
+// shape-completion model, or regenerated from an image crop. scene.json cannot
+// tell the first two apart, so the label comes from the run's telemetry.
 function Inspector({ obj }: { obj: ObjectInfo }) {
+  const pipe = useSobaStore((s) => s.pipeline?.byId[obj.id]);
   return (
     <PanelBody>
       <PanelRow label="id">{obj.id}</PanelRow>
       <PanelRow label="class">{obj.cls}</PanelRow>
       <PanelRow label="mass">{obj.massKg.toFixed(2)} kg</PanelRow>
       <PanelRow label="material">{obj.material}</PanelRow>
-      <PanelRow label="gate">{gateLabel(obj)}</PanelRow>
+      <PanelRow label="gate">{routeLabel(pipe, obj.geometrySource)}</PanelRow>
+      {pipe?.coverageDeg != null && (
+        <PanelRow label="coverage">{pipe.coverageDeg.toFixed(0)}°</PanelRow>
+      )}
+      {pipe?.completeness != null && (
+        <PanelRow label="completeness">{pipe.completeness.toFixed(2)}</PanelRow>
+      )}
       {obj.alignmentMethod !== "n/a" && (
         <PanelRow label="alignment">{obj.alignmentMethod}</PanelRow>
       )}

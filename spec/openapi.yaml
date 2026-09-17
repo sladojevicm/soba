@@ -20,7 +20,7 @@ info:
 
     | Group | Paths | Purpose |
     |---|---|---|
-    | Legacy root | `/`, `/scene.json`, `/eval.json`, `/meshes/{id}.glb`, `/hulls/{stem}.glb`, `/events` | Single-scene mode: the scene dir given to `scripts/serve.py --scene` (or `SOBA_SCENE_DIR`) |
+    | Legacy root | `/`, `/scene.json`, `/eval.json`, `/run_metrics.json`, `/meshes/{id}.glb`, `/hulls/{stem}.glb`, `/events` | Single-scene mode: the scene dir given to `scripts/serve.py --scene` (or `SOBA_SCENE_DIR`) |
     | Jobs | `/api/jobs`, `/api/jobs/{job_id}` | Upload, list, poll, delete jobs |
     | Job-scoped viewer | `/jobs/{job_id}/...` | The same six scene routes for one job's output |
     | Operations | `/metrics`, `/api/openapi.json`, `/api/docs` | Prometheus scrape, this document, the Redoc page |
@@ -416,6 +416,33 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
+  /run_metrics.json:
+    get:
+      tags: [scene]
+      operationId: getRunMetrics
+      summary: The telemetry of the run that produced the root scene
+      description: |
+        Gate routing per object, completion methods, geometry steps and stage
+        seconds, when `run_metrics.json` sits in the scene dir; else `200
+        {"available": false}` (same reasoning as `/eval.json`). The viewer reads
+        the per-object route from here because `scene.json`'s frozen
+        `geometry_source` cannot tell a kept object from a completed one.
+        Open unless `SOBA_AUTH_LEGACY=1`.
+      responses:
+        "200":
+          description: |
+            The run's `run_metrics.json` (`src/telemetry/run_metrics.schema.json`),
+            or `{"available": false}`.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   /meshes/{id}.glb:
     parameters:
       - $ref: "#/components/parameters/ObjectId"
@@ -564,6 +591,34 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/EvalBody"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/UnknownJob"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /jobs/{job_id}/run_metrics.json:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+    get:
+      tags: [scene]
+      operationId: getJobRunMetrics
+      summary: The job's run telemetry
+      description: |
+        The file behind the `run` summary of `GET /api/jobs/{job_id}`, in full.
+        `{"available": false}` until the worker has written it. Protected in
+        keyed mode.
+      responses:
+        "200":
+          description: |
+            The run's `run_metrics.json` (`src/telemetry/run_metrics.schema.json`),
+            or `{"available": false}`.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
