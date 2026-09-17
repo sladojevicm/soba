@@ -175,8 +175,14 @@ Reading the table:
   setup that wants the benchmark-era code must check them out explicitly.
 - **HF weights**: `snapshot_download(revision=...)` with the revision above reproduces
   the benchmark-era weights for TripoSG, RMBG-1.4 and Hunyuan3D-2.1.
-- **MASt3R checkpoint**: exact, not reconstructed; paste the sha256 from
-  `deploy/runpod/setup_mast3r.sh` (or run `scripts/reconstruct_pins.py --mast3r-sha256`).
+- **MASt3R checkpoint**: exact, not reconstructed. Observed on the pod 2026-09-17 by
+  `deploy/runpod/setup_mast3r.sh`:
+  `MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth` sha256
+  `e28f91b488554653e2b46ddae9c78c1143e0bcb2e27d3e26cdb0b717f1568eb2`.
+  The same run cloned mast3r `f5209afc300cec36239a7ac992263f36847bbba0` with dust3r
+  `3cc8c88c413bb9e34c41db0e0eef99c2ee010b12`: **identical to the date-reconstructed
+  rows above**, i.e. upstream has not moved since the benchmark and the reconstruction
+  method agrees with a real clone.
 - **PatchComplete weights**: unpinnable, see the permanent limitation above.
 
 ## How to close the gaps

@@ -58,8 +58,22 @@ missing=0
 for f in $NEEDED; do [ -s "$MODELS/$f" ] || missing=1; done
 if [ "$missing" = 1 ]; then
   ZIP="$PATCHCOMPLETE_HOME/trained_models.zip"
+  # The TUM server is slow (~350 KB/s per connection observed 2026-09-17, 1.8 GB):
+  # download to .part, RESUME on every rerun, and only rename once the zip opens.
+  # A partial file from an interrupted run must never be mistaken for the archive.
+  zip_ok(){ python3 -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).namelist()" "$1" >/dev/null 2>&1; }
+  if [ -s "$ZIP" ] && ! zip_ok "$ZIP"; then mv -f "$ZIP" "$ZIP.part"; fi   # older runs wrote straight to $ZIP
   if [ ! -s "$ZIP" ]; then
-    (curl -fL --retry 3 -C - -o "$ZIP" "$WEIGHTS_URL" || wget -c -O "$ZIP" "$WEIGHTS_URL")
+    if command -v aria2c >/dev/null 2>&1; then
+      # parallel ranges: the throttle is per connection
+      aria2c -c -x 8 -s 8 -k 8M --file-allocation=none -d "$PATCHCOMPLETE_HOME" \
+             -o trained_models.zip.part "$WEIGHTS_URL"
+    else
+      curl -fL --retry 5 --retry-delay 5 -C - -o "$ZIP.part" "$WEIGHTS_URL" \
+        || wget -c -O "$ZIP.part" "$WEIGHTS_URL"
+    fi
+    zip_ok "$ZIP.part" || { echo "ERROR: $ZIP.part is incomplete or corrupt; rerun to resume" >&2; exit 1; }
+    mv -f "$ZIP.part" "$ZIP"
   fi
   sha256sum "$ZIP" | tee "$ZIP.sha256"
   # The zip may hold the files at its root or under trained_models/; extract
