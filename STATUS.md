@@ -126,7 +126,14 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   no fallback, 880 s. The 8 `_v2` orbit bundles were regenerated on the pod (match-test
   0.0 mm) and live on the volume (`docs/log/2026-09-17-gpu-validation-run6-strict.md`). **Run 7**,
   `room_2_v2` under strict: gate completion 8 / generative 2 (coverage 134-162 deg vs 93-121 deg
-  on the room scan), 8/8 PatchComplete fused, 9/9 CoACD, 687 s, lookup physics (no key). Not yet run on a GPU: the RunPod serverless endpoint, the compose
+  on the room scan), 8/8 PatchComplete fused, 9/9 CoACD, 687 s, lookup physics (no key). **Run 8**, same bundle with the Anthropic key: 9/9 objects
+  `physics_origin: vlm`, chairs 6.2-7.2 kg; one chair stays an outlier (34 kg) because its sealed
+  mesh encloses 0.29 m3, a geometry fault, not physics
+  (`docs/log/2026-09-17-gpu-validation-run8-vlm-physics.md`). **Run 9**: the other seven
+  `_v2` rooms under strict + VLM (`docs/log/2026-09-17-gpu-validation-run9-all-v2-rooms.md`): 7/7 jobs done, every completion object PatchComplete-fused, no
+  fallback, 56/56 objects `physics_origin: vlm`. Masses are unreliable where geometry is: generated
+  meshes are thin shells (a 0.54 kg table), some completed chairs seal solid (up to 34 kg).
+  Scenes copied to `out/pod_20260917/` on the WSL box. Not yet run on a GPU: the RunPod serverless endpoint, the compose
   `gpu` profile, Hunyuan3D (tiers 3–4). Two pytest failures on the pod still unidentified.
 - **Machines.** This WSL box has no GPU and no data, and its `.venv` lacks the
   `recon` extra: `pytest` here gives 125 pass and 49 fail or error, every one a
