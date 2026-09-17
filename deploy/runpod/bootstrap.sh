@@ -133,6 +133,17 @@ if [ "$SETUP_MAST3R" = "1" ]; then
   fi
 fi
 
+if [ "$SETUP_TRIPOSG" = "1" ]; then
+  log "Optional: local TripoSG image-to-3D (generative band)"
+  # Non-fatal: a TripoSG hiccup must NOT break the working host pipeline.
+  if TRIPOSG_HOME="${TRIPOSG_HOME:-$WORKDIR/TripoSG}" \
+       bash "$REPO_DIR/deploy/runpod/setup_triposg.sh"; then
+    echo "TripoSG ready. export SOBA_TRIPOSG_HOME=${TRIPOSG_HOME:-$WORKDIR/TripoSG}"
+  else
+    echo "WARNING: TripoSG setup failed — host pipeline is unaffected. See above." >&2
+  fi
+fi
+
 if [ "$SETUP_PATCHCOMPLETE" = "1" ]; then
   log "Optional: PatchComplete (completion band, tiers 2-4)"
   # Non-fatal: the host pipeline falls back to Poisson repair and SAYS SO in
@@ -145,16 +156,6 @@ if [ "$SETUP_PATCHCOMPLETE" = "1" ]; then
   fi
 fi
 
-if [ "$SETUP_TRIPOSG" = "1" ]; then
-  log "Optional: local TripoSG image-to-3D (generative band)"
-  # Non-fatal: a TripoSG hiccup must NOT break the working host pipeline.
-  if TRIPOSG_HOME="${TRIPOSG_HOME:-$WORKDIR/TripoSG}" \
-       bash "$REPO_DIR/deploy/runpod/setup_triposg.sh"; then
-    echo "TripoSG ready. export SOBA_TRIPOSG_HOME=${TRIPOSG_HOME:-$WORKDIR/TripoSG}"
-  else
-    echo "WARNING: TripoSG setup failed — host pipeline is unaffected. See above." >&2
-  fi
-fi
 
 log "Done — next steps"
 cat <<EOF

@@ -92,8 +92,15 @@ PatchComplete, so their "completion" objects were Poisson. For validation set
 ```bash
 SETUP_TRIPOSG=1 SETUP_PATCHCOMPLETE=1 REPO_BRANCH=develop bash soba/deploy/runpod/bootstrap.sh
 export SOBA_TRIPOSG_HOME=/workspace/TripoSG SOBA_PATCHCOMPLETE_HOME=/workspace/PatchComplete
-export SOBA_COMPLETION_STRICT=1
+export SOBA_COMPLETION_STRICT=1 SOBA_GENERATION_STRICT=1
 ```
+
+`SOBA_GENERATION_STRICT=1` does for the generative band what the completion flag does for
+completion: if the image-to-3D model cannot run (missing deps or weights, OOM) the run fails
+instead of dropping every generative object. Without it such drops are recorded as
+`generation_unavailable`, distinct from `engine_declined` (a real rejection). **A stopped pod
+loses its container disk**: after every restart rerun bootstrap with the same `SETUP_*` flags
+so each model's Python deps are reinstalled (weights on `/workspace` are kept).
 
 Optional, adds ~10 min and ~10 GB: the generative band. Optional too, needed only for real
 sensor bundles (TUM / OAK / phone) and the 2 gpu-marked tests: `SETUP_MAST3R=1` (clones
@@ -226,3 +233,10 @@ Same routing as the 100-frame run (tsdf 0 / completion 5 / generative 9), 2912 s
 not density, is the limit: the demo input is the `_v2` orbit bundles
 (`deploy/runpod/sync_bundles.md`). Completion stage 0.035 s = Poisson fallback (no
 PatchComplete yet). Details: `docs/log/2026-09-16-gpu-validation-run3-dense.md`.
+
+## Run 4 — 2026-09-17 (PatchComplete, strict)
+
+S2 510 passed; S6 completion `{patchcomplete: 4}`, no fallback. Generative band absent
+(TripoSG deps not reinstalled after the container reset) and recorded only as
+`engine_declined`; fixed with `generation_unavailable` + `SOBA_GENERATION_STRICT=1`.
+Details: `docs/log/2026-09-17-gpu-validation-run4-patchcomplete.md`.
