@@ -92,11 +92,14 @@ PatchComplete, so their "completion" objects were Poisson. For validation set
 ```bash
 SETUP_TRIPOSG=1 SETUP_PATCHCOMPLETE=1 REPO_BRANCH=develop bash soba/deploy/runpod/bootstrap.sh
 export SOBA_TRIPOSG_HOME=/workspace/TripoSG SOBA_PATCHCOMPLETE_HOME=/workspace/PatchComplete
-export SOBA_COMPLETION_STRICT=1 SOBA_GENERATION_STRICT=1
+export SOBA_STRICT=1      # umbrella: completion, generation AND geometry fallbacks fail the run
 ```
 
-`SOBA_GENERATION_STRICT=1` does for the generative band what the completion flag does for
-completion: if the image-to-3D model cannot run (missing deps or weights, OOM) the run fails
+`SOBA_STRICT=1` covers three kinds of silent degradation (per-kind flags
+`SOBA_COMPLETION_STRICT`, `SOBA_GENERATION_STRICT`, `SOBA_GEOMETRY_STRICT` also exist).
+Geometry: fusion, keep-band repair, CoACD and the mass volume each record which
+implementation ran per object (`run_metrics.json` `steps`, `soba_pipeline_step_total`,
+`run.steps` on the job record); a fallback there fails the run under strict. Generation: if the image-to-3D model cannot run (missing deps or weights, OOM) the run fails
 instead of dropping every generative object. Without it such drops are recorded as
 `generation_unavailable`, distinct from `engine_declined` (a real rejection). **A stopped pod
 loses its container disk**: after every restart rerun bootstrap with the same `SETUP_*` flags
@@ -204,7 +207,7 @@ Path A validates the code; Path B additionally validates the **image**
 
 | Observation | Consequence |
 |---|---|
-| S1 PASS | TSDF on GPU as designed; no action |
+| S1 PASS | The CUDA tensor backend exists on this host. It does **not** mean TSDF used it: `tsdf.fuse` defaults to `CPU:0` and `run_assemble.py` passes no device, so fusion executes on CPU today (STATUS.md known limitation) |
 | S1 FAIL | The pip wheel has no CUDA module. Jobs still complete, TSDF on CPU. Decide: accept for the demo (dense builds take longer) or build Open3D with CUDA / find a CUDA wheel for the image and bootstrap. This becomes a `STATUS.md` known limitation either way. |
 | S6 PASS, generative dropped | Plumbing works; rerun with TripoSG for the full tier-2 scene |
 | S6 FAIL | Read `job_real.json` `error` (the worker stores the subprocess log tail). Most likely candidates: a missing model checkout path, or the `run_assemble.py` CLI drifting from `worker_local.py`'s call. Fix on `develop`, rerun. |

@@ -39,17 +39,33 @@ def decompose(mesh, *, threshold: float = 0.05, max_parts: int = 16,
 
     threshold: CoACD concavity threshold (smaller -> more parts, tighter fit).
     max_parts: cap on the number of hulls (CoACD max_convex_hull).
-    Returns the single convex hull if CoACD is missing or yields nothing.
+    Returns the single convex hull if CoACD is missing or yields nothing; use
+    `decompose_info` to learn WHICH of the two happened.
     """
+    return decompose_info(mesh, threshold=threshold, max_parts=max_parts,
+                          preprocess=preprocess)[0]
+
+
+def decompose_info(mesh, *, threshold: float = 0.05, max_parts: int = 16,
+                   preprocess: str = "auto") -> tuple[list, dict]:
+    """`decompose` plus how the parts were obtained: ``(parts, info)`` with
+    ``info = {"method": "coacd" | "single_hull_fallback", "reason", "parts"}``.
+    A one-hull fallback is indistinguishable from CoACD legitimately returning
+    one part unless it is recorded (the 2026-09-16 pod run shipped single hulls
+    for a whole scene because coacd was not installed)."""
+    def fallback(reason: str):
+        parts = convex_hull_part(mesh)
+        return parts, {"method": "single_hull_fallback", "reason": reason, "parts": len(parts)}
+
     try:
         import coacd
     except ImportError:
-        return convex_hull_part(mesh)
+        return fallback("coacd not installed")
 
     verts = np.asarray(mesh.vertices)
     tris = np.asarray(mesh.triangles)
     if len(verts) == 0 or len(tris) == 0:
-        return convex_hull_part(mesh)
+        return fallback("empty mesh")
 
     try:
         cmesh = coacd.Mesh(verts, tris)
@@ -57,8 +73,10 @@ def decompose(mesh, *, threshold: float = 0.05, max_parts: int = 16,
             cmesh, threshold=threshold, max_convex_hull=max_parts,
             preprocess_mode=preprocess,
         )
-    except Exception:
-        return convex_hull_part(mesh)
+    except Exception as exc:
+        return fallback(f"coacd raised {type(exc).__name__}: {str(exc)[:120]}")
 
     out = [_to_o3d(v, f) for v, f in parts if len(v) and len(f)]
-    return out or convex_hull_part(mesh)
+    if not out:
+        return fallback("coacd returned no usable parts")
+    return out, {"method": "coacd", "reason": None, "parts": len(out)}

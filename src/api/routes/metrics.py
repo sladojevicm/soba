@@ -134,6 +134,10 @@ class ApiTelemetry:
                             ["stage"], registry=r)
         self.drops = C("soba_pipeline_drops_total", "Objects dropped, by reason", ["reason"],
                        registry=r)
+        self.steps = C("soba_pipeline_step_total",
+                       "Geometry steps per object by the implementation that actually ran "
+                       "(fusion, watertight_repair, collider, volume); *_fallback = the "
+                       "designed method did not run", ["step", "method"], registry=r)
         self.completion = C("soba_completion_total",
                             "Completion method per completion-band object "
                             "(poisson_* = fallback, not the configured learned completer)",
@@ -225,6 +229,9 @@ class ApiTelemetry:
             self.drops.labels(reason=reason).inc(n)
         for method, n in data.get("completion", {}).get("counts", {}).items():
             self.completion.labels(method=method).inc(n)
+        for step_name, st in data.get("steps", {}).items():
+            for method, n in st.get("counts", {}).items():
+                self.steps.labels(step=step_name, method=method).inc(n)
         for kind, rc in data["remote"]["by_kind"].items():
             self.remote_calls.labels(kind=kind).inc(rc["calls"])
             self.remote_seconds.labels(kind=kind).inc(rc["seconds"])

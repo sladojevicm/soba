@@ -138,7 +138,6 @@ def _record_completion(obj: ObjectInput, oid_str: str, engine, completed) -> str
     line): a tier-2+ scene must not silently claim the learned completer it did
     not run. `SOBA_COMPLETION_STRICT=1` turns any Poisson fallback into a run
     failure (validation runs), instead of a quietly degraded scene."""
-    import os
     if engine is None:
         method, reason = "poisson_fallback", "no_engine"
     elif completed is None or not len(completed.vertices):
@@ -150,14 +149,28 @@ def _record_completion(obj: ObjectInput, oid_str: str, engine, completed) -> str
     telemetry.completion(obj.track_id, obj.coco_class, method, id=oid_str,
                          engine=type(engine).__name__ if engine is not None else None,
                          reason=reason, fallback=fallback)
-    if fallback and os.environ.get("SOBA_COMPLETION_STRICT") == "1":
+    if fallback and telemetry.strict("COMPLETION"):
         raise RuntimeError(
             f"completion fallback for {oid_str} ({method}: {reason}) with "
-            "SOBA_COMPLETION_STRICT=1: the configured learned completer did not run")
+            "SOBA_STRICT/SOBA_COMPLETION_STRICT=1: the configured learned completer did not run")
     return method
 
 
-def _fuse_and_seal(obj, center, completed):
+def _step(obj, oid_str: str, name: str, method: str, *, fallback: bool = False,
+          reason: str | None = None, **fields) -> None:
+    """Record which implementation a geometry step actually used for this object
+    (run_metrics.json `steps`), and FAIL the run on a fallback under
+    SOBA_STRICT=1 / SOBA_GEOMETRY_STRICT=1. No bare `except: pass` may turn a
+    failure into a valid-looking result without going through here."""
+    telemetry.step(name, getattr(obj, "track_id", -1), getattr(obj, "coco_class", "obj"),
+                   method, id=oid_str, fallback=fallback, reason=reason, **fields)
+    if fallback and telemetry.strict("GEOMETRY"):
+        raise RuntimeError(
+            f"{name} fallback for {oid_str} ({method}: {reason}) with "
+            "SOBA_STRICT/SOBA_GEOMETRY_STRICT=1")
+
+
+def _fuse_and_seal(obj, center, completed, oid_str: str = "?"):
     """Option-A finalize for a "completion" object that carries its VBG: KEEP the
     real observed geometry and graft the engine's completion only where unobserved
     (fusion), then seal into a watertight collider (Option D). All in WORLD coords
@@ -170,8 +183,11 @@ def _fuse_and_seal(obj, center, completed):
     if completed is not None and len(completed.vertices):
         comp = o3d.geometry.TriangleMesh(completed)
         comp.translate(center.tolist())          # recentred -> world
+        comp_source = "engine"
     else:
         comp = mass.watertight_repair(obj.mesh)  # local Poisson completion (world)
+        comp_source = "poisson"
+    reason = "fusion returned no triangles"
     try:
         # smooth_sigma rounds the patched (unobserved) surface only — the coarse
         # completion back (e.g. PatchComplete's 32^3) — leaving observed exact.
@@ -179,29 +195,51 @@ def _fuse_and_seal(obj, center, completed):
                                           smooth_sigma=FUSION_SMOOTH_SIGMA,
                                           max_fill_dist_m=_fill_dist(obj.coco_class))
         if len(fused.triangles):
-            sealed, vol = _tsdf_watertight_finalize(fused)
+            # the completion's geometry IS in the final mesh from here on
+            _step(obj, oid_str, "fusion", "fused", completion_source=comp_source,
+                  fused_triangles=int(len(fused.triangles)),
+                  completion_triangles=int(len(comp.triangles)))
+            sealed, vol = _tsdf_watertight_finalize(fused, obj=obj, oid_str=oid_str,
+                                                    context="fused")
             sealed.translate((-center).tolist())
             return sealed, vol
-    except Exception:
-        pass
-    fm, vol, _ = mass.finalize_mesh(o3d.geometry.TriangleMesh(obj.mesh))
+    except RuntimeError:
+        raise  # a strict-mode failure from _step: never swallow it
+    except Exception as exc:
+        reason = f"fusion raised {type(exc).__name__}: {str(exc)[:160]}"
+    # The completion (learned or Poisson) did NOT reach the final mesh.
+    _step(obj, oid_str, "fusion", "plain_finalize_fallback", fallback=True,
+          reason=reason, completion_source=comp_source)
+    fm, vol, _wt, info = mass.finalize_mesh_info(o3d.geometry.TriangleMesh(obj.mesh))
+    _step(obj, oid_str, "volume", info["method"],
+          fallback=info["method"] == "hull_volume_fallback", reason=info["reason"],
+          context="fusion_fallback")
     fm.translate((-center).tolist())
     return fm, vol
 
 
-def _tsdf_watertight_finalize(mesh):
+def _tsdf_watertight_finalize(mesh, *, obj=None, oid_str: str = "?", context: str = "keep"):
     """Finalize a well-observed ("tsdf"/keep band) mesh into a watertight collider
     (Option D). pymeshfix preserves the real observed surface and seals only the
     unseen back; on any failure (pymeshfix missing, degenerate input) fall back to
     the Poisson Step-7b repair so the pipeline never crashes. Returns (mesh, volume).
     """
+    reason = "pymeshfix repair returned no triangles"
     try:
         rep, info = geometric_repair.watertight_collider(mesh)
         if len(rep.triangles):
+            _step(obj, oid_str, "watertight_repair", "pymeshfix", context=context)
             return rep, mass.closed_mesh_volume(rep)
-    except Exception:
-        pass
-    final_mesh, vol, _watertight = mass.finalize_mesh(mesh)
+    except RuntimeError:
+        raise  # strict-mode failure: never swallow it
+    except Exception as exc:
+        reason = f"pymeshfix raised {type(exc).__name__}: {str(exc)[:160]}"
+    _step(obj, oid_str, "watertight_repair", "poisson_fallback", fallback=True,
+          reason=reason, context=context)
+    final_mesh, vol, _watertight, vinfo = mass.finalize_mesh_info(mesh)
+    _step(obj, oid_str, "volume", vinfo["method"],
+          fallback=vinfo["method"] == "hull_volume_fallback", reason=vinfo["reason"],
+          context=f"{context}_repair_fallback")
     return final_mesh, vol
 
 
@@ -278,12 +316,12 @@ def _assemble_object_inner(obj: ObjectInput, oid_str: str, ground_y: float,
         _record_completion(obj, oid_str, engine, completed)
     if obj.strategy == "completion" and obj.vbg is not None and obj.voxel_size:
         # Option A: keep real geometry, graft only the unobserved part, then seal.
-        final_mesh, vol = _fuse_and_seal(obj, center, completed)
+        final_mesh, vol = _fuse_and_seal(obj, center, completed, oid_str)
     elif completed is not None and len(completed.vertices):
         final_mesh = completed
         vol = mass.closed_mesh_volume(final_mesh)
     elif obj.strategy == "tsdf":
-        final_mesh, vol = _tsdf_watertight_finalize(mesh)
+        final_mesh, vol = _tsdf_watertight_finalize(mesh, obj=obj, oid_str=oid_str, context="keep")
     elif obj.strategy == "generative":
         # Generated mesh: RENDER it as-is (a real thin chair, not a Poisson blob)
         # and measure mass from the ENCLOSED volume, clamped into a plausible
@@ -294,7 +332,10 @@ def _assemble_object_inner(obj: ObjectInput, oid_str: str, ground_y: float,
         # Hull volume remains the fallback for a non-watertight generation.
         final_mesh, vol = mesh, mass.generative_volume(mesh, config_path=config_path)[0]
     else:
-        final_mesh, vol, _watertight = mass.finalize_mesh(mesh)
+        final_mesh, vol, _watertight, vinfo = mass.finalize_mesh_info(mesh)
+        _step(obj, oid_str, "volume", vinfo["method"],
+              fallback=vinfo["method"] == "hull_volume_fallback", reason=vinfo["reason"],
+              context="plain")
 
     obj_dir = out_dir / "objects" / oid_str
     (obj_dir / "hulls").mkdir(parents=True, exist_ok=True)
@@ -316,10 +357,13 @@ def _assemble_object_inner(obj: ObjectInput, oid_str: str, ground_y: float,
                           "half_extents": [round(float(e) / 2.0, 4) for e in ext]}
     else:
         with stage_timer("coacd", id=oid_str):
-            parts = decomp.decompose(
+            parts, cinfo = decomp.decompose_info(
                 final_mesh, threshold=float(tier_coacd.get("threshold", 0.05)),
                 max_parts=int(tier_coacd.get("max_parts", 16)),
             )
+        _step(obj, oid_str, "collider", cinfo["method"],
+              fallback=cinfo["method"] != "coacd", reason=cinfo["reason"],
+              parts=cinfo["parts"])
         log.debug("coacd %s -> %d part(s)", oid_str, len(parts))
         hull_route_paths = []
         for i, part in enumerate(parts):

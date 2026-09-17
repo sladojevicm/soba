@@ -38,6 +38,14 @@ torch 2.4.1+cu124, trimesh 5.1.0 (no model checkouts on the fresh volume).
   with the ≤123° coverage ceiling of vMAP room scans (`docs/log/2026-06-27`); not a
   regression.
 
+## Correction (2026-09-17)
+
+"TSDF runs on the GPU as designed" above was wrong. S1 proves the CUDA tensor backend
+EXISTS on the pod; it does not prove fusion used it. `tsdf.fuse` defaults to `CPU:0`
+and `scripts/run_assemble.py` passes no device, so every pod run fused on the CPU.
+The S1 message printed by the scripts said "TSDF VoxelBlockGrid will run on GPU",
+which invited the mistake; it now says the backend is available and fusion is on CPU.
+
 ## Findings
 
 1. **`coacd` was not installed on the pod** (absent from `pins.txt`): bootstrap installs

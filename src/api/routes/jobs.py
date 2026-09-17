@@ -169,6 +169,7 @@ def jobs_routes(ctx: JobsContext) -> list[Route]:
         return {"status": d.get("run", {}).get("status"),
                 "gate": d.get("gate", {}).get("counts"),
                 "completion": d.get("completion", {}).get("counts", {}),
+                "steps": {k: v.get("counts", {}) for k, v in d.get("steps", {}).items()},
                 "drops": d.get("drops", {})}
 
     async def get_job(request: Request):

@@ -304,6 +304,59 @@
           }
         }
       }
+    },
+    "steps": {
+      "type": "object",
+      "description": "Per-object geometry steps (fusion, watertight_repair, collider, volume): which implementation actually ran. fallback=true means the designed method did not run or failed.",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "counts",
+          "per_object"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "counts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "per_object": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "track_id",
+                "class",
+                "method",
+                "fallback"
+              ],
+              "properties": {
+                "track_id": {
+                  "type": "integer"
+                },
+                "class": {
+                  "type": "string"
+                },
+                "method": {
+                  "type": "string"
+                },
+                "fallback": {
+                  "type": "boolean"
+                },
+                "reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

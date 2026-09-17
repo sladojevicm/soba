@@ -104,6 +104,8 @@ if os.path.isfile(sys.argv[2]):
     parts.append("gate " + "/".join(f"{k}={g.get(k, 0)}" for k in ("tsdf", "completion", "generative")))
     parts.append("drops " + json.dumps(m.get("drops", {})))
     if "run" in st: parts.append(f"run {st['run']['seconds']:.0f}s")
+    parts.append("completion " + json.dumps(m.get("completion", {}).get("counts", {})))
+    parts.append("steps " + json.dumps({k: v.get("counts", {}) for k, v in m.get("steps", {}).items()}))
 if os.path.isfile(sys.argv[3]):
     c = json.load(open(sys.argv[3])); r = c.get("remote", {})
     parts.append(f"remote calls={r.get('calls', 0)} est_usd={r.get('est_usd', 0)}")
@@ -134,12 +136,12 @@ import sys, open3d as o3d, torch
 print("torch.cuda", torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else "-")
 try:
     dev = o3d.core.Device("CUDA:0"); o3d.core.Tensor.zeros((2, 2), device=dev)
-    print("open3d CUDA tensor OK on", dev, "(TSDF VoxelBlockGrid will run on GPU)")
+    print("open3d CUDA tensor OK on", dev, "(CUDA backend AVAILABLE; tsdf.fuse still executes on CPU:0 — run_assemble.py passes no device)")
 except Exception as e:
     print("FAIL open3d CUDA tensor:", e); sys.exit(1)
 PY
 then record S1 PASS "$(tail -1 "$RUN/cuda_check.txt")"
-else record S1 FAIL "$(tail -1 "$RUN/cuda_check.txt" | cut -c1-140) — TSDF runs on CPU (docs/model-pins.md finding)"; fi
+else record S1 FAIL "$(tail -1 "$RUN/cuda_check.txt" | cut -c1-140) — no CUDA tensor backend on this host"; fi
 cat "$RUN/cuda_check.txt"
 
 # --- S2 pytest (gpu-marked tests included) --------------------------------

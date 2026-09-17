@@ -36,6 +36,11 @@ def test_completion_counts_reach_metrics_and_job_record(client, app, bundle_zip,
     assert job["run"]["gate"] == {"tsdf": 0, "completion": 2, "generative": 1}
     assert job["run"]["drops"] == {"cloud_too_small": 1}
     assert job["run"]["status"] == "ok"
+    # geometry steps: a fusion fallback is visible on the job record and in /metrics
+    assert job["run"]["steps"]["fusion"] == {"fused": 1, "plain_finalize_fallback": 1}
+    assert _value(text, "soba_pipeline_step_total", step="fusion",
+                  method="plain_finalize_fallback") == 1.0
+    assert _value(text, "soba_pipeline_step_total", step="collider", method="coacd") == 2.0
 
 
 def test_job_without_run_metrics_has_no_run_field(client, app, bundle_zip):

@@ -31,6 +31,8 @@ from .metrics import (
                       set_current,
                       stage_timer,
                       start_run,
+                      step,
+                      strict,
                       validate,
 )
 
@@ -50,6 +52,8 @@ __all__ = [
                       "log_event",
                       "set_current",
                       "stage_timer",
+                      "step",
+                      "strict",
                       "start_run",
                       "validate",
 ]
