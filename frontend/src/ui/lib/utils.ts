@@ -14,7 +14,7 @@ const twMerge = extendTailwindMerge({
         "text", "text-strong", "dim", "faint",
         "accent", "good", "fair", "poor",
       ],
-      text: ["micro", "sm", "base", "lg"],
+      text: ["micro", "sm", "base", "lg", "xl", "2xl"],
     },
   },
 });

@@ -12,6 +12,12 @@ if (import.meta.env.DEV && window.location.pathname === "/kitchen-sink") {
   // branch dead code in the committed bundle — no router needed.
   const { KitchenSink } = await import("./ui/dev/KitchenSink");
   root.render(<KitchenSink />);
+} else if (new URLSearchParams(window.location.search).has("demo")) {
+  // Conference demo flow (upload -> staged processing -> viewer). A query
+  // string, not a path: the same index.html, no router, and "/" stays the
+  // plain viewer the headless harness checks.
+  const { default: DemoApp } = await import("./ui/demo/DemoApp");
+  root.render(<DemoApp />);
 } else {
   root.render(<App />);
 }
