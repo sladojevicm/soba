@@ -20,3 +20,15 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "gpu" in item.keywords:
             item.add_marker(skip)
+
+
+@pytest.fixture(autouse=True)
+def _no_live_anthropic_key(monkeypatch):
+    """The suite never calls the live Claude API.
+
+    vlm.infer() uses the Claude backend whenever ANTHROPIC_API_KEY is set, so a
+    key in the shell (the pod, 2026-09-17 run 8) turned assemble()/infer() tests
+    into real, billed API calls and broke the lookup-fallback assertion. Tests
+    that need a key set their own fake one with monkeypatch.setenv.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
