@@ -1029,21 +1029,28 @@ class LocalGpuEngine(Engine):
             return None
 
     def regenerate(self, *, cloud, crop_path, coco_class):
+        # `last_decline` tells the caller WHY None came back: a verdict on the
+        # object ("rejected: ...", cacheable) or the model not running at all
+        # ("unavailable: ...", never a verdict, never cached).
+        self.last_decline = None
         try:
             gen_mesh = self._run_gen(crop_path=crop_path, coco_class=coco_class)
             gen_mesh, detached = _clean_gen(gen_mesh)
             if gen_mesh is None:
                 log.info("generation rejected: %.0f%% of it was detached debris",
                          detached * 100)
+                self.last_decline = "rejected: detached debris"
                 return None
             got = _align_and_accept(gen_mesh, cloud, coco_class)
             if got is None:
+                self.last_decline = "rejected: implausible size under both sizings"
                 return None    # implausible under BOTH sizings -> drop
             mesh, align_m, scale_m = got
             return RegenResult(mesh=mesh, alignment_method=align_m,
                                scale_method=scale_m)
         except Exception as e:  # missing model / OOM -> drop (as with no GPU)
             log.warning("local-GPU generation unavailable (%s) -> object dropped", e)
+            self.last_decline = f"unavailable: {type(e).__name__}: {str(e)[:160]}"
             return None
 
     # --- model adapters (FILL with the model APIs once installed) -------
@@ -1423,6 +1430,10 @@ class SplitEngine(Engine):
 
     def regenerate(self, **kw):
         return self._regenerator.regenerate(**kw)
+
+    @property
+    def last_decline(self):
+        return getattr(self._regenerator, "last_decline", None)
 
 
 def make_engine(tier=None) -> Engine:

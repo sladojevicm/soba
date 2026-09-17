@@ -254,10 +254,23 @@ def _run(args, metrics: telemetry.RunMetrics) -> None:
                                             error=str(exc)[:200])
                         continue
                 if r is None:
-                    meta.write_text(_json.dumps({"rejected": True}))
+                    why = getattr(engine, "last_decline", None)
                     n_dropped += 1
+                    if str(why or "").startswith("unavailable"):
+                        # The model did not run (missing deps/weights, OOM): that
+                        # is NOT a verdict on the object, so it is not cached as a
+                        # rejection and it gets its own drop reason. A tier-2 scene
+                        # must not silently lose its whole generative band.
+                        metrics.record_drop("generation_unavailable", track_id=tid,
+                                            engine=type(engine).__name__, why=why)
+                        if _os.environ.get("SOBA_GENERATION_STRICT") == "1":
+                            raise RuntimeError(
+                                f"generation unavailable for track {tid} ({why}) with "
+                                "SOBA_GENERATION_STRICT=1: the image-to-3D model did not run")
+                        continue
+                    meta.write_text(_json.dumps({"rejected": True}))
                     metrics.record_drop("engine_declined", track_id=tid,
-                                        engine=type(engine).__name__)
+                                        engine=type(engine).__name__, why=why)
                     continue
                 _o3d.io.write_triangle_mesh(str(ply), r.mesh)
                 meta.write_text(_json.dumps({

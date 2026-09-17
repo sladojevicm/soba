@@ -114,7 +114,12 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   any fallback; `SETUP_PATCHCOMPLETE=1` installs it (`deploy/runpod/setup_patchcomplete.sh`).
   **Run 3** (dense, 2000 frames, 2912 s): identical gate routing to the 100-frame run, so
   the vMAP room-scan trajectory, not frame density, caps quality; the demo needs the `_v2`
-  orbit bundles (`deploy/runpod/sync_bundles.md`, `docs/log/2026-09-16-gpu-validation-run3-dense.md`). Not yet run on a GPU: the RunPod serverless endpoint, the compose
+  orbit bundles (`deploy/runpod/sync_bundles.md`, `docs/log/2026-09-16-gpu-validation-run3-dense.md`).
+  **Run 4** (2026-09-17, strict completion): PatchComplete ran for 4/4 completion objects
+  with no fallback, pod suite 510 green, MASt3R pins observed and equal to the reconstructed
+  ones. The generative band was silently absent that run (TripoSG deps not reinstalled after
+  the container reset); `generation_unavailable` and `SOBA_GENERATION_STRICT=1` now expose
+  that (`docs/log/2026-09-17-gpu-validation-run4-patchcomplete.md`). Not yet run on a GPU: the RunPod serverless endpoint, the compose
   `gpu` profile, Hunyuan3D (tiers 3–4). Two pytest failures on the pod still unidentified.
 - **Machines.** This WSL box has no GPU and no data, and its `.venv` lacks the
   `recon` extra: `pytest` here gives 125 pass and 49 fail or error, every one a
