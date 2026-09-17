@@ -1033,6 +1033,12 @@ class LocalGpuEngine(Engine):
         # object ("rejected: ...", cacheable) or the model not running at all
         # ("unavailable: ...", never a verdict, never cached).
         self.last_decline = None
+        if crop_path is None:
+            # Crop staging found no usable view (mask under min_area_px): a verdict
+            # on the OBJECT, not a model failure. It must not trip strict mode, and
+            # it is cacheable like any other rejection.
+            self.last_decline = "rejected: no crop staged (no usable view of the object)"
+            return None
         try:
             gen_mesh = self._run_gen(crop_path=crop_path, coco_class=coco_class)
             gen_mesh, detached = _clean_gen(gen_mesh)
