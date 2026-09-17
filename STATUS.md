@@ -135,9 +135,10 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   meshes are thin shells (a 0.54 kg table), some completed chairs seal solid (up to 34 kg).
   Scenes copied to `out/pod_20260917/` on the WSL box. Not yet run on a GPU: the RunPod serverless endpoint, the compose
   `gpu` profile, Hunyuan3D (tiers 3–4). Two pytest failures on the pod still unidentified.
-- **Machines.** This WSL box has no GPU and no data, and its `.venv` lacks the
-  `recon` extra: `pytest` here gives 125 pass and 49 fail or error, every one a
-  missing-`open3d` import (last full run: 241 pass, 2026-07-06, GPU machine). Data and builds: `~/soba/data` on the
+- **Machines.** This WSL box has no GPU and no torch. Since 2026-09-17 its `.venv` (uv, Python
+  3.11) carries every extra (`recon,serve,dev,api,telemetry,worker` + `anthropic`): `pytest`
+  here gives 539 pass, 8 skipped, 1 fail, the fail being a `gpu`-marked test that imports torch
+  (`SOBA_SKIP_GPU_TESTS=1` skips it). The pod's run 8/9 scenes are under `out/pod_20260917/`. Data and builds: `~/soba/data` on the
   RTX 4060 machine; `/workspace` on the RunPod pod holds tier 3/4 outputs, and the
   tier 1/2 output folders may be gone with the old pod. The pod bills hourly.
 
