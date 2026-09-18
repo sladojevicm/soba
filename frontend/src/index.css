@@ -35,6 +35,11 @@
   --text-base--line-height: 1.5;
   --text-lg: 0.9375rem;              /* 15px — sparing emphasis (scores) */
   --text-lg--line-height: 1.4;
+  /* demo / presentation surfaces only (read from the back of a room) */
+  --text-xl: 1.25rem;                /* 20px — demo body, story-card values */
+  --text-xl--line-height: 1.4;
+  --text-2xl: 1.75rem;               /* 28px — demo screen titles */
+  --text-2xl--line-height: 1.25;
 
   --tracking-label: 0.08em;          /* micro-label letterspacing */
 
@@ -55,6 +60,26 @@
   --color-good: #7dd97b;
   --color-fair: #ffb454;
   --color-poor: #ff6b6b;
+
+  /* -- gate route ONLY (kept / completed / generated), mirrored as hex in
+   * src/pipeline.ts ROUTE_TINTS for the in-scene tint. Cool hues on purpose:
+   * nothing here may read as selection (orange) or eval quality. ---------- */
+  --color-route-kept: #8fa8ff;
+  --color-route-completed: #56c2e6;
+  --color-route-generated: #d48be8;
+
+  /* -- material class ONLY (the VLM's material per object), mirrored in
+   * src/pipeline.ts MATERIAL_TINTS. Muted, natural; none reads as selection. */
+  --color-mat-wood: #b08d6a;
+  --color-mat-metal: #9aa7b5;
+  --color-mat-plastic: #e3ded2;
+  --color-mat-rubber: #565c66;
+  --color-mat-glass: #a8d8e0;
+  --color-mat-ceramic: #efe9df;
+  --color-mat-fabric: #7f93b8;
+  --color-mat-paper: #f1ead2;
+  --color-mat-stone: #8c8f8a;
+  --color-mat-unknown: #8a93a2;
 
   /* -- shape / elevation (exactly one level above the canvas) -------------- */
   --radius-sm: 0.25rem;              /* 4px — buttons, badges, inputs */
@@ -84,6 +109,13 @@
     font-size: var(--text-base);
     color-scheme: dark;
   }
+  #root { height: 100%; }
+  /* Presentation mode: every size token is rem-based, so one root scale makes
+   * the whole UI readable from the back of a room. The scale follows the
+   * WINDOW (24px at 1600x900), not a fixed zoom: a laptop at 150% display
+   * scaling has a 1280x670 viewport and a fixed 150% overflowed it. */
+  :root { --presentation-root: clamp(1rem, min(1.5vw, 2.67vh), 2rem); }
+  html[data-presentation="on"] { font-size: var(--presentation-root); }
   #c { display: block; width: 100vw; height: 100vh; }
 
   /* Reduced motion: collapse every UI animation/transition to a frame. The

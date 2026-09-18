@@ -133,7 +133,9 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   `_v2` rooms under strict + VLM (`docs/log/2026-09-17-gpu-validation-run9-all-v2-rooms.md`): 7/7 jobs done, every completion object PatchComplete-fused, no
   fallback, 56/56 objects `physics_origin: vlm`. Masses are unreliable where geometry is: generated
   meshes are thin shells (a 0.54 kg table), some completed chairs seal solid (up to 34 kg).
-  Scenes copied to `out/pod_20260917/` on the WSL box. Not yet run on a GPU: the RunPod serverless endpoint, the compose
+  Scenes copied to `out/pod_20260917/` on the WSL box. **Demo flow**: `serve.py --scene out/demo/office_3_curated`, then
+  `/?demo` (upload → staged replay of the recorded run → viewer in presentation mode; nothing computed
+  live, `docs/log/2026-09-17-demo-flow.md`). Not yet run on a GPU: the RunPod serverless endpoint, the compose
   `gpu` profile, Hunyuan3D (tiers 3–4). Two pytest failures on the pod still unidentified.
 - **Machines.** This WSL box has no GPU and no torch. Since 2026-09-17 its `.venv` (uv, Python
   3.11) carries every extra (`recon,serve,dev,api,telemetry,worker` + `anthropic`): `pytest`

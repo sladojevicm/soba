@@ -30,6 +30,9 @@ const STATS_INTERVAL_MS = 250; // ~4 Hz
 
 type Handler = (payload: never) => void;
 
+// base colour of a selected object while tints are on (the accent token)
+const SELECTION_TINT = 0xffb454;
+
 export class SobaViewer {
   private renderer: THREE.WebGLRenderer | null = null;
   private scene: THREE.Scene | null = null;
@@ -44,6 +47,13 @@ export class SobaViewer {
   private tempBalls: { body: RigidBody; mesh: THREE.Mesh; dieAt: number }[] = [];
   private hasCameraPose = false;   // scene.json camera_pose wins initial placement (W5)
   private userInteracted = false;  // stop auto-framing once the user touches the camera
+  // eased camera move (presentation tour). Camera motion is content, not UI
+  // chrome: it runs inside the rAF loop and never enters React state.
+  private camMove: {
+    fromPos: THREE.Vector3; toPos: THREE.Vector3;
+    fromTarget: THREE.Vector3; toTarget: THREE.Vector3;
+    t0: number; ms: number;
+  } | null = null;
 
   private raycaster = new THREE.Raycaster();
   private ndc = new THREE.Vector2();
@@ -321,6 +331,94 @@ export class SobaViewer {
   }
 
   // ---- boot ---------------------------------------------------------------
+  // ---- presentation helpers (store actions only; plain data in, none out) --
+
+  /** Slow turntable around the current target. Any user camera input stops it. */
+  setAutoOrbit(on: boolean): void {
+    if (!this.controls) return;
+    this.controls.autoRotate = on;
+    this.controls.autoRotateSpeed = 0.6;
+  }
+
+  /** Ease the camera to frame one object (or the whole room for null),
+   *  keeping the current viewing direction so the move reads as a dolly,
+   *  not a cut. Does not select, wake or count as user interaction. */
+  focusObject(id: string | null): void {
+    if (!this.scene || !this.camera || !this.controls) return;
+    let roots = this.bodyMeshes;
+    if (id !== null) {
+      roots = [];
+      for (const [mesh, entry] of this.meshToEntry) if (entry.id === id) roots.push(mesh);
+    }
+    const box = boundsOf(this.scene, roots);
+    if (!box) return;
+    const { center, position } = framePlacement(box, this.camera.fov, this.camera.aspect);
+    const dist = position.distanceTo(center) * (id === null ? 1 : 1.25); // a little context around one object
+    const dir = this.camera.position.clone().sub(this.controls.target);
+    if (dir.lengthSq() < 1e-6) dir.copy(position).sub(center);
+    dir.normalize();
+    const minY = Math.sin(THREE.MathUtils.degToRad(20)); // never graze the floor
+    if (dir.y < minY) { dir.y = minY; dir.normalize(); }
+    this.camMove = {
+      fromPos: this.camera.position.clone(), toPos: center.clone().addScaledVector(dir, dist),
+      fromTarget: this.controls.target.clone(), toTarget: center,
+      t0: performance.now(), ms: 900,
+    };
+  }
+
+  /** Tint objects by id (0xRRGGBB), or restore their own colours with null.
+   *  Each object gets its own material once, so a tint never leaks to another
+   *  object and the selection highlight (emissive) keeps working on top. */
+  setTints(tints: Record<string, number> | null): void {
+    for (const [root, entry] of this.meshToEntry) {
+      const tint = tints ? tints[entry.id] : undefined;
+      root.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh || !mesh.material || Array.isArray(mesh.material)) return;
+        let mat = mesh.material as THREE.MeshStandardMaterial;
+        if (!mat.color) return;
+        if (mesh.userData.sobaBaseColor === undefined) {
+          mat = mat.clone();
+          mesh.material = mat;
+          mesh.userData.sobaBaseColor = mat.color.getHex();
+          mesh.userData.sobaBaseMetalness = mat.metalness;
+        }
+        mesh.userData.sobaTinted = tint !== undefined;
+        // the selected object wears the selection colour (see highlight());
+        // it picks its tint up again on the setTints that follows deselection
+        const selected = this.selected?.mesh === root && tint !== undefined;
+        mat.color.setHex(selected ? SELECTION_TINT : tint ?? mesh.userData.sobaBaseColor);
+        // Untextured pipeline meshes get GLTFLoader's default material
+        // (metalness 1), which has no diffuse term: a tint would read as
+        // near-black. Tinted = dielectric; untinted = exactly as loaded.
+        mat.metalness = tint === undefined ? mesh.userData.sobaBaseMetalness : 0;
+      });
+    }
+  }
+
+  /** Put every object back where scene.json placed it: pose restored, at
+   *  rest, FIXED again (the load-time stability contract). Balls are removed. */
+  resetObjects(): void {
+    if (!this.world || !this.scene) return;
+    for (const [mesh, entry] of this.meshToEntry) {
+      const body = this.bodyFor(mesh);
+      if (!body) continue;
+      const [x, y, z] = entry.transform.translation;
+      const [qx, qy, qz, qw] = entry.transform.rotation_quat;
+      body.setBodyType(RAPIER.RigidBodyType.Fixed, false);
+      body.setLinvel({ x: 0, y: 0, z: 0 }, false);
+      body.setAngvel({ x: 0, y: 0, z: 0 }, false);
+      body.setTranslation({ x, y, z }, false);
+      body.setRotation({ x: qx, y: qy, z: qz, w: qw }, false);
+    }
+    for (const { body, mesh } of this.tempBalls) {
+      this.syncMap.delete(body);
+      this.scene.remove(mesh);
+      this.world.removeRigidBody(body);
+    }
+    this.tempBalls.length = 0;
+  }
+
   private async boot(): Promise<void> {
     await RAPIER.init();
     if (this.disposed) return;
@@ -399,6 +497,9 @@ export class SobaViewer {
           const clone = mat.clone();
           clone.emissive = new THREE.Color(0xff7a18);
           clone.emissiveIntensity = 0.6;
+          // over a tint the emissive alone shifts hue (blue + orange reads
+          // pink); selection must stay the accent colour
+          if (mesh.userData.sobaTinted) clone.color.setHex(SELECTION_TINT);
           mesh.material = clone;
         } else if (mat.emissive) {
           mat.emissive = new THREE.Color(0x000000);
@@ -414,7 +515,11 @@ export class SobaViewer {
 
     // Any camera interaction (orbit/zoom/pan start, or a click on the canvas)
     // stops the streaming auto-frame from fighting the user.
-    controls.addEventListener("start", () => { this.userInteracted = true; });
+    controls.addEventListener("start", () => {
+      this.userInteracted = true;
+      this.camMove = null;            // the user always wins over a tour move
+      controls.autoRotate = false;
+    });
 
     // Screen-space centre of an object (pixels) — lets the headless verifier
     // click objects through the REAL pointer path instead of poking Rapier.
@@ -535,6 +640,14 @@ export class SobaViewer {
           this.tempBalls.splice(i, 1);
         }
       }
+    }
+    if (this.camMove) {
+      const m = this.camMove;
+      const k = Math.min(1, (performance.now() - m.t0) / m.ms);
+      const e = 1 - Math.pow(1 - k, 3); // ease-out cubic
+      this.camera!.position.lerpVectors(m.fromPos, m.toPos, e);
+      this.controls!.target.lerpVectors(m.fromTarget, m.toTarget, e);
+      if (k >= 1) this.camMove = null;
     }
     this.controls!.update();
     this.renderer!.render(this.scene!, this.camera!);

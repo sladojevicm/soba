@@ -7,6 +7,8 @@ route table in server.py's history):
   GET {prefix}/scene.json       -> the scene contract (partial-safe: empty
                                    scene when none is on disk yet)
   GET {prefix}/eval.json        -> evaluate_scene.py report, or {"available": false}
+  GET {prefix}/run_metrics.json -> the run's telemetry (gate routing, completion, steps,
+                                   stage seconds), or {"available": false}
   GET {prefix}/meshes/{id}.glb  -> objects/{id}/mesh.glb
   GET {prefix}/hulls/{stem}.glb -> objects/{id}/hulls/{id}_{i}.glb
   GET {prefix}/events           -> SSE replay of object_added, then heartbeats
@@ -156,6 +158,19 @@ def scene_routes(resolve: Resolver, frontend_dir: Path, *, prefix: str = "",
             return JSONResponse({"available": False})
         return FileResponse(p, media_type="application/json")
 
+    async def run_metrics_json(request: Request):
+        d = resolve(request)
+        if isinstance(d, Response):
+            return d
+        # Same contract as eval.json: absent is normal (fixture scenes, scenes
+        # assembled without telemetry), so 200 + marker, never a 404. The viewer
+        # reads the per-object gate route from here because scene.json's frozen
+        # `geometry_source` cannot tell "kept" from "completed".
+        p = served_file(d, "run_metrics.json")
+        if p is None:
+            return JSONResponse({"available": False})
+        return FileResponse(p, media_type="application/json")
+
     async def events(request: Request):
         d = resolve(request)
         if isinstance(d, Response):
@@ -229,6 +244,7 @@ def scene_routes(resolve: Resolver, frontend_dir: Path, *, prefix: str = "",
         Route(f"{prefix}/", index),
         Route(f"{prefix}/scene.json", scene_json),
         Route(f"{prefix}/eval.json", eval_json),
+        Route(f"{prefix}/run_metrics.json", run_metrics_json),
         Route(f"{prefix}/meshes/{{id}}.glb", mesh),
         Route(f"{prefix}/hulls/{{stem}}.glb", hull),
         Route(f"{prefix}/events", events),

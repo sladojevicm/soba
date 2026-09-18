@@ -40,6 +40,11 @@ def main() -> None:
     ap.add_argument("--port", type=int, default=8000)
     args = ap.parse_args()
 
+    if args.scene and not Path(args.scene).is_dir():
+        # A scene dir WITHOUT scene.json is fine (objects may still be streaming
+        # in); a path that is not a directory is a typo, and used to serve an
+        # empty room without a word.
+        ap.error(f"--scene {args.scene}: no such directory")
     if args.scene:
         os.environ["SOBA_SCENE_DIR"] = str(Path(args.scene).resolve())
     uvicorn.run(create_app(args.scene, jobs_dir=args.jobs_dir, worker_mode=args.worker_mode),

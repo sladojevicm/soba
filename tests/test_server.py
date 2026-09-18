@@ -165,3 +165,21 @@ def test_empty_scene_dir_is_partial_safe(tmp_path):
     r = c.get("/scene.json")
     assert r.status_code == 200
     assert r.json()["objects"] == []
+
+
+def test_run_metrics_json_marker_when_missing(tmp_path):
+    # Same contract as eval.json: absent telemetry is normal, never a 404.
+    app = create_app(scene_dir=tmp_path, frontend_dir=tmp_path)
+    r = TestClient(app).get("/run_metrics.json")
+    assert r.status_code == 200
+    assert r.json() == {"available": False}
+
+
+def test_run_metrics_json_served_when_present(tmp_path):
+    metrics = {"schema": 1, "gate": {"counts": {"tsdf": 0, "completion": 2, "generative": 1}}}
+    (tmp_path / "run_metrics.json").write_text(json.dumps(metrics))
+    app = create_app(scene_dir=tmp_path, frontend_dir=tmp_path)
+    r = TestClient(app).get("/run_metrics.json")
+    assert r.status_code == 200
+    assert "application/json" in r.headers["content-type"]
+    assert r.json() == metrics

@@ -11,7 +11,7 @@ import tailwindcss from "@tailwindcss/vite";
 // its own fetches through sceneUrl() (viewer/loaders.ts).
 const SCENE_SERVER = "http://127.0.0.1:8000";
 const proxy = Object.fromEntries(
-  ["/scene.json", "/meshes", "/hulls", "/events", "/eval.json", "/api", "/jobs"].map((p) => [
+  ["/scene.json", "/meshes", "/hulls", "/events", "/eval.json", "/run_metrics.json", "/api", "/jobs"].map((p) => [
     p,
     { target: SCENE_SERVER, changeOrigin: true },
   ])

@@ -13,8 +13,10 @@ const twMerge = extendTailwindMerge({
         "bg", "surface", "surface-hover", "hairline",
         "text", "text-strong", "dim", "faint",
         "accent", "good", "fair", "poor",
+        "route-kept", "route-completed", "route-generated",
+        "mat-wood", "mat-metal", "mat-plastic", "mat-rubber", "mat-glass", "mat-ceramic", "mat-fabric", "mat-paper", "mat-stone", "mat-unknown",
       ],
-      text: ["micro", "sm", "base", "lg"],
+      text: ["micro", "sm", "base", "lg", "xl", "2xl"],
     },
   },
 });

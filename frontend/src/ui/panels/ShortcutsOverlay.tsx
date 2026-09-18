@@ -9,6 +9,11 @@ const SHORTCUTS: [string, string][] = [
   ["drag", "push selected object"],
   ["space", "drop ball"],
   ["f", "frame all objects"],
+  ["→ / ←", "tour: next / previous object"],
+  ["c", "colour: material / gate route / off"],
+  ["o", "slow orbit"],
+  ["r", "reset objects"],
+  ["p", "presentation mode"],
   ["esc", "deselect / close this"],
   ["?", "toggle shortcuts"],
 ];
