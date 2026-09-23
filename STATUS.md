@@ -1,6 +1,6 @@
 # Soba — Status
 
-_Current state as of 2026-09-10. Measured numbers live in `BENCHMARK.md`; the
+_Current state as of 2026-09-14. Measured numbers live in `BENCHMARK.md`; the
 scene contract lives in `spec/scene.schema.json`; those two are authoritative.
 The reasoning behind past decisions lives in dated files under `docs/log/`._
 
@@ -36,18 +36,143 @@ The reasoning behind past decisions lives in dated files under `docs/log/`._
   `scripts/ablation_routing.sh` and `scripts/ablation_summary.py`; gated routing
   gives the best surface fidelity, forced generative reproduces tier 1. fr2/xyz
   pose re-measured on all 3665 pairs (BENCHMARK §1).
+- **Job API (2026-09-11, `feat/job-api`).** `POST /api/jobs` takes a PerceptionBundle or
+  TUM archive and returns a job id; `GET /api/jobs/{id}` reports queued / running:<stage> /
+  done / failed; the viewer and scene routes are mirrored under `/jobs/{id}/`. On this box
+  the in-process worker runs in `mock` mode (copies `out/scene_test`); `real` and
+  `gate-only` spawn `scripts/run_assemble.py` and need the pod. There is **no job or
+  output retention policy yet**: uploads and `out/jobs/` grow unbounded (follow-up, not
+  blocking).
+- **API security (2026-09-12, `feat/security-hardening`).** Bearer-key auth, per-key/per-IP
+  rate limiting, a CORS allow-list, security headers, an SSE connection cap and upload
+  validation (decompression-bomb, size, manifest, frame-count and depth-dtype checks) live
+  in `src/api/security/`; the API stays open by default until `SOBA_API_KEYS` is set (one
+  startup warning). Rate-limit buckets are per-process (Redis-backed limiting is a follow-up).
+- **RunPod orchestration (2026-09-12, `feat/runpod-orchestration`).** `RunPodEngine` retries
+  transient failures with backoff, polls `/run` + `/status/{id}`, honours a per-endpoint circuit
+  breaker and a per-job budget from the now-live `config/pipeline.yaml` `runpod:` block, refuses
+  non-https URL overrides, and `SOBA_RUNPOD_DISABLED=1` drops every generative object unsent; a
+  RunPod failure drops one object, never the run. `SOBA_QUEUE_URL=redis://` swaps in a Redis
+  `JobQueue`; `python -m orchestration.worker` consumes it and writes `out/jobs/<id>/scene/cost.json`.
+  Verified only against a fake endpoint on this box; the real endpoint path needs the pod.
+- **Observability.** `scripts/run_assemble.py` emits structured logs (text, or JSON lines
+  with `SOBA_LOG_JSON=1`) with per-stage timings and one gate event per object, and writes
+  `out/<scene>/run_metrics.json` (schema in `src/telemetry/`) on every run, failures
+  included. The API serves `GET /metrics` (Prometheus text, optional `telemetry` extra,
+  501 without it): request count/latency by route, job-state gauges, and gate / stage /
+  drop / RunPod counters ingested from each finished job's `run_metrics.json`; every
+  request and job-state transition is logged with the job id.
+- **Load testing (2026-09-13, `feat/load-testing`).** `make loadtest` runs k6 scenarios
+  (upload burst, status polling, scene fetch, SSE, mixed) plus a stdlib SSE probe against the
+  compose stack in open and keyed mode and writes `loadtest/results/<stamp>/`; the recorded
+  run is in `docs/loadtest.md`. Those numbers are API-layer throughput with the mock worker
+  on CPU, never pipeline or GPU throughput.
+- **API docs (2026-09-13, `feat/api-docs`).** `spec/openapi.yaml` (OpenAPI 3.1, scene body `$ref`s
+  the frozen schema) is served at `GET /api/openapi.json` and rendered at `GET /api/docs` (Redoc,
+  loads its bundle from a CDN in the browser); `tests/api/test_openapi.py` fails when a route and
+  the spec disagree. Prose in `docs/api.md`.
 - **Never built or never run.** A real-sensor scene end to end (TUM through detector,
-  SAM2, MASt3R, assembly); live OAK capture; a phone-capture reader; the ScanNet
-  reader (stub); a Phase-12 CLI (`scripts/run_assemble.py` is the driver).
-- **Known defects.** The server's empty-scene fallback (`src/server.py:98`) omits
+  SAM2, MASt3R, assembly); live OAK capture; a phone-capture reader (Step 1 building
+  blocks exist on `feat/rgb-video-step1`, PR #16, unmerged and parked); the ScanNet
+  reader (stub); a Phase-12 CLI (`scripts/run_assemble.py` is the driver). **Now run at
+  least once on a GPU (2026-09-16, RunPod 4090):** the job API in real mode, the Redis
+  queue + external worker, TripoSG generation through the job API, Open3D CUDA TSDF,
+  coacd hulls, all on a Replica GT-pose bundle. Still never run on a GPU: MASt3R via
+  the job path (setup script written, unexercised), the RunPod serverless endpoint,
+  the compose `gpu` profile, Hunyuan3D tiers 3–4, VLM physics through the job API
+  (both pod runs were lookup-only: no `ANTHROPIC_API_KEY` set).
+- **Known defects.** The server's empty-scene fallback (`src/api/routes/scene.py`, `scene_json`) omits
   `world`, `ground` and `camera_pose` and fails the frozen schema. The eight
   cross-module disagreements are listed in `CLAUDE.md`. TUM world frames are not
   gravity-aligned, so floor snapping is wrong on real-sensor runs.
-- **Machines.** This WSL box has no GPU and no data, and its `.venv` lacks the
-  `recon` extra: `pytest` here gives 125 pass and 49 fail or error, every one a
-  missing-`open3d` import (last full run: 241 pass, 2026-07-06, GPU machine). Data and builds: `~/soba/data` on the
+- **Deployment runbook (2026-09-14, `docs/deployment-runbook`).** `docs/runbook.md` is the
+  operator page: images and tag scheme (no registry push exists yet), env matrix and
+  secrets, compose / two-host / GPU-worker deploy, RunPod serverless endpoint, the three
+  pre-deploy gates (Open3D CUDA `check`, model pins, CI), smoke test, cost controls, alert
+  rules, backup, rollback, incident checklist, release flow. Executed here: API image build,
+  compose `cpu` smoke (upload → done → `verify_browser.js` 8/8 on the job URL), `/metrics`,
+  `SMOKE=1 make loadtest` (all pass); every GPU / RunPod / registry step is marked not
+  executed here. Compose `worker-gpu` now mounts `./out` at `/data` like `api` (real jobs
+  failed at `validating` before); the pipeline image still runs as root (flagged).
+- **Packaging.** `docker/` (API, pipeline, frontend-check images), compose and
+  `.github/workflows/ci.yml` exist (2026-09-11); the frontend bundle is served by
+  the API image, CDN offload is deferred until there is real traffic.
+- **GPU validation run 1 (2026-09-16, RunPod RTX 4090, `docs/gpu-validation.md`).** First real-GPU
+  pass over the service layer: Open3D CUDA tensor backend **PASS** on the pod's pip wheel
+  (0.19.0): the **capability** is confirmed, but TSDF fusion still **executes on CPU**
+  (`tsdf.fuse` defaults to `CPU:0` and `scripts/run_assemble.py` passes no device); a Replica `office_3` smoke bundle (100 frames) went
+  through `POST /api/jobs` → real worker → done in 225 s, and again through Redis +
+  `python -m orchestration.worker` in 227 s (4 objects; gate completion=4 / generative=10,
+  all 10 generative dropped as `engine_declined` because TripoSG was not set up); 503 of
+  505 tests pass on the pod (2 failures under review). Full record:
+  `docs/log/2026-09-16-gpu-validation-run1.md`. **Run 2** the same day with TripoSG set up
+  (`docs/log/2026-09-16-gpu-validation-run2.md`): 10 objects (4 completion + 6 generative,
+  4 declined by the engine) in 760 s, coacd hull colliders, TripoSG commit recorded in
+  `docs/model-pins.md`. **Both runs' "completion" objects were Poisson fallbacks**: no
+  PatchComplete was set up, and until 2026-09-17 nothing but a log line said so. Now
+  `run_metrics.json` `completion.counts`, `soba_completion_total` and the job record's
+  `run.completion` name the completer that ran; `SOBA_COMPLETION_STRICT=1` fails a run on
+  any fallback; `SETUP_PATCHCOMPLETE=1` installs it (`deploy/runpod/setup_patchcomplete.sh`).
+  **Run 3** (dense, 2000 frames, 2912 s): identical gate routing to the 100-frame run, so
+  the vMAP room-scan trajectory, not frame density, caps quality; the demo needs the `_v2`
+  orbit bundles (`deploy/runpod/sync_bundles.md`, `docs/log/2026-09-16-gpu-validation-run3-dense.md`).
+  **Run 4** (2026-09-17, strict completion): PatchComplete ran for 4/4 completion objects
+  with no fallback, pod suite 510 green, MASt3R pins observed and equal to the reconstructed
+  ones. The generative band was silently absent that run (TripoSG deps not reinstalled after
+  the container reset); `generation_unavailable` and `SOBA_GENERATION_STRICT=1` now expose
+  that (`docs/log/2026-09-17-gpu-validation-run4-patchcomplete.md`). **Run 6** (strict,
+  `SOBA_STRICT=1`): full tier 2 verified end to end on office_3: 4/4 PatchComplete meshes
+  `fused` into the final geometry, pymeshfix seals, 10/10 CoACD colliders, 7 TripoSG objects,
+  no fallback, 880 s. The 8 `_v2` orbit bundles were regenerated on the pod (match-test
+  0.0 mm) and live on the volume (`docs/log/2026-09-17-gpu-validation-run6-strict.md`). **Run 7**,
+  `room_2_v2` under strict: gate completion 8 / generative 2 (coverage 134-162 deg vs 93-121 deg
+  on the room scan), 8/8 PatchComplete fused, 9/9 CoACD, 687 s, lookup physics (no key). **Run 8**, same bundle with the Anthropic key: 9/9 objects
+  `physics_origin: vlm`, chairs 6.2-7.2 kg; one chair stays an outlier (34 kg) because its sealed
+  mesh encloses 0.29 m3, a geometry fault, not physics
+  (`docs/log/2026-09-17-gpu-validation-run8-vlm-physics.md`). **Run 9**: the other seven
+  `_v2` rooms under strict + VLM (`docs/log/2026-09-17-gpu-validation-run9-all-v2-rooms.md`): 7/7 jobs done, every completion object PatchComplete-fused, no
+  fallback, 56/56 objects `physics_origin: vlm`. Masses are unreliable where geometry is: generated
+  meshes are thin shells (a 0.54 kg table), some completed chairs seal solid (up to 34 kg).
+  Scenes copied to `out/pod_20260917/` on the WSL box. **Demo flow**: `serve.py --scene out/demo/office_3_curated`, then
+  `/?demo` (upload → staged replay of the recorded run → viewer in presentation mode; nothing computed
+  live, `docs/log/2026-09-17-demo-flow.md`). Not yet run on a GPU: the RunPod serverless endpoint, the compose
+  `gpu` profile, Hunyuan3D (tiers 3–4). Two pytest failures on the pod still unidentified.
+- **Machines.** This WSL box has no GPU and no torch. Since 2026-09-17 its `.venv` (uv, Python
+  3.11) carries every extra (`recon,serve,dev,api,telemetry,worker` + `anthropic`): `pytest`
+  here gives 539 pass, 8 skipped, 1 fail, the fail being a `gpu`-marked test that imports torch
+  (`SOBA_SKIP_GPU_TESTS=1` skips it). The pod's run 8/9 scenes are under `out/pod_20260917/`. Data and builds: `~/soba/data` on the
   RTX 4060 machine; `/workspace` on the RunPod pod holds tier 3/4 outputs, and the
   tier 1/2 output folders may be gone with the old pod. The pod bills hourly.
+
+## Known limitations (2026-09-12, updated 2026-09-16)
+
+- **Bearer-only auth blocks the browser viewer once `SOBA_API_KEYS` is set.** A browser
+  cannot attach an `Authorization` header to `/jobs/{id}/`, so the viewer needs a
+  header-injecting proxy in front of it. A cookie/session scheme is a future follow-up.
+- **`/metrics` sits outside the protected prefixes** (`/api/*`, `/jobs/*`); put it behind
+  the reverse proxy or a network ACL until it is gated.
+- **Rate limiting is per-process, not Redis-shared.** Several API replicas each keep
+  their own buckets, so the effective limit scales with the replica count.
+- **No model version pins exist for MASt3R, TripoSG, Hunyuan3D or PatchComplete.**
+  No git commit, checkpoint sha256 or HuggingFace revision is recorded anywhere in the
+  repo, so BENCHMARK.md numbers are not reproducible from the repo alone. Recovery
+  commands for the GPU machine and the pod volume are in `docs/model-pins.md`. The
+  2026-09-16 pod run recorded library versions only (fresh volume, no model checkouts).
+- **TSDF fusion executes on the CPU, also on a GPU host.** Open3D's CUDA tensor backend is
+  confirmed working on the pod (validation step S1), but `tsdf.fuse(device="CPU:0")` is the
+  default and `scripts/run_assemble.py` never passes a device, so no run so far fused on the
+  GPU (the dense 2000-frame build took 2912 s). An earlier version of this file said "TSDF
+  runs on the GPU"; that was inferred from the capability check and was wrong.
+- **PatchComplete weights are permanently unpinnable.** The completion band at tiers 2-4
+  (BENCHMARK.md §3 tier 2, §4 "forced completion", tiers 3-4) ran the authors' pretrained
+  `trained_models.zip` from a university server with no revision history; the README says
+  those models were re-run after the paper. The code commit can be reconstructed by date,
+  the weights cannot: whether today's zip equals July's is unknowable. The sha256 that
+  `setup_patchcomplete.sh` records pins what runs from now on, not what produced the paper.
+  This is a known, permanent limitation, not a TODO.
+- ~~`coacd` missing from the extras~~ — fixed 2026-09-16: it is in the `recon` extra now.
+  Before that the first pod run had no coacd (bootstrap installs extras only), so its
+  scenes shipped single-hull colliders.
 
 ## Durable gotchas (still true)
 

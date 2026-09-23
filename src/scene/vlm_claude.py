@@ -76,7 +76,6 @@ def annotate_crop(crop_path, longest_dim_m: float | None) -> bytes | None:
     scale cue is what lets the model tell a toy car from a real one.
     """
     import cv2
-    import numpy as np
 
     if crop_path is None:
         return None

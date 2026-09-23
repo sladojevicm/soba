@@ -1,0 +1,120 @@
+# Publish the soba images to GHCR (docs/runbook.md §3.2 tag scheme).
+# Manual dispatch, or automatically on a release tag `v*`. ci.yml only BUILDS;
+# this is the only workflow that pushes. Tags:
+#   ghcr.io/<owner>/soba-api:<sha7>, :<branch-or-tag>
+#   ghcr.io/<owner>/soba-pipeline:<sha7>, :<branch-or-tag>      (runtime base)
+#   ghcr.io/<owner>/soba-pipeline:<sha7>-devel, :<ref>-devel    (input devel=true;
+#                                                               nvcc for TripoSG/Hunyuan3D)
+# The packages are PRIVATE on first push: make them public in the GitHub
+# package settings, or give RunPod registry credentials (docs/gpu-validation.md).
+name: publish-images
+
+on:
+  workflow_dispatch:
+    inputs:
+      devel:
+        description: "also build/push the -devel pipeline variant (nvcc; needed to compile TripoSG diso / Hunyuan3D ops)"
+        type: boolean
+        default: false
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: ${{ github.repository_owner }}
+
+jobs:
+  api:
+    name: push soba-api
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/soba-api
+          tags: |
+            type=sha,prefix=,format=short
+            type=ref,event=branch
+            type=ref,event=tag
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/api.Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
+
+  pipeline:
+    name: push soba-pipeline (runtime${{ inputs.devel && ' + devel' || '' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Free runner disk (the CUDA/torch base is ~7 GB)
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: false
+          swap-storage: true
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/soba-pipeline
+          tags: |
+            type=sha,prefix=,format=short
+            type=ref,event=branch
+            type=ref,event=tag
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/pipeline.Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=pipeline
+          cache-to: type=gha,scope=pipeline,mode=max
+      - id: meta-devel
+        if: ${{ inputs.devel }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/soba-pipeline
+          flavor: suffix=-devel
+          tags: |
+            type=sha,prefix=,format=short
+            type=ref,event=branch
+            type=ref,event=tag
+      - if: ${{ inputs.devel }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/pipeline.Dockerfile
+          build-args: BASE_IMAGE=pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel
+          push: true
+          tags: ${{ steps.meta-devel.outputs.tags }}
+          labels: ${{ steps.meta-devel.outputs.labels }}
+          cache-from: type=gha,scope=pipeline-devel
+          cache-to: type=gha,scope=pipeline-devel,mode=max

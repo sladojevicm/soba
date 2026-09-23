@@ -98,7 +98,6 @@ def _fpfh_rotation(src_n: np.ndarray, tgt_n: np.ndarray, iters: int):
     import open3d as o3d
 
     reg = o3d.pipelines.registration
-    voxel = 0.05
     s = _pcd(src_n, normals=True)
     t = _pcd(tgt_n, normals=True)
     fs = reg.compute_fpfh_feature(s, o3d.geometry.KDTreeSearchParamHybrid(radius=0.25, max_nn=100))

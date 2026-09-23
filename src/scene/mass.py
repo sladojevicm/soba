@@ -75,21 +75,34 @@ def finalize_mesh(mesh):
     the convex-hull volume), i.e. the pre-repair behaviour — repair never makes
     things worse, it only upgrades when it clearly worked.
     """
+    out, vol, watertight, _info = finalize_mesh_info(mesh)
+    return out, vol, watertight
+
+
+def finalize_mesh_info(mesh):
+    """`finalize_mesh` plus HOW the volume was obtained, so a swallowed repair
+    failure is never silent: returns ``(mesh, volume_m3, watertight, info)``
+    with ``info = {"method", "reason"}``; method is ``already_watertight`` |
+    ``poisson_repair`` | ``hull_volume_fallback`` | ``empty``. The hull volume
+    OVERESTIMATES mass, so callers record the fallback."""
     if len(mesh.vertices) == 0:
-        return mesh, 0.0, False
+        return mesh, 0.0, False, {"method": "empty", "reason": "no vertices"}
     if mesh.is_watertight():
-        return mesh, _signed_volume(mesh), True
+        return mesh, _signed_volume(mesh), True, {"method": "already_watertight", "reason": None}
     hull, _ = mesh.compute_convex_hull()
     hull_v = _signed_volume(hull)
+    reason = "repair returned no triangles"
     try:
         repaired = watertight_repair(mesh)
         if len(repaired.triangles):
             v = _signed_volume(repaired)
             if 0.0 < v <= hull_v:  # repaired must be tighter than the hull
-                return repaired, v, bool(repaired.is_watertight())
-    except Exception:
-        pass
-    return mesh, hull_v, False
+                return (repaired, v, bool(repaired.is_watertight()),
+                        {"method": "poisson_repair", "reason": None})
+            reason = f"repair volume {v:.4g} not in (0, hull {hull_v:.4g}]"
+    except Exception as exc:
+        reason = f"repair raised {type(exc).__name__}: {str(exc)[:120]}"
+    return mesh, hull_v, False, {"method": "hull_volume_fallback", "reason": reason}
 
 
 def volume_m3(mesh) -> tuple[float, bool]:

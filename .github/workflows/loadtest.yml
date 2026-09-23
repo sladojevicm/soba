@@ -1,0 +1,58 @@
+# Soba load test — MANUAL dispatch only (never on push: it needs the compose
+# stack and takes minutes). Runs the short SMOKE variant of loadtest/run.sh
+# against docker compose on the runner (api + redis + mock worker, k6 and the
+# SSE probe from the loadtest profile) and uploads loadtest/results/ as an
+# artifact. The numbers are API-layer throughput with a mock worker on a
+# shared CI runner: not pipeline or GPU throughput, and not comparable with
+# the box recorded in docs/loadtest.md.
+name: loadtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      smoke:
+        description: "1 = short scenarios (10 s each); 0 = the full durations of make loadtest"
+        required: false
+        default: "1"
+      mock_delay_s:
+        description: "SOBA_MOCK_DELAY_S for the mock worker (seconds per job)"
+        required: false
+        default: "0.5"
+
+jobs:
+  loadtest:
+    name: k6 + SSE probe against docker compose (mock worker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: out/scene_test fixture (scripts/make_test_scene.py needs trimesh + jsonschema)
+        run: |
+          python -m pip install --quiet trimesh numpy jsonschema
+          python scripts/make_test_scene.py
+      - name: Pull the pinned k6 and probe images
+        run: |
+          docker compose --profile loadtest pull k6 sse-probe
+      - name: make loadtest
+        env:
+          SMOKE: ${{ github.event.inputs.smoke }}
+          SOBA_MOCK_DELAY_S: ${{ github.event.inputs.mock_delay_s }}
+          PYTHON: python
+        run: make loadtest
+      - name: Show the summary
+        if: always()
+        run: |
+          for f in loadtest/results/*/summary.md; do [ -f "$f" ] && cat "$f" >> "$GITHUB_STEP_SUMMARY"; done
+          echo "api logs (tail):"; docker compose --profile cpu logs --tail 30 api || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: loadtest-results-${{ github.run_id }}
+          path: loadtest/results/
+          if-no-files-found: warn
+      - name: compose down
+        if: always()
+        run: docker compose --profile cpu --profile loadtest down

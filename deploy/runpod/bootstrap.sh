@@ -12,13 +12,13 @@
 #     bash bootstrap.sh
 #
 # Override any of these via env before running:
-#     REPO_URL REPO_BRANCH WORKDIR REPO_DIR POINTR_HOME SETUP_POINTR
+#     REPO_URL REPO_BRANCH WORKDIR REPO_DIR POINTR_HOME SETUP_POINTR SETUP_MAST3R SETUP_TRIPOSG SETUP_PATCHCOMPLETE
 # See deploy/runpod/README.md for the full rental + run guide.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/sladojevicm/soba.git}"
-REPO_BRANCH="${REPO_BRANCH:-fix/phase3-pose-and-eval}"
+REPO_BRANCH="${REPO_BRANCH:-master}"
 WORKDIR="${WORKDIR:-/workspace}"
 REPO_DIR="${REPO_DIR:-$WORKDIR/soba}"
 POINTR_HOME="${POINTR_HOME:-$WORKDIR/PoinTr}"
@@ -26,6 +26,10 @@ SETUP_POINTR="${SETUP_POINTR:-0}"   # 1 = also clone PoinTr (optional middle ban
 SETUP_COMPC="${SETUP_COMPC:-0}"     # 1 = also build ComPC (training-free, preserves
                                     #     observed geometry; isolated env, >=16GB GPU)
 SETUP_TRIPOSG="${SETUP_TRIPOSG:-0}" # 1 = also set up local TripoSG image-to-3D
+SETUP_PATCHCOMPLETE="${SETUP_PATCHCOMPLETE:-0}" # 1 = also set up PatchComplete (the completion
+                                    #     band at tiers 2-4; without it: Poisson fallback)
+SETUP_MAST3R="${SETUP_MAST3R:-0}"   # 1 = also clone MASt3R (+dust3r) and fetch the metric
+                                    #     checkpoint (poses for tiers 2-4 on real sensor data)
                                     #     (generative band; clones repo + weights)
 
 log(){ printf '\n\033[1;36m== %s ==\033[0m\n' "$*"; }
@@ -40,7 +44,7 @@ fi
 log "System packages (git + libGL/glib for open3d & opencv)"
 if command -v apt-get >/dev/null 2>&1; then
   apt-get update -qq || true
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git libgl1 libglib2.0-0 >/dev/null || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git libgl1 libglib2.0-0 libegl1 >/dev/null || true
 fi
 
 log "Clone / update repo ($REPO_BRANCH)"
@@ -64,9 +68,14 @@ else
   echo "           pip install torch --index-url https://download.pytorch.org/whl/cu121" >&2
 fi
 
-log "Install soba (recon + serve + dev extras)"
+log "Install soba (recon + serve + dev + api + telemetry + worker extras)"
+export PIP_ROOT_USER_ACTION=ignore   # pods run as root; the warning is noise here
 python3 -m pip install --upgrade pip -q
-python3 -m pip install -e "${REPO_DIR}[recon,serve,dev]" -q
+# Ubuntu templates ship a distutils-installed blinker 1.4 (python3-blinker) that
+# pip cannot uninstall, and open3d -> flask needs a newer one: "Cannot uninstall
+# blinker 1.4". Reinstalling it over the top first avoids the error.
+python3 -m pip install -q --ignore-installed blinker
+python3 -m pip install -e "${REPO_DIR}[recon,serve,dev,api,telemetry,worker]" anthropic -q   # anthropic: the physics VLM backend (tests/scene/test_vlm_claude.py)
 
 log "Verify host-pipeline stack"
 python3 - <<'PY'
@@ -78,7 +87,7 @@ print("  open3d", o3d.__version__, "| torch", torch.__version__, "| cuda", torch
 try:
     dev = o3d.core.Device("CUDA:0")
     o3d.core.Tensor.zeros((2, 2), device=dev)
-    print("  open3d CUDA tensor OK on", dev, "(TSDF VoxelBlockGrid will run on GPU)")
+    print("  open3d CUDA tensor OK on", dev, "(CUDA backend AVAILABLE; tsdf.fuse still executes on CPU:0 — run_assemble.py passes no device)")
 except Exception as e:
     print("  WARNING open3d CUDA tensor FAILED — TSDF will fall back to CPU:", e)
 PY
@@ -113,6 +122,17 @@ if [ "$SETUP_COMPC" = "1" ]; then
   fi
 fi
 
+if [ "$SETUP_MAST3R" = "1" ]; then
+  log "Optional: MASt3R poses (tiers 2-4 on real sensor bundles)"
+  # Non-fatal: Replica GT-pose bundles never need it.
+  if MAST3R_HOME="${MAST3R_HOME:-$WORKDIR/mast3r}" \
+       bash "$REPO_DIR/deploy/runpod/setup_mast3r.sh"; then
+    echo "MASt3R ready. export SOBA_MAST3R_HOME=${MAST3R_HOME:-$WORKDIR/mast3r}"
+  else
+    echo "WARNING: MASt3R setup failed — host pipeline is unaffected. See above." >&2
+  fi
+fi
+
 if [ "$SETUP_TRIPOSG" = "1" ]; then
   log "Optional: local TripoSG image-to-3D (generative band)"
   # Non-fatal: a TripoSG hiccup must NOT break the working host pipeline.
@@ -123,6 +143,19 @@ if [ "$SETUP_TRIPOSG" = "1" ]; then
     echo "WARNING: TripoSG setup failed — host pipeline is unaffected. See above." >&2
   fi
 fi
+
+if [ "$SETUP_PATCHCOMPLETE" = "1" ]; then
+  log "Optional: PatchComplete (completion band, tiers 2-4)"
+  # Non-fatal: the host pipeline falls back to Poisson repair and SAYS SO in
+  # run_metrics.json (completion.counts) — but that is not the benchmark config.
+  if PATCHCOMPLETE_HOME="${PATCHCOMPLETE_HOME:-$WORKDIR/PatchComplete}" \
+       bash "$REPO_DIR/deploy/runpod/setup_patchcomplete.sh"; then
+    echo "PatchComplete ready. export SOBA_PATCHCOMPLETE_HOME=${PATCHCOMPLETE_HOME:-$WORKDIR/PatchComplete}"
+  else
+    echo "WARNING: PatchComplete setup failed — completion band will be Poisson fallback. See above." >&2
+  fi
+fi
+
 
 log "Done — next steps"
 cat <<EOF

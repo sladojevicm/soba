@@ -80,7 +80,6 @@ def _transfer_colors(src, dst):
     it was never seen)."""
     if not src.has_vertex_colors() or len(src.vertices) == 0:
         return
-    sv = np.asarray(src.vertices)
     sc = np.asarray(src.vertex_colors)
     kd = o3d.geometry.KDTreeFlann(o3d.geometry.PointCloud(src.vertices))
     dv = np.asarray(dst.vertices)

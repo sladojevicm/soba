@@ -7,12 +7,38 @@
 # Dataset labels are mapped to these keys first (see coco_class_map.yaml, T2).
 
 # --- RunPod generative endpoint -------------------------------------------
+# Read by reconstruction.runpod_policy (RunPodEngine + orchestration.worker).
+# Every resilience / cost knob lives HERE; the code holds no defaults. Env
+# overrides (operator switches, not values): SOBA_RUNPOD_TIMEOUT (one request's
+# socket timeout), SOBA_RUNPOD_DISABLED=1 (kill switch: no call is made, every
+# generative object is dropped), SOBA_RUNPOD_URL / SOBA_RUNPOD_BASE_URL (must
+# be https:// unless SOBA_RUNPOD_ALLOW_HTTP=1 — the bearer key rides along).
 runpod:
-  pod_url: ""            # e.g. https://<pod-id>-8000.proxy.runpod.net  (Step 21)
-  request_timeout_s: 120
-  circuit_breaker:
-    consecutive_failures: 2   # trip after 2 consecutive failures (Step 6)
-    cooldown_s: 30            # then 30 s on local SF3D before re-probing
+  transport: run            # run = POST /run, then poll GET /status/{id} (long jobs);
+                            # runsync = one blocking POST. SOBA_RUNPOD_URL (the SDK's
+                            # local test server) always uses one blocking POST.
+  request_timeout_s: 900    # socket timeout of ONE HTTP request; in runsync mode that
+                            # is the whole job (shape ~2.5 min + paint ~2 min + cold load)
+  job_timeout_s: 1800       # run mode: a job not terminal after this is cancelled (permanent)
+  poll_interval_s: 5        # run mode: GET /status cadence
+  stall_timeout_s: 600      # run mode: IN_QUEUE / IN_PROGRESS with no status change this
+                            # long -> cancel and retry as a transient failure
+  retry:
+    max_attempts: 3         # per call, counting the first one
+    backoff_base_s: 2.0     # sleep = min(base * 2**(attempt-1), max) + uniform(0, jitter)
+    backoff_max_s: 60.0
+    jitter_s: 1.0
+  circuit_breaker:          # per endpoint id, process-wide
+    consecutive_failures: 3 # open after this many failures in a row
+    cooldown_s: 120         # then one half-open probe; success closes, failure re-opens
+  budget:                   # per job (one RunPodEngine = one run_assemble run)
+    max_calls: 40           # HTTP submissions, retries included
+    max_gpu_seconds: 3600   # billable seconds (executionTime when reported, else wall)
+    max_est_usd: 5.0        # usd_per_gpu_second * billable seconds
+  price:                    # ASSUMPTIONS for the estimate, not measured: set them from the
+                            # endpoint's GPU tier on the RunPod pricing page
+    usd_per_gpu_second: 0.00044   # 24 GB flex worker
+    by_endpoint: {}               # optional: <endpoint id>: usd/s override
 
 # --- Ground floor (fix W1) ------------------------------------------------
 # Fixed hard-floor material default, independent of any object's material.

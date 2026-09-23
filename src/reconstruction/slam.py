@@ -249,7 +249,7 @@ class Mast3rEstimator:
             torch.cuda.empty_cache()
 
         def _align(device):
-            scene = global_aligner(out, device=device,
+            scene = global_aligner(out, device=device,  # noqa: F821 (closure over `out` above)
                                    mode=GlobalAlignerMode.PointCloudOptimizer,
                                    verbose=False)
             scene.compute_global_alignment(init="mst", niter=300,
